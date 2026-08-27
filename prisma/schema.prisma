@@ -16,3 +16,141 @@ model User {
 
   @@map("users")
 }
+
+enum RegistrationStatus {
+  PENDING_FINANCE_REVIEW
+  PENDING_CHEQUE_CONFIRMATION
+  PENDING_HR_ACTIVATION
+  ACTIVE
+}
+
+enum PaymentMethod {
+  ONLINE
+  CHEQUE
+}
+
+enum TokenRole {
+  FINANCE
+  HR
+}
+
+enum DiscountType {
+  PERCENT
+  FLAT
+}
+
+model CompanyRegistration {
+  id          String @id @default(cuid())
+
+  // Level 1 — CMD/Director (MOU signup)
+  companyName String
+  companyType String
+  domainName  String @unique
+  tenantCode  String @unique
+  fullName    String
+  designation String
+  email       String @unique
+  passwordHash String
+  financeEmail String
+  hrEmail      String
+  acceptedTermsAt DateTime
+
+  // Level 2 — Finance
+  gstin             String?
+  licenseQuantity   Int?
+  unitPrice         Decimal? @db.Decimal(10, 2)
+  couponId          String?
+  coupon            Coupon?  @relation(fields: [couponId], references: [id])
+  discountAmount    Decimal? @db.Decimal(10, 2)
+  subtotalAmount    Decimal? @db.Decimal(10, 2)
+  gstRate           Decimal? @db.Decimal(5, 4)
+  gstAmount         Decimal? @db.Decimal(10, 2)
+  totalAmount       Decimal? @db.Decimal(10, 2)
+  paymentMethod     PaymentMethod?
+  paymentReference  String?
+  chequeNumber      String?
+  chequeDate        DateTime?
+  transactionId     String?
+  financeApprovedAt DateTime?
+
+  // Level 3 — HR
+  activatedAt DateTime?
+
+  status RegistrationStatus @default(PENDING_FINANCE_REVIEW)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  actionTokens      RegistrationActionToken[]
+  notificationLogs  NotificationLog[]
+
+  @@index([status])
+  @@map("company_registrations")
+}
+
+model EmailVerification {
+  id                         String    @id @default(cuid())
+  email                      String
+  domainName                 String
+  otpHash                    String
+  otpExpiresAt               DateTime
+  attempts                   Int       @default(0)
+  verifiedAt                 DateTime?
+  verificationToken          String?   @unique
+  verificationTokenExpiresAt DateTime?
+  consumedAt                 DateTime?
+  createdAt                  DateTime  @default(now())
+
+  @@index([email])
+  @@map("email_verifications")
+}
+
+model RegistrationActionToken {
+  id             String              @id @default(cuid())
+  registrationId String
+  registration   CompanyRegistration @relation(fields: [registrationId], references: [id])
+  role           TokenRole
+  tokenHash      String              @unique
+  expiresAt      DateTime
+  lastUsedAt     DateTime?
+  createdAt      DateTime            @default(now())
+
+  @@index([registrationId, role])
+  @@map("registration_action_tokens")
+}
+
+model Coupon {
+  id            String       @id @default(cuid())
+  code          String       @unique
+  discountType  DiscountType
+  discountValue Decimal      @db.Decimal(10, 2)
+  bdmName       String?
+  expiresAt     DateTime?
+  usageLimit    Int?
+  timesUsed     Int          @default(0)
+  active        Boolean      @default(true)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  registrations CompanyRegistration[]
+
+  @@map("coupons")
+}
+
+model NotificationLog {
+  id                String               @id @default(cuid())
+  registrationId    String?
+  registration      CompanyRegistration? @relation(fields: [registrationId], references: [id])
+  event             String
+  recipient         String
+  subject           String
+  bodyText           String              @db.Text
+  status            String
+  providerMessageId String?
+  error             String?              @db.Text
+  createdAt         DateTime             @default(now())
+
+  @@index([registrationId])
+  @@index([event])
+  @@map("notification_logs")
+}

@@ -13,3 +13,19 @@ services:
         sync: false
       - key: CORS_ORIGIN
         sync: false
+      - key: FRONTEND_ORIGIN
+        sync: false
+      - key: MAIL_TRANSPORT
+        value: sendgrid
+      - key: SENDGRID_API_KEY
+        sync: false
+      - key: MAIL_FROM
+        sync: false
+      - key: UEIBI_NOTIFY_EMAIL
+        sync: false
+      - key: LICENSE_UNIT_PRICE
+        value: "3999"
+      - key: GST_RATE
+        value: "0.18"
+      - key: APP_PASSWORD
+        sync: false
