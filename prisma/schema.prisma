@@ -3,18 +3,164 @@ generator client {
 }
 
 datasource db {
-  provider = "mysql"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id        Int      @id @default(autoincrement())
-  email     String   @unique
-  name      String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  HR
+  FINANCE
+  MANAGER
+  EMPLOYEE
+  STUDENT
+  MENTOR
+}
 
-  @@map("users")
+enum UserStatus {
+  INVITED
+  ACTIVE
+  EXITED
+}
+
+model Tenant {
+  id             String               @id @default(cuid())
+  companyName    String
+  domainName     String               @unique
+  tenantCode     String               @unique
+  licenseLimit   Int                  @default(0)
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  users          TenantUser[]
+  registrationId String?              @unique
+  registration   CompanyRegistration? @relation(fields: [registrationId], references: [id])
+  exEmployeeRecords ExEmployeeRecord[]
+  nonJoinerRecords  NonJoinerRecord[]
+  notifications     Notification[]
+
+  @@map("tenants")
+}
+
+enum EmploymentType {
+  PERMANENT
+  CONTRACT
+  PROBATION
+  INTERN
+}
+
+model TenantUser {
+  id                 String          @id @default(cuid())
+  tenantId           String
+  tenant             Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email              String          @unique
+  passwordHash       String
+  name               String
+  role               UserRole        @default(EMPLOYEE)
+  status             UserStatus      @default(INVITED)
+  mustChangePassword Boolean         @default(true)
+  
+  // Employment Details
+  empType            EmploymentType  @default(PERMANENT)
+  department         String?
+  designation        String?
+  band               String?
+  officeLocation     String?
+  managerId          String?
+  manager            TenantUser?     @relation("ManagerSubordinates", fields: [managerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  subordinates       TenantUser[]    @relation("ManagerSubordinates")
+  joinDate           DateTime?
+  confirmationDate   DateTime?
+
+  // Personal Info
+  gender             String?
+  dob                DateTime?
+  bloodGroup         String?
+  personalEmail      String?
+  phone              String?
+  emergencyContact   String?
+
+  // Statutory Docs
+  pan                String?
+  aadhaar            String?
+  uan                String?
+  esic               String?
+
+  // Smart HR Relations
+  bankDetails        BankDetails?
+  workHistory        WorkHistory[]
+  exitDetails        ExitDetails?
+  goals              Goal[]
+  tasks              Task[]
+  leaveRequests      LeaveRequest[]      @relation("EmployeeLeaves")
+  approvedLeaves     LeaveRequest[]      @relation("ApprovedLeaves")
+  reviews            PerformanceReview[] @relation("EmployeeReviews")
+  exReviews          ExEmployerReview[]  @relation("EmployeeExReviews")
+  // Activity & Notifications
+  taskComments       TaskComment[]       @relation("TaskCommentAuthor")
+  taskAuditLogs      TaskAuditLog[]      @relation("TaskAuditPerformer")
+  goalComments       GoalComment[]       @relation("GoalCommentAuthor")
+  goalAuditLogs      GoalAuditLog[]      @relation("GoalAuditPerformer")
+  notifications      Notification[]      @relation("UserNotifications")
+  
+  remarks            String?
+  docs               Json?
+  isDeleted          Boolean    @default(false)
+
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  @@index([tenantId])
+  @@map("tenant_users")
+}
+
+model BankDetails {
+  id            String     @id @default(cuid())
+  userId        String     @unique
+  user          TenantUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bankName      String
+  accountNumber String
+  ifscCode      String
+  branchName    String
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@map("bank_details")
+}
+
+model WorkHistory {
+  id             String     @id @default(cuid())
+  userId         String
+  user           TenantUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  companyName    String
+  designation    String
+  startDate      DateTime
+  endDate        DateTime
+  reasonForExit  String?
+  verifiedStatus String     @default("PENDING") // PENDING | VERIFIED | REJECTED
+
+  @@map("work_histories")
+}
+
+model ExitDetails {
+  id                 String     @id @default(cuid())
+  userId             String     @unique
+  user               TenantUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  resignationDate    DateTime
+  lastWorkingDay     DateTime
+  exitReason         String
+  feedbackRemarks    String?
+  
+  // Clearances
+  itCleared          Boolean    @default(false)
+  hrCleared          Boolean    @default(false)
+  financeCleared     Boolean    @default(false)
+  settlementStatus   String     @default("PENDING") // PENDING | COMPLETED
+
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  @@map("exit_details")
 }
 
 enum RegistrationStatus {
@@ -81,6 +227,7 @@ model CompanyRegistration {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  tenant            Tenant?
   actionTokens      RegistrationActionToken[]
   notificationLogs  NotificationLog[]
 
@@ -153,4 +300,270 @@ model NotificationLog {
   @@index([registrationId])
   @@index([event])
   @@map("notification_logs")
+}
+
+model Goal {
+  id                  String        @id @default(cuid())
+  title               String
+  category            String?
+  priority            String?       // high | medium | low
+  createdBy           String?
+  progress            Int           @default(0)
+  status              String        @default("in_progress") // in_progress | completed
+  dueDate             DateTime?
+  employeeId          String
+  employee            TenantUser    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  milestones          Int           @default(0)
+  completedMilestones Int           @default(0)
+  tasks               Task[]
+  comments            GoalComment[]
+  auditLogs           GoalAuditLog[]
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  @@index([employeeId])
+  @@map("goals")
+}
+
+model Task {
+  id             String          @id @default(cuid())
+  title          String
+  priority       String?         // high | critical | medium | low
+  status         String          @default("todo") // todo | in_progress | pending_on_others | in_review | done
+  startDate      DateTime?
+  dueDate        DateTime?
+  financialYear  String?         // e.g. "FY 2026-27"
+  tags           String?         // comma-separated tags
+  goalId         String?
+  goal           Goal?           @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  isPrivate      Boolean         @default(false)
+  isStandalone   Boolean         @default(false)
+  weight         Int             @default(1)
+  employeeId     String
+  employee       TenantUser      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  description    String?         @db.Text
+  dependency     Json?           // serialised dep object: { assigneeId, depTitle, status, escalated, depTaskId }
+  isDependencyOf String?         // parent task ID this task is a companion dep of
+  comments       TaskComment[]
+  auditLogs      TaskAuditLog[]
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@index([employeeId])
+  @@index([goalId])
+  @@map("tasks")
+}
+
+// ── Task Activity ──────────────────────────────────────────────────────────
+
+model TaskComment {
+  id          String     @id @default(cuid())
+  taskId      String
+  task        Task       @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  authorId    String
+  author      TenantUser @relation("TaskCommentAuthor", fields: [authorId], references: [id])
+  comment     String     @db.Text
+  attachments String[]   // stored file paths
+  createdAt   DateTime   @default(now())
+
+  @@index([taskId])
+  @@map("task_comments")
+}
+
+model TaskAuditLog {
+  id            String     @id @default(cuid())
+  taskId        String
+  task          Task       @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  performedById String
+  performedBy   TenantUser @relation("TaskAuditPerformer", fields: [performedById], references: [id])
+  action        String     // created | status_changed | edited | dependency_created | escalated | approved | deleted
+  details       String?    @db.Text
+  previousValue Json?
+  createdAt     DateTime   @default(now())
+
+  @@index([taskId])
+  @@map("task_audit_logs")
+}
+
+// ── Goal Activity ──────────────────────────────────────────────────────────
+
+model GoalComment {
+  id          String     @id @default(cuid())
+  goalId      String
+  goal        Goal       @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  authorId    String
+  author      TenantUser @relation("GoalCommentAuthor", fields: [authorId], references: [id])
+  comment     String     @db.Text
+  attachments String[]
+  createdAt   DateTime   @default(now())
+
+  @@index([goalId])
+  @@map("goal_comments")
+}
+
+model GoalAuditLog {
+  id            String     @id @default(cuid())
+  goalId        String
+  goal          Goal       @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  performedById String
+  performedBy   TenantUser @relation("GoalAuditPerformer", fields: [performedById], references: [id])
+  action        String
+  details       String?    @db.Text
+  previousValue Json?
+  createdAt     DateTime   @default(now())
+
+  @@index([goalId])
+  @@map("goal_audit_logs")
+}
+
+// ── Notifications ──────────────────────────────────────────────────────────
+
+model Notification {
+  id          String     @id @default(cuid())
+  tenantId    String
+  tenant      Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  recipientId String
+  recipient   TenantUser @relation("UserNotifications", fields: [recipientId], references: [id], onDelete: Cascade)
+  type        String     // task_update | dep_approved | goal_update | appraisal | leave
+  title       String
+  body        String?    @db.Text
+  entityType  String?    // task | goal | appraisal
+  entityId    String?
+  isRead      Boolean    @default(false)
+  createdAt   DateTime   @default(now())
+
+  @@index([recipientId, isRead])
+  @@index([tenantId])
+  @@map("notifications")
+}
+
+model LeaveRequest {
+  id           String     @id @default(cuid())
+  employeeId   String
+  employee     TenantUser @relation("EmployeeLeaves", fields: [employeeId], references: [id], onDelete: Cascade)
+  type         String     // Casual | Sick | Annual
+  startDate    DateTime
+  endDate      DateTime
+  reason       String?    @db.Text
+  status       String     @default("PENDING") // PENDING | APPROVED | REJECTED
+  approvedById String?
+  approvedBy   TenantUser? @relation("ApprovedLeaves", fields: [approvedById], references: [id])
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@index([employeeId])
+  @@map("leave_requests")
+}
+
+model AppraisalCycle {
+  id        String              @id @default(cuid())
+  name      String
+  startDate DateTime
+  endDate   DateTime
+  status    String              @default("ACTIVE") // ACTIVE | CLOSED
+  reviews   PerformanceReview[]
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+
+  @@map("appraisal_cycles")
+}
+
+model PerformanceReview {
+  id             String         @id @default(cuid())
+  cycleId        String
+  cycle          AppraisalCycle @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  employeeId     String
+  employee       TenantUser     @relation("EmployeeReviews", fields: [employeeId], references: [id], onDelete: Cascade)
+  selfRating     Decimal?       @db.Decimal(3, 2)
+  selfRemarks    String?        @db.Text
+  managerRating  Decimal?       @db.Decimal(3, 2)
+  managerRemarks String?        @db.Text
+  status         String         @default("DRAFT") // DRAFT | SUBMITTED | COMPLETED
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([employeeId])
+  @@index([cycleId])
+  @@map("performance_reviews")
+}
+
+model ExEmployerReview {
+  id             String     @id @default(cuid())
+  employeeId     String
+  employee       TenantUser @relation("EmployeeExReviews", fields: [employeeId], references: [id], onDelete: Cascade)
+  exCompany      String
+  exManagerName  String
+  exManagerEmail String
+  token          String     @unique
+  rating         Decimal?   @db.Decimal(3, 2)
+  feedback       String?    @db.Text
+  status         String     @default("PENDING") // PENDING | COMPLETED
+  completedAt    DateTime?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  @@index([employeeId])
+  @@map("ex_employer_reviews")
+}
+
+model ExEmployeeRecord {
+  id              String      @id @default(cuid())
+  tenantId        String
+  tenant          Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  firstName       String
+  lastName        String
+  email           String
+  phone           String
+  pan             String
+  dob             String?     // Birth Year YYYY
+  designation     String
+  department      String
+  serviceStart    DateTime
+  serviceEnd      DateTime
+  exitReason      String
+  techRating      Int
+  attitudeRating  Int
+  conductValue    String
+  feedback        String      @db.Text
+  submittedBy     String      // Creator's name
+  status          String      @default("Submitted") // Submitted | Published
+  docs            Json?
+  isDeleted       Boolean     @default(false)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@index([tenantId])
+  @@index([pan])
+  @@index([email])
+  @@map("ex_employee_records")
+}
+
+model NonJoinerRecord {
+  id               String      @id @default(cuid())
+  tenantId         String
+  tenant           Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  firstName        String
+  lastName         String
+  email            String
+  phone            String
+  pan              String
+  dob              String?     // Birth Year YYYY
+  designation      String
+  department       String
+  offerReleaseDate DateTime
+  dateOfJoining    DateTime
+  salary           String      // LPA
+  offerAccepted    String      // Yes | No | Sent
+  submittedBy      String      // Creator's name
+  status           String      @default("Submitted") // Submitted | Published
+  docs             Json?
+  feedback         String      @db.Text
+  isDeleted        Boolean     @default(false)
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  @@index([tenantId])
+  @@index([pan])
+  @@index([email])
+  @@map("non_joiner_records")
 }
