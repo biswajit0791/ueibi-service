@@ -49,9 +49,36 @@ export async function activate(req, res, next) {
     if (!actionToken) return;
     const { registration } = actionToken;
 
-    const updated = await prisma.companyRegistration.update({
-      where: { id: registration.id },
-      data: { status: 'ACTIVE', activatedAt: new Date() },
+    const { updated, tenant, tenantUser } = await prisma.$transaction(async (tx) => {
+      const updatedReg = await tx.companyRegistration.update({
+        where: { id: registration.id },
+        data: { status: 'ACTIVE', activatedAt: new Date() },
+      });
+
+      const createdTenant = await tx.tenant.create({
+        data: {
+          companyName: registration.companyName,
+          domainName: registration.domainName,
+          tenantCode: registration.tenantCode,
+          licenseLimit: registration.licenseQuantity || 0,
+          registrationId: registration.id,
+        },
+      });
+
+      const createdUser = await tx.tenantUser.create({
+        data: {
+          tenantId: createdTenant.id,
+          email: registration.email,
+          passwordHash: registration.passwordHash,
+          name: registration.fullName,
+          role: 'SUPER_ADMIN',
+          status: 'ACTIVE',
+          mustChangePassword: false,
+          designation: registration.designation,
+        },
+      });
+
+      return { updated: updatedReg, tenant: createdTenant, tenantUser: createdUser };
     });
 
     await notifyStakeholders({
@@ -61,7 +88,7 @@ export async function activate(req, res, next) {
       message: `HR has activated the account for ${registration.companyName}. Onboarding is complete.`,
     });
 
-    res.json({ status: 'ACTIVE' });
+    res.json({ status: 'ACTIVE', tenantId: tenant.id });
   } catch (err) {
     next(err);
   }

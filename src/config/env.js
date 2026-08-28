@@ -36,4 +36,5 @@ export const env = {
   appPassword: process.env.APP_PASSWORD || 'YourStrongPasswordHere',
   adminSessionCookieName: process.env.ADMIN_SESSION_COOKIE_NAME || 'admin_session',
   adminSessionTtlMs: parseInt(process.env.ADMIN_SESSION_TTL_MS || String(24 * 60 * 60 * 1000), 10),
+  jwtSecret: process.env.JWT_SECRET || process.env.APP_PASSWORD || 'YourStrongPasswordHere',
 };
