@@ -340,6 +340,24 @@ const options = {
         },
 
         // ── Task schemas ──
+        TaskDependency: {
+          type: 'object',
+          required: ['type', 'concernedPersonId', 'title', 'dueDate'],
+          properties: {
+            type: { type: 'string', enum: ['pre', 'post'], example: 'pre' },
+            concernedPersonId: { type: 'string', example: 'cluser12345' },
+            concernedPersonName: { type: 'string', example: 'Pratik Parida' },
+            concernedManagerId: { type: 'string', example: 'cluser67890' },
+            concernedManagerName: { type: 'string', example: 'Biswajit HR' },
+            title: { type: 'string', example: 'Design microservices schemas' },
+            description: { type: 'string', nullable: true, example: 'What is needed and why...' },
+            dueDate: { type: 'string', format: 'date', example: '2026-08-31' },
+            status: { type: 'string', enum: ['pending_approval', 'approved', 'rejected', 'completed'], example: 'pending_approval' },
+            createdTaskId: { type: 'string', example: 'cltask98765' },
+            isManuallyHeldByOwnManager: { type: 'boolean', example: false },
+            manualHoldRequested: { type: 'boolean', example: false },
+          },
+        },
         Task: {
           type: 'object',
           properties: {
@@ -357,7 +375,7 @@ const options = {
             weight: { type: 'integer', example: 3 },
             description: { type: 'string', nullable: true, example: 'Create endpoints for adding items to cart' },
             employeeId: { type: 'string', example: 'cmtclxzzq0001uuek23nbb04s' },
-            dependency: { type: 'object', nullable: true, example: null },
+            dependency: { $ref: '#/components/schemas/TaskDependency', nullable: true },
             isDependencyOf: { type: 'string', nullable: true, example: null },
             createdAt: { type: 'string', format: 'date-time' },
             updatedAt: { type: 'string', format: 'date-time' },
@@ -379,7 +397,7 @@ const options = {
             weight: { type: 'integer', example: 3 },
             description: { type: 'string', example: 'Create endpoints for adding items to cart' },
             employeeId: { type: 'string', example: 'cmtclxzzq0001uuek23nbb04s' },
-            dependency: { type: 'object', nullable: true },
+            dependency: { $ref: '#/components/schemas/TaskDependency', nullable: true },
             isDependencyOf: { type: 'string', nullable: true },
           },
         },
@@ -398,7 +416,7 @@ const options = {
             isStandalone: { type: 'boolean' },
             weight: { type: 'integer' },
             description: { type: 'string' },
-            dependency: { type: 'object', nullable: true },
+            dependency: { $ref: '#/components/schemas/TaskDependency', nullable: true },
             isDependencyOf: { type: 'string', nullable: true },
           },
         },
@@ -447,11 +465,20 @@ const options = {
           type: 'object',
           properties: {
             id: { type: 'string' },
+            tenantId: { type: 'string' },
             title: { type: 'string', example: 'Improve product stability' },
+            description: { type: 'string', example: 'Refactor goals repository module to support direct tenancy.' },
+            goalType: { type: 'string', example: 'General' },
             category: { type: 'string', example: 'Project Delivery' },
             priority: { type: 'string', enum: ['high', 'medium', 'low'], example: 'medium' },
             progress: { type: 'integer', example: 45 },
-            status: { type: 'string', example: 'in_progress' },
+            status: { type: 'string', example: 'DRAFT' },
+            financialYear: { type: 'string', example: 'FY 2026-27' },
+            quarter: { type: 'string', example: 'Q1' },
+            startDate: { type: 'string', format: 'date-time' },
+            targetDate: { type: 'string', format: 'date-time' },
+            attachments: { type: 'array', items: { type: 'string' } },
+            specialNotes: { type: 'string', example: 'Ensure that the indexes are added to tenantId.' },
             dueDate: { type: 'string', format: 'date' },
             employeeId: { type: 'string' },
             milestones: { type: 'integer', example: 4 },
@@ -464,8 +491,16 @@ const options = {
           required: ['title'],
           properties: {
             title: { type: 'string', example: 'Improve product stability' },
+            description: { type: 'string', example: 'Refactor goals repository module to support direct tenancy.' },
             category: { type: 'string', example: 'Project Delivery' },
+            goalType: { type: 'string', example: 'General' },
             priority: { type: 'string', enum: ['high', 'medium', 'low'], example: 'medium' },
+            financialYear: { type: 'string', example: 'FY 2026-27' },
+            quarter: { type: 'string', example: 'Q1' },
+            startDate: { type: 'string', format: 'date-time' },
+            targetDate: { type: 'string', format: 'date-time' },
+            attachments: { type: 'array', items: { type: 'string' } },
+            specialNotes: { type: 'string', example: 'Ensure that the indexes are added to tenantId.' },
             dueDate: { type: 'string', format: 'date' },
             employeeId: { type: 'string' },
           },
@@ -1397,7 +1432,7 @@ const options = {
           operationId: 'listTasks',
           security: [{ userCookie: [] }],
           parameters: [
-            { name: 'employeeId', in: 'query', schema: { type: 'string' }, description: 'Employee ID (defaults to current user)' },
+            { name: 'employeeId', in: 'query', schema: { type: 'string' }, description: 'Employee ID (defaults to current user, use "all" to retrieve organization/team tasks)' },
             { name: 'fy', in: 'query', schema: { type: 'string' }, description: 'Filter by Financial Year' },
           ],
           responses: {
@@ -1588,6 +1623,43 @@ const options = {
       },
 
       // ───── Goals ─────
+      '/goals/assignable-users': {
+        get: {
+          tags: ['Goals'],
+          summary: 'List users available for goal assignment',
+          operationId: 'getAssignableUsers',
+          security: [{ userCookie: [] }],
+          responses: {
+            200: {
+              description: 'Assignable users retrieved successfully',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      users: {
+                        type: 'array',
+                        items: {
+                          type: 'object',
+                          properties: {
+                            id: { type: 'string' },
+                            name: { type: 'string' },
+                            email: { type: 'string' },
+                            role: { type: 'string' },
+                            department: { type: 'string' },
+                            designation: { type: 'string' },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            401: { description: 'Unauthorized' },
+          },
+        },
+      },
       '/goals': {
         get: {
           tags: ['Goals'],

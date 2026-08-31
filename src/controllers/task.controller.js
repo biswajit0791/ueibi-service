@@ -1,20 +1,34 @@
 import { prisma } from '../lib/prisma.js';
 import { logTaskAudit } from './taskActivity.controller.js';
+import { emitToTenant } from '../lib/socket.js';
+import { createTaskSchema, updateTaskSchema } from '../validations/task.schema.js';
 
 // ─── Helper: resolve & authorise target employee ───────────────────────────
-async function resolveTargetEmployee(requestingUser, employeeId) {
-  if (!employeeId || employeeId === requestingUser.id) {
+// Returns the TenantUser record that will own the task.
+// Verifies the employee belongs to the SAME tenant as the requesting user.
+async function resolveTargetEmployee(requestingUser, tenantId, employeeId) {
+  // If no employeeId supplied → default to the requesting user themselves
+  if (!employeeId) {
     return { id: requestingUser.id };
   }
 
-  const targetUser = await prisma.tenantUser.findFirst({
-    where: { id: employeeId, tenantId: requestingUser.tenantId },
-  });
-  if (!targetUser) {
-    throw { status: 400, message: 'Invalid employee: user not found in this organisation' };
+  // If assigning to self → fast path (no extra DB check needed)
+  if (employeeId === requestingUser.id) {
+    return { id: requestingUser.id };
   }
 
-  const allowedRoles = ['SUPER_ADMIN', 'HR', 'ADMIN'];
+  // Verify the target employee exists AND belongs to the authenticated tenant
+  const targetUser = await prisma.tenantUser.findFirst({
+    where: { id: employeeId, tenantId },
+  });
+
+  if (!targetUser) {
+    throw { status: 403, message: 'Access forbidden: target employee not found in your organisation' };
+  }
+
+  // Only HR/Admin/Super-admin can assign across the org freely
+  // Managers can only assign to their direct subordinates
+  const allowedRoles = ['SUPER_ADMIN', 'ADMIN', 'HR'];
   if (!allowedRoles.includes(requestingUser.role)) {
     const subordinate = await prisma.tenantUser.findFirst({
       where: { id: employeeId, managerId: requestingUser.id },
@@ -27,59 +41,163 @@ async function resolveTargetEmployee(requestingUser, employeeId) {
   return targetUser;
 }
 
-// ─── Helper: assert task exists & requester owns it ────────────────────────
-async function assertTaskOwner(id, requestingUser) {
-  const task = await prisma.task.findUnique({ where: { id } });
+// ─── Helper: assert task exists & requester owns/manages it ────────────────
+async function assertTaskOwner(id, requestingUser, tenantId) {
+  const task = await prisma.task.findFirst({ where: { id, tenantId } });
   if (!task) throw { status: 404, message: 'Task not found' };
-  if (task.employeeId !== requestingUser.id && requestingUser.role !== 'SUPER_ADMIN' && requestingUser.role !== 'HR') {
-    throw { status: 403, message: 'Access forbidden: cannot edit another employee\'s task' };
+
+  const allowedRoles = ['SUPER_ADMIN', 'ADMIN', 'HR'];
+  if (task.employeeId !== requestingUser.id && !allowedRoles.includes(requestingUser.role)) {
+    // Managers can edit/delete their direct report's tasks
+    const subordinate = await prisma.tenantUser.findFirst({
+      where: { id: task.employeeId, managerId: requestingUser.id, tenantId },
+    });
+    if (!subordinate) {
+      throw { status: 403, message: "Access forbidden: cannot edit another employee's task" };
+    }
   }
   return task;
+}
+
+// ─── Helper: validate goal belongs to same tenant ─────────────────────────
+async function resolveGoal(goalId, tenantId) {
+  if (!goalId) return null;
+
+  const goal = await prisma.goal.findFirst({ where: { id: goalId } });
+  if (!goal) throw { status: 404, message: `Goal not found: ${goalId}` };
+  if (goal.tenantId !== tenantId) {
+    throw { status: 403, message: 'Access forbidden: goal belongs to a different organisation' };
+  }
+  return goal;
+}
+
+async function recalculateGoalProgress(goalId) {
+  if (!goalId) return 0;
+  
+  const tasks = await prisma.task.findMany({
+    where: { goalId },
+  });
+
+  if (tasks.length === 0) {
+    await prisma.goal.update({
+      where: { id: goalId },
+      data: { progress: 0 },
+    });
+    return 0;
+  }
+
+  const totalWeight = tasks.reduce((sum, t) => sum + Number(t.weight || 0), 0);
+  const earned = tasks.reduce((sum, t) => sum + (Number(t.progress || 0) * Number(t.weight || 0)), 0);
+  const overallProgress = totalWeight > 0 ? Math.round(earned / totalWeight) : 0;
+
+  await prisma.goal.update({
+    where: { id: goalId },
+    data: { progress: overallProgress },
+  });
+
+  return overallProgress;
 }
 
 // ─── POST /api/tasks ────────────────────────────────────────────────────────
 export async function createTask(req, res, next) {
   try {
+    // 1. Guard: tenant context must be present (set by auth middleware from JWT)
+    const tenantId = req.tenantId;
+    if (!tenantId) {
+      return res.status(401).json({ success: false, message: 'Tenant context is required to create a task' });
+    }
+
+    const parsed = createTaskSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ success: false, error: 'Validation failed', details: parsed.error.issues });
+    }
     const {
       title, priority, startDate, dueDate, financialYear,
       tags, goalId, isPrivate, isStandalone, weight,
       description, employeeId, dependency, isDependencyOf,
-    } = req.body || {};
+      status, progress,
+    } = parsed.data;
 
-    if (!title) {
-      return res.status(400).json({ error: 'Task title is required' });
+    // 3. Date validation: dueDate must not be earlier than startDate
+    if (startDate && dueDate) {
+      const start = new Date(startDate);
+      const due = new Date(dueDate);
+      if (isNaN(start.getTime()) || isNaN(due.getTime())) {
+        return res.status(400).json({ success: false, message: 'Invalid date format for startDate or dueDate' });
+      }
+      if (due < start) {
+        return res.status(400).json({
+          success: false,
+          message: 'Due date cannot be earlier than start date',
+        });
+      }
     }
 
-    const target = await resolveTargetEmployee(req.user, employeeId).catch(e => {
-      res.status(e.status || 500).json({ error: e.message });
-      return null;
-    });
-    if (!target) return;
+    // 4. Resolve and authorise the target employee (cross-tenant guard inside)
+    let target;
+    try {
+      target = await resolveTargetEmployee(req.user, tenantId, employeeId);
+    } catch (e) {
+      return res.status(e.status || 500).json({ success: false, message: e.message });
+    }
 
+    // 5. Validate goal tenant scope (if goalId provided)
+    let resolvedGoalId = null;
+    if (!isStandalone && goalId) {
+      try {
+        const goal = await resolveGoal(goalId, tenantId);
+        resolvedGoalId = goal?.id || null;
+      } catch (e) {
+        return res.status(e.status || 500).json({ success: false, message: e.message });
+      }
+    }
+
+    // 6. Create task — always connect to the authenticated tenant
     const task = await prisma.task.create({
       data: {
-        title,
-        priority,
+        title: title.trim(),
+        priority: priority || 'medium',
+        status: status || 'todo',
+        progress: progress || 0,
         startDate: startDate ? new Date(startDate) : undefined,
         dueDate: dueDate ? new Date(dueDate) : undefined,
         financialYear: financialYear || null,
-        tags,
-        goalId: goalId || undefined,
-        isPrivate: isPrivate || false,
-        isStandalone: isStandalone || false,
+        tags: tags || null,
+        isPrivate: isPrivate ?? false,
+        isStandalone: isStandalone ?? false,
         weight: weight || 1,
-        description,
-        dependency: dependency || undefined,
+        description: description || null,
+        dependency: dependency || null,
         isDependencyOf: isDependencyOf || null,
-        employeeId: target.id,
+        // ─ Relations ─
+        employee: { connect: { id: target.id } },
+        tenant: { connect: { id: tenantId } },
+        ...(resolvedGoalId ? { goal: { connect: { id: resolvedGoalId } } } : {}),
       },
     });
 
+    let goalProgress = 0;
+    if (resolvedGoalId) {
+      goalProgress = await recalculateGoalProgress(resolvedGoalId);
+    }
+
+    // 7. Audit log
     await logTaskAudit({
       taskId: task.id,
       performedById: req.user.id,
       action: 'created',
-      details: `Task "${task.title}" initialized.`,
+      details: `Task "${task.title}" created.`,
+    });
+
+    emitToTenant(tenantId, 'task_updated', {
+      action: 'create',
+      task: {
+        ...task,
+        progress: task.progress || 0,
+        weight: task.weight || 1,
+      },
+      goalId: resolvedGoalId,
+      goalProgress,
     });
 
     res.status(201).json(task);
@@ -91,14 +209,36 @@ export async function createTask(req, res, next) {
 // ─── GET /api/tasks ─────────────────────────────────────────────────────────
 export async function listTasks(req, res, next) {
   try {
+    const tenantId = req.tenantId;
     const targetEmployeeId = req.query.employeeId || req.user.id;
 
-    // Auth: only self, direct manager, HR, or super-admin may fetch
+    if (targetEmployeeId === 'all') {
+      let whereClause = { tenantId };
+      const allowedRoles = ['SUPER_ADMIN', 'ADMIN', 'HR', 'LEADERSHIP', 'OWNER'];
+      if (!allowedRoles.includes(req.user.role)) {
+        if (req.user.role === 'MANAGER') {
+          whereClause.OR = [
+            { employeeId: req.user.id },
+            { employee: { managerId: req.user.id } },
+            { isDependencyOf: { not: null } },
+          ];
+        } else {
+          whereClause.employeeId = req.user.id;
+        }
+      }
+      const items = await prisma.task.findMany({
+        where: whereClause,
+        orderBy: { createdAt: 'desc' },
+      });
+      return res.json({ items });
+    }
+
+    // Auth: only self, direct manager, HR, Admin, or super-admin may fetch
     if (targetEmployeeId !== req.user.id) {
-      const allowedRoles = ['SUPER_ADMIN', 'HR'];
+      const allowedRoles = ['SUPER_ADMIN', 'ADMIN', 'HR'];
       if (!allowedRoles.includes(req.user.role)) {
         const subordinate = await prisma.tenantUser.findFirst({
-          where: { id: targetEmployeeId, managerId: req.user.id },
+          where: { id: targetEmployeeId, managerId: req.user.id, tenantId },
         });
         if (!subordinate) {
           return res.status(403).json({ error: 'Access forbidden' });
@@ -107,6 +247,7 @@ export async function listTasks(req, res, next) {
     }
 
     const where = {
+      tenantId,
       employeeId: targetEmployeeId,
       // Private tasks only visible to the owner
       ...(targetEmployeeId !== req.user.id ? { isPrivate: false } : {}),
@@ -131,26 +272,79 @@ export async function updateTaskStatus(req, res, next) {
   try {
     const { id } = req.params;
     const { status } = req.body || {};
+    const tenantId = req.tenantId;
 
     if (!status) {
       return res.status(400).json({ error: 'Task status is required' });
     }
 
-    await assertTaskOwner(id, req.user).catch(e => {
+    const existing = await assertTaskOwner(id, req.user, tenantId).catch(e => {
       res.status(e.status || 500).json({ error: e.message });
       return null;
     });
+    if (!existing) return;
+
+    let progressUpdate = undefined;
+    if (status === 'done') progressUpdate = 100;
+    else if (status === 'todo') progressUpdate = 0;
 
     const updated = await prisma.task.update({
       where: { id },
-      data: { status },
+      data: { 
+        status,
+        ...(progressUpdate !== undefined && { progress: progressUpdate })
+      },
     });
+
+    let goalProgress = 0;
+    if (updated.goalId) {
+      goalProgress = await recalculateGoalProgress(updated.goalId);
+    }
+
+    if (updated.status === 'done' && updated.isDependencyOf) {
+      const parentTask = await prisma.task.findUnique({
+        where: { id: updated.isDependencyOf }
+      });
+      if (parentTask) {
+        const updatedDependency = parentTask.dependency ? {
+          ...parentTask.dependency,
+          status: 'completed'
+        } : null;
+        
+        const updatedParent = await prisma.task.update({
+          where: { id: parentTask.id },
+          data: {
+            status: parentTask.status === 'pending_on_others' ? 'in_progress' : parentTask.status,
+            dependency: updatedDependency
+          }
+        });
+        
+        let parentGoalProgress = 0;
+        if (updatedParent.goalId) {
+          parentGoalProgress = await recalculateGoalProgress(updatedParent.goalId);
+        }
+        
+        emitToTenant(tenantId, 'task_updated', {
+          action: 'update',
+          task: updatedParent,
+          goalId: updatedParent.goalId,
+          goalProgress: parentGoalProgress,
+        });
+      }
+    }
 
     await logTaskAudit({
       taskId: id,
       performedById: req.user.id,
       action: 'status_changed',
       details: `Status updated to ${status.toUpperCase().replace('_', ' ')}.`,
+    });
+
+    emitToTenant(tenantId, 'task_updated', {
+      action: 'update',
+      task: updated,
+      goalId: updated.goalId,
+      goalProgress,
     });
 
     res.json(updated);
@@ -163,29 +357,75 @@ export async function updateTaskStatus(req, res, next) {
 export async function updateTask(req, res, next) {
   try {
     const { id } = req.params;
+    const tenantId = req.tenantId;
+    const parsed = updateTaskSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ success: false, error: 'Validation failed', details: parsed.error.issues });
+    }
     const {
       title, priority, startDate, dueDate, financialYear,
       tags, goalId, isPrivate, isStandalone, weight,
-      description, status, dependency, isDependencyOf,
-    } = req.body || {};
+      description, status, progress, dependency, isDependencyOf,
+    } = parsed.data;
 
-    const existing = await assertTaskOwner(id, req.user).catch(e => {
+    // Date validation on update too
+    if (startDate && dueDate) {
+      const start = new Date(startDate);
+      const due = new Date(dueDate);
+      if (!isNaN(start.getTime()) && !isNaN(due.getTime()) && due < start) {
+        return res.status(400).json({
+          success: false,
+          message: 'Due date cannot be earlier than start date',
+        });
+      }
+    }
+
+    const existing = await assertTaskOwner(id, req.user, tenantId).catch(e => {
       res.status(e.status || 500).json({ error: e.message });
       return null;
     });
     if (!existing) return;
+
+    // If goalId is being updated, validate tenant scope
+    let resolvedGoalId = undefined;
+    if (goalId !== undefined) {
+      if (!goalId) {
+        resolvedGoalId = null;
+      } else {
+        try {
+          const goal = await resolveGoal(goalId, tenantId);
+          resolvedGoalId = goal?.id || null;
+        } catch (e) {
+          return res.status(e.status || 500).json({ success: false, message: e.message });
+        }
+      }
+    }
+
+    let finalProgress = progress;
+    let finalStatus = status;
+    
+    if (finalProgress === undefined && status !== undefined) {
+      if (status === 'done') finalProgress = 100;
+      else if (status === 'todo') finalProgress = 0;
+    }
+    if (progress !== undefined && finalStatus === undefined) {
+      if (progress === 100) finalStatus = 'done';
+      else if (progress > 0) finalStatus = 'in_progress';
+      else if (progress === 0) finalStatus = 'todo';
+    }
 
     const updated = await prisma.task.update({
       where: { id },
       data: {
         ...(title !== undefined && { title }),
         ...(priority !== undefined && { priority }),
-        ...(status !== undefined && { status }),
+        ...(finalStatus !== undefined && { status: finalStatus }),
+        ...(finalProgress !== undefined && { progress: finalProgress }),
         ...(startDate !== undefined && { startDate: startDate ? new Date(startDate) : null }),
         ...(dueDate !== undefined && { dueDate: dueDate ? new Date(dueDate) : null }),
         ...(financialYear !== undefined && { financialYear }),
         ...(tags !== undefined && { tags }),
-        ...(goalId !== undefined && { goalId: goalId || null }),
+        ...(resolvedGoalId !== undefined && { goalId: resolvedGoalId }),
         ...(isPrivate !== undefined && { isPrivate }),
         ...(isStandalone !== undefined && { isStandalone }),
         ...(weight !== undefined && { weight }),
@@ -194,6 +434,71 @@ export async function updateTask(req, res, next) {
         ...(isDependencyOf !== undefined && { isDependencyOf: isDependencyOf || null }),
       },
     });
+
+    let goalProgress = 0;
+    if (updated.goalId) {
+      goalProgress = await recalculateGoalProgress(updated.goalId);
+    }
+
+    // If dependency was updated and has a companion task - keep it synchronized
+    if (dependency !== undefined && dependency !== null) {
+      const companionTaskId = dependency.createdTaskId;
+      if (companionTaskId) {
+        const companionTask = await prisma.task.findUnique({
+          where: { id: companionTaskId }
+        });
+        if (companionTask) {
+          const updatedCompanion = await prisma.task.update({
+            where: { id: companionTaskId },
+            data: {
+              employeeId: dependency.concernedPersonId,
+              title: dependency.title,
+              description: dependency.description || null,
+              dueDate: dependency.dueDate ? new Date(dependency.dueDate) : null,
+            }
+          });
+          
+          emitToTenant(tenantId, 'task_updated', {
+            action: 'update',
+            task: updatedCompanion,
+            goalId: updatedCompanion.goalId,
+            goalProgress: 0,
+          });
+        }
+      }
+    }
+
+    if (updated.status === 'done' && updated.isDependencyOf) {
+      const parentTask = await prisma.task.findUnique({
+        where: { id: updated.isDependencyOf }
+      });
+      if (parentTask) {
+        const updatedDependency = parentTask.dependency ? {
+          ...parentTask.dependency,
+          status: 'completed'
+        } : null;
+        
+        const updatedParent = await prisma.task.update({
+          where: { id: parentTask.id },
+          data: {
+            status: parentTask.status === 'pending_on_others' ? 'in_progress' : parentTask.status,
+            dependency: updatedDependency
+          }
+        });
+        
+        let parentGoalProgress = 0;
+        if (updatedParent.goalId) {
+          parentGoalProgress = await recalculateGoalProgress(updatedParent.goalId);
+        }
+        
+        emitToTenant(tenantId, 'task_updated', {
+          action: 'update',
+          task: updatedParent,
+          goalId: updatedParent.goalId,
+          goalProgress: parentGoalProgress,
+        });
+      }
+    }
 
     // Determine details of edit
     let details = 'Task edited.';
@@ -213,6 +518,13 @@ export async function updateTask(req, res, next) {
       details,
     });
 
+    emitToTenant(tenantId, 'task_updated', {
+      action: 'update',
+      task: updated,
+      goalId: updated.goalId,
+      goalProgress,
+    });
+
     res.json(updated);
   } catch (err) {
     next(err);
@@ -223,8 +535,9 @@ export async function updateTask(req, res, next) {
 export async function deleteTask(req, res, next) {
   try {
     const { id } = req.params;
+    const tenantId = req.tenantId;
 
-    const existing = await assertTaskOwner(id, req.user).catch(e => {
+    const existing = await assertTaskOwner(id, req.user, tenantId).catch(e => {
       res.status(e.status || 500).json({ error: e.message });
       return null;
     });
@@ -246,6 +559,18 @@ export async function deleteTask(req, res, next) {
     }
 
     await prisma.task.delete({ where: { id } });
+
+    let goalProgress = 0;
+    if (existing.goalId) {
+      goalProgress = await recalculateGoalProgress(existing.goalId);
+    }
+
+    emitToTenant(tenantId, 'task_updated', {
+      action: 'delete',
+      taskId: id,
+      goalId: existing.goalId,
+      goalProgress,
+    });
 
     res.json({ success: true });
   } catch (err) {
