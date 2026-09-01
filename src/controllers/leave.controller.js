@@ -78,9 +78,10 @@ export async function approveLeaveRequest(req, res, next) {
       include: { employee: true },
     });
 
-    if (!leave) {
+    if (!leave || leave.employee.tenantId !== req.tenantId) {
       return res.status(404).json({ error: 'Leave request not found' });
     }
+
 
     // Verify manager approval logic
     if (leave.employee.managerId !== req.user.id && req.user.role !== 'SUPER_ADMIN' && req.user.role !== 'HR') {

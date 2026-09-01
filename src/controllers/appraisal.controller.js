@@ -53,9 +53,10 @@ export async function submitManagerRating(req, res, next) {
       include: { employee: true },
     });
 
-    if (!review) {
+    if (!review || review.employee.tenantId !== req.tenantId) {
       return res.status(404).json({ error: 'Performance review not found' });
     }
+
 
     // Verify requesting user is employee's manager
     if (review.employee.managerId !== req.user.id && req.user.role !== 'SUPER_ADMIN') {

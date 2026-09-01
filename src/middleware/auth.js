@@ -30,8 +30,10 @@ export function requireAuth(req, res, next) {
     email: decoded.email,
     role: decoded.role,
     name: decoded.name,
+    tenantId: decoded.tenantId,
   };
   req.tenantId = decoded.tenantId;
 
   next();
 }
+

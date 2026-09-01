@@ -98,9 +98,14 @@ export async function me(req, res, next) {
       },
     });
 
-    if (!user) {
+    if (!user || user.isDeleted) {
       return res.status(404).json({ error: 'User not found' });
     }
+
+    if (user.status === 'EXITED') {
+      return res.status(403).json({ error: 'Access forbidden: this account is inactive/exited' });
+    }
+
 
     res.json({
       user: {

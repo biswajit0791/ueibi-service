@@ -18,14 +18,17 @@ export async function addGoalComment(req, res, next) {
       return res.status(400).json({ error: 'Comment text is required' });
     }
 
-    const goal = await prisma.goal.findUnique({ where: { id: goalId } });
+    // Verify goal belongs to current tenant
+    const goal = await prisma.goal.findFirst({
+      where: { id: goalId, tenantId: req.tenantId },
+    });
     if (!goal) return res.status(404).json({ error: 'Goal not found' });
 
     const isOwner = goal.employeeId === req.user.id;
     const allowedRoles = ['SUPER_ADMIN', 'HR', 'ADMIN'];
     if (!isOwner && !allowedRoles.includes(req.user.role)) {
       const isSubordinate = await prisma.tenantUser.findFirst({
-        where: { id: goal.employeeId, managerId: req.user.id },
+        where: { id: goal.employeeId, managerId: req.user.id, tenantId: req.tenantId },
       });
       if (!isSubordinate) return res.status(403).json({ error: 'Access forbidden' });
     }
@@ -51,7 +54,7 @@ export async function addGoalComment(req, res, next) {
 
     if (!isOwner) {
       await pushNotification({
-        tenantId: req.user.tenantId,
+        tenantId: req.tenantId,
         recipientId: goal.employeeId,
         type: 'goal_update',
         title: 'New feedback on your goal',
@@ -72,7 +75,10 @@ export async function listGoalComments(req, res, next) {
   try {
     const { id: goalId } = req.params;
 
-    const goal = await prisma.goal.findUnique({ where: { id: goalId } });
+    // Verify goal belongs to current tenant
+    const goal = await prisma.goal.findFirst({
+      where: { id: goalId, tenantId: req.tenantId },
+    });
     if (!goal) return res.status(404).json({ error: 'Goal not found' });
 
     const items = await prisma.goalComment.findMany({
@@ -94,6 +100,12 @@ export async function listGoalAudit(req, res, next) {
   try {
     const { id: goalId } = req.params;
 
+    // Verify goal belongs to current tenant
+    const goal = await prisma.goal.findFirst({
+      where: { id: goalId, tenantId: req.tenantId },
+    });
+    if (!goal) return res.status(404).json({ error: 'Goal not found' });
+
     const items = await prisma.goalAuditLog.findMany({
       where: { goalId },
       include: {
@@ -111,10 +123,16 @@ export async function listGoalAudit(req, res, next) {
 // ─── DELETE /api/goals/:id/comments/:cid ────────────────────────────────────
 export async function deleteGoalComment(req, res, next) {
   try {
-    const { cid } = req.params;
+    const { id: goalId, cid } = req.params;
 
-    const comment = await prisma.goalComment.findUnique({ where: { id: cid } });
-    if (!comment) return res.status(404).json({ error: 'Comment not found' });
+    // Verify comment belongs to the goal and goal belongs to requester's tenant
+    const comment = await prisma.goalComment.findUnique({
+      where: { id: cid },
+      include: { goal: true },
+    });
+    if (!comment || comment.goalId !== goalId || comment.goal.tenantId !== req.tenantId) {
+      return res.status(404).json({ error: 'Comment not found' });
+    }
 
     if (comment.authorId !== req.user.id && !['SUPER_ADMIN', 'HR', 'ADMIN'].includes(req.user.role)) {
       return res.status(403).json({ error: 'Access forbidden' });

@@ -269,51 +269,69 @@ export async function listEmployees(req, res, next) {
       ];
     }
 
+    const isPrivileged = ['SUPER_ADMIN', 'ADMIN', 'HR'].includes(req.user.role);
+
+    const select = isPrivileged
+      ? {
+          id: true,
+          email: true,
+          name: true,
+          role: true,
+          status: true,
+          department: true,
+          designation: true,
+          band: true,
+          managerId: true,
+          joinDate: true,
+          createdAt: true,
+          phone: true,
+          pan: true,
+          aadhaar: true,
+          dob: true,
+          gender: true,
+          bloodGroup: true,
+          personalEmail: true,
+          emergencyContact: true,
+          uan: true,
+          esic: true,
+          docs: true,
+          bankDetails: {
+            select: {
+              bankName: true,
+              accountNumber: true,
+              ifscCode: true,
+              branchName: true,
+            },
+          },
+          workHistory: {
+            select: {
+              id: true,
+              companyName: true,
+              designation: true,
+              startDate: true,
+              endDate: true,
+              reasonForExit: true,
+            },
+          },
+        }
+      : {
+          id: true,
+          email: true,
+          name: true,
+          role: true,
+          status: true,
+          department: true,
+          designation: true,
+          band: true,
+          managerId: true,
+          joinDate: true,
+          createdAt: true,
+        };
+
     const items = await prisma.tenantUser.findMany({
       where,
       orderBy: { createdAt: 'desc' },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        status: true,
-        department: true,
-        designation: true,
-        band: true,
-        managerId: true,
-        joinDate: true,
-        createdAt: true,
-        phone: true,
-        pan: true,
-        aadhaar: true,
-        dob: true,
-        gender: true,
-        bloodGroup: true,
-        personalEmail: true,
-        emergencyContact: true,
-        uan: true,
-        esic: true,
-        docs: true,
-        bankDetails: {
-          select: {
-            bankName: true,
-            accountNumber: true,
-            ifscCode: true,
-            branchName: true,
-          },
-        },
-        workHistory: {
-          select: {
-            id: true,
-            companyName: true,
-            designation: true,
-            startDate: true,
-            endDate: true,
-            reasonForExit: true,
-          },
-        },
-      },
+      select,
     });
 
     res.json({ items });
