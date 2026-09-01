@@ -147,7 +147,7 @@ model WorkHistory {
 model ExitDetails {
   id              String     @id @default(cuid())
   userId          String     @unique
-  user            TenantUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user          TenantUser @relation(fields: [userId], references: [id], onDelete: Cascade)
   resignationDate DateTime
   lastWorkingDay  DateTime
   exitReason      String
@@ -339,24 +339,24 @@ model Goal {
 }
 
 model Task {
-  id             String         @id @default(cuid())
+  id             String                  @id @default(cuid())
   tenantId       String
-  tenant         Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant         Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   title          String
   priority       String? // high | critical | medium | low
-  status         String         @default("todo") // todo | in_progress | pending_on_others | in_review | done
-  progress       Int            @default(0)
+  status         String                  @default("todo") // todo | in_progress | pending_on_others | in_review | done
+  progress       Int                     @default(0)
   startDate      DateTime?
   dueDate        DateTime?
   financialYear  String? // e.g. "FY 2026-27"
   tags           String? // comma-separated tags
   goalId         String?
-  goal           Goal?          @relation(fields: [goalId], references: [id], onDelete: Cascade)
-  isPrivate      Boolean        @default(false)
-  isStandalone   Boolean        @default(false)
-  weight         Int            @default(1)
+  goal           Goal?                   @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  isPrivate      Boolean                 @default(false)
+  isStandalone   Boolean                 @default(false)
+  weight         Int                     @default(1)
   employeeId     String
-  employee       TenantUser     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  employee       TenantUser              @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   description    String?        @db.Text
   dependency     Json? // serialised dep object: { assigneeId, depTitle, status, escalated, depTaskId }
   isDependencyOf String? // parent task ID this task is a companion dep of
@@ -380,7 +380,7 @@ model TaskComment {
   authorId    String
   author      TenantUser @relation("TaskCommentAuthor", fields: [authorId], references: [id])
   comment     String     @db.Text
-  attachments String[] // stored file paths
+  attachments String[] // stored file paths / rich JSON metadata
   createdAt   DateTime   @default(now())
 
   @@index([taskId])
