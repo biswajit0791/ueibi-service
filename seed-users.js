@@ -22,7 +22,7 @@ async function main() {
   // Create HR
   const hr = await prisma.tenantUser.upsert({
     where: { email: 'biswajitparida1291@gmail.com' },
-    update: {},
+    update: { passwordHash },
     create: {
       tenantId: tenant.id,
       email: 'biswajitparida1291@gmail.com',
@@ -38,7 +38,7 @@ async function main() {
   // Create Super Admin
   const sa = await prisma.tenantUser.upsert({
     where: { email: 'biswajitparida0791@gmail.com' },
-    update: {},
+    update: { passwordHash },
     create: {
       tenantId: tenant.id,
       email: 'biswajitparida0791@gmail.com',
@@ -54,7 +54,7 @@ async function main() {
   // Create Admin (Company Owner)
   const admin = await prisma.tenantUser.upsert({
     where: { email: 'biswajitparida5@gmail.com' },
-    update: {},
+    update: { passwordHash },
     create: {
       tenantId: tenant.id,
       email: 'biswajitparida5@gmail.com',
@@ -66,6 +66,22 @@ async function main() {
     },
   });
   console.log('Created Admin User:', admin.email);
+
+  // Create Employee Pratik Parida
+  const employee = await prisma.tenantUser.upsert({
+    where: { email: 'pratik@acmecorp.com' },
+    update: { passwordHash },
+    create: {
+      tenantId: tenant.id,
+      email: 'pratik@acmecorp.com',
+      passwordHash,
+      name: 'pratik parida',
+      role: 'EMPLOYEE',
+      status: 'ACTIVE',
+      mustChangePassword: false,
+    },
+  });
+  console.log('Created Employee User:', employee.email);
 }
 
 main().finally(() => prisma.$disconnect());
