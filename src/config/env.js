@@ -1,11 +1,10 @@
 import 'dotenv/config';
 
-const required = ['DATABASE_URL'];
+const required = ['DATABASE_URL', 'JWT_SECRET', 'APP_PASSWORD'];
 
-for (const key of required) {
-  if (!process.env[key]) {
-    console.warn(`[env] Missing required environment variable: ${key}`);
-  }
+const missing = required.filter((key) => !process.env[key]);
+if (missing.length > 0) {
+  throw new Error(`[env] Fatal configuration error: Missing required environment variable(s): ${missing.join(', ')}`);
 }
 
 export const env = {
@@ -21,7 +20,7 @@ export const env = {
   mailPort: parseInt(process.env.MAIL_PORT || '465', 10),
   mailEncryption: process.env.MAIL_ENCRYPTION || 'ssl',
   mailUsername: process.env.MAIL_USERNAME || 'administrator@ueibi.com',
-  mailPassword: process.env.MAIL_PASSWORD || 'QKwp34MHkHgcz',
+  mailPassword: process.env.MAIL_PASSWORD || '',
   mailFrom: process.env.MAIL_FROM_ADDRESS || process.env.MAIL_FROM || 'noreply@ueibi.com',
   sendgridApiKey: process.env.SENDGRID_API_KEY,
   ueibiNotifyEmail: process.env.UEIBI_NOTIFY_EMAIL || 'ops@ueibi.local',
@@ -33,8 +32,9 @@ export const env = {
   otpMaxAttempts: parseInt(process.env.OTP_MAX_ATTEMPTS || '5', 10),
   actionTokenTtlDays: parseInt(process.env.ACTION_TOKEN_TTL_DAYS || '14', 10),
 
-  appPassword: process.env.APP_PASSWORD || 'YourStrongPasswordHere',
+  appPassword: process.env.APP_PASSWORD,
   adminSessionCookieName: process.env.ADMIN_SESSION_COOKIE_NAME || 'admin_session',
   adminSessionTtlMs: parseInt(process.env.ADMIN_SESSION_TTL_MS || String(24 * 60 * 60 * 1000), 10),
-  jwtSecret: process.env.JWT_SECRET || process.env.APP_PASSWORD || 'YourStrongPasswordHere',
+  jwtSecret: process.env.JWT_SECRET,
 };
+

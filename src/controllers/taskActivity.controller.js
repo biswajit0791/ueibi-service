@@ -10,7 +10,7 @@ export async function logTaskAudit({ taskId, performedById, action, details, pre
 
 // ─── Helper: create & push a notification ──────────────────────────────────
 export async function pushNotification({ tenantId, recipientId, type, title, body, entityType, entityId }) {
-  if (!recipientId || recipientId === 'system') return null;
+  if (!recipientId || recipientId === 'system' || !tenantId) return null;
   const notif = await prisma.notification.create({
     data: { tenantId, recipientId, type, title, body: body || null, entityType: entityType || null, entityId: entityId || null },
   });
@@ -29,15 +29,18 @@ export async function addTaskComment(req, res, next) {
       return res.status(400).json({ error: 'Comment text is required' });
     }
 
-    const task = await prisma.task.findUnique({ where: { id: taskId } });
+    // Verify task exists within requester's tenant
+    const task = await prisma.task.findFirst({
+      where: { id: taskId, tenantId: req.tenantId },
+    });
     if (!task) return res.status(404).json({ error: 'Task not found' });
 
-    // Any tenant member can comment on a task they can see (own or subordinate)
+    // Any tenant member can comment on a task they can see (own or subordinate or admin/HR)
     const isOwner = task.employeeId === req.user.id;
     const allowedRoles = ['SUPER_ADMIN', 'HR', 'ADMIN'];
     if (!isOwner && !allowedRoles.includes(req.user.role)) {
       const isSubordinate = await prisma.tenantUser.findFirst({
-        where: { id: task.employeeId, managerId: req.user.id },
+        where: { id: task.employeeId, managerId: req.user.id, tenantId: req.tenantId },
       });
       if (!isSubordinate) return res.status(403).json({ error: 'Access forbidden' });
     }
@@ -65,7 +68,7 @@ export async function addTaskComment(req, res, next) {
     // Notify task owner if commenter is someone else (manager/HR feedback)
     if (!isOwner) {
       await pushNotification({
-        tenantId: req.user.tenantId,
+        tenantId: req.tenantId,
         recipientId: task.employeeId,
         type: 'task_update',
         title: 'New feedback on your task',
@@ -86,7 +89,10 @@ export async function listTaskComments(req, res, next) {
   try {
     const { id: taskId } = req.params;
 
-    const task = await prisma.task.findUnique({ where: { id: taskId } });
+    // Verify task belongs to current tenant
+    const task = await prisma.task.findFirst({
+      where: { id: taskId, tenantId: req.tenantId },
+    });
     if (!task) return res.status(404).json({ error: 'Task not found' });
 
     const items = await prisma.taskComment.findMany({
@@ -108,7 +114,10 @@ export async function listTaskAudit(req, res, next) {
   try {
     const { id: taskId } = req.params;
 
-    const task = await prisma.task.findUnique({ where: { id: taskId } });
+    // Verify task belongs to current tenant
+    const task = await prisma.task.findFirst({
+      where: { id: taskId, tenantId: req.tenantId },
+    });
     if (!task) return res.status(404).json({ error: 'Task not found' });
 
     const items = await prisma.taskAuditLog.findMany({
@@ -128,10 +137,16 @@ export async function listTaskAudit(req, res, next) {
 // ─── DELETE /api/tasks/:id/comments/:cid ────────────────────────────────────
 export async function deleteTaskComment(req, res, next) {
   try {
-    const { cid } = req.params;
+    const { id: taskId, cid } = req.params;
 
-    const comment = await prisma.taskComment.findUnique({ where: { id: cid } });
-    if (!comment) return res.status(404).json({ error: 'Comment not found' });
+    // Verify comment belongs to the task and task belongs to requester's tenant
+    const comment = await prisma.taskComment.findUnique({
+      where: { id: cid },
+      include: { task: true },
+    });
+    if (!comment || comment.taskId !== taskId || comment.task.tenantId !== req.tenantId) {
+      return res.status(404).json({ error: 'Comment not found' });
+    }
 
     // Only author or admin/HR can delete
     if (comment.authorId !== req.user.id && !['SUPER_ADMIN', 'HR', 'ADMIN'].includes(req.user.role)) {
@@ -144,3 +159,4 @@ export async function deleteTaskComment(req, res, next) {
     next(err);
   }
 }
+

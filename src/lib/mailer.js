@@ -22,6 +22,7 @@ function getSmtpTransporter() {
       throw new Error('MAIL_HOST and MAIL_USERNAME must be set for SMTP mail transport');
     }
     const isSecure = String(env.mailEncryption).toLowerCase() === 'ssl' || env.mailPort === 465;
+    const isProd = env.nodeEnv === 'production';
     smtpTransporter = nodemailer.createTransport({
       host: env.mailHost,
       port: env.mailPort,
@@ -31,11 +32,19 @@ function getSmtpTransporter() {
         pass: env.mailPassword,
       },
       tls: {
-        rejectUnauthorized: false,
+        rejectUnauthorized: isProd ? true : false,
       },
     });
   }
   return smtpTransporter;
+}
+
+function sanitizeEmailBody(rawText) {
+  if (!rawText) return '';
+  return rawText
+    .replace(/\b\d{6}\b/g, '[REDACTED_OTP]')
+    .replace(/(Password:\s*)([^\s\n]+)/gi, '$1[REDACTED_PASSWORD]')
+    .replace(/(<code>)([A-Za-z0-9-_]+)(<\/code>)/gi, '$1[REDACTED]$3');
 }
 
 export async function sendMail({ to, subject, html, text, event, registrationId = null }) {
@@ -81,13 +90,16 @@ export async function sendMail({ to, subject, html, text, event, registrationId 
   }
 
   try {
+    const rawBody = text || (html ? html.replace(/<[^>]+>/g, '') : '');
+    const sanitizedBody = sanitizeEmailBody(rawBody);
+
     await prisma.notificationLog.create({
       data: {
         registrationId,
         event,
         recipient: to,
         subject,
-        bodyText: text || (html ? html.replace(/<[^>]+>/g, '') : ''),
+        bodyText: sanitizedBody,
         status,
         providerMessageId,
         error,
@@ -99,3 +111,4 @@ export async function sendMail({ to, subject, html, text, event, registrationId 
 
   return { status, providerMessageId, error };
 }
+
