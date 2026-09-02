@@ -1,5 +1,8 @@
 import { prisma } from '../lib/prisma.js';
 import { emitToUser } from '../lib/socket.js';
+import { commentService } from '../services/comment.service.js';
+import { storageService } from '../services/storage/storage.service.js';
+import { createTaskCommentSchema } from '../validations/task.schema.js';
 
 // ─── Helper: write an audit log entry ──────────────────────────────────────
 export async function logTaskAudit({ taskId, performedById, action, details, previousValue }) {
@@ -19,60 +22,88 @@ export async function pushNotification({ tenantId, recipientId, type, title, bod
   return notif;
 }
 
+// ─── Helper: verify task access for requester ──────────────────────────────
+async function verifyTaskAccess(taskId, requestingUser, tenantId) {
+  const task = await prisma.task.findFirst({
+    where: { id: taskId, tenantId },
+  });
+  if (!task) {
+    throw { status: 404, message: 'Task not found' };
+  }
+
+  const isOwner = task.employeeId === requestingUser.id;
+  const allowedRoles = ['SUPER_ADMIN', 'HR', 'ADMIN', 'LEADERSHIP', 'OWNER'];
+  if (!isOwner && !allowedRoles.includes(requestingUser.role)) {
+    if (requestingUser.role === 'MANAGER') {
+      const isSubordinate = await prisma.tenantUser.findFirst({
+        where: { id: task.employeeId, managerId: requestingUser.id, tenantId },
+      });
+      if (isSubordinate) return task;
+
+      // Also allow if this is a companion dependency task created for the manager's team
+      if (task.isDependencyOf) {
+        const parentTask = await prisma.task.findFirst({
+          where: { id: task.isDependencyOf, tenantId },
+        });
+        if (parentTask) {
+          if (parentTask.employeeId === requestingUser.id) return task;
+          const parentSub = await prisma.tenantUser.findFirst({
+            where: { id: parentTask.employeeId, managerId: requestingUser.id, tenantId },
+          });
+          if (parentSub) return task;
+        }
+      }
+    }
+    throw { status: 403, message: 'Access forbidden: you are not authorized to view or comment on this task' };
+  }
+
+  return task;
+}
+
 // ─── POST /api/tasks/:id/comments ───────────────────────────────────────────
 export async function addTaskComment(req, res, next) {
   try {
     const { id: taskId } = req.params;
-    const { comment, attachments } = req.body || {};
-
-    if (!comment?.trim()) {
-      return res.status(400).json({ error: 'Comment text is required' });
+    const validated = createTaskCommentSchema.safeParse(req.body);
+    if (!validated.success) {
+      return res.status(400).json({ error: validated.error.errors[0]?.message || 'Invalid comment data' });
     }
 
-    // Verify task exists within requester's tenant
-    const task = await prisma.task.findFirst({
-      where: { id: taskId, tenantId: req.tenantId },
-    });
-    if (!task) return res.status(404).json({ error: 'Task not found' });
+    const commentText = (validated.data.comment || req.body.comment || req.body.content || '').trim();
+    const file = req.file || null;
 
-    // Any tenant member can comment on a task they can see (own or subordinate or admin/HR)
-    const isOwner = task.employeeId === req.user.id;
-    const allowedRoles = ['SUPER_ADMIN', 'HR', 'ADMIN'];
-    if (!isOwner && !allowedRoles.includes(req.user.role)) {
-      const isSubordinate = await prisma.tenantUser.findFirst({
-        where: { id: task.employeeId, managerId: req.user.id, tenantId: req.tenantId },
-      });
-      if (!isSubordinate) return res.status(403).json({ error: 'Access forbidden' });
+    if (!commentText && !file) {
+      return res.status(400).json({ error: 'Comment text or file attachment is required' });
     }
 
-    const newComment = await prisma.taskComment.create({
-      data: {
-        taskId,
-        authorId: req.user.id,
-        comment: comment.trim(),
-        attachments: attachments || [],
-      },
-      include: {
-        author: { select: { id: true, name: true, role: true, designation: true } },
-      },
+    // Verify task exists within requester's tenant & check permissions
+    const task = await verifyTaskAccess(taskId, req.user, req.tenantId);
+
+    const newComment = await commentService.createComment({
+      tenantId: req.tenantId,
+      taskId,
+      authorId: req.user.id,
+      commentText,
+      file,
     });
 
     // Audit log entry
+    const detailsSnippet = commentText ? commentText.trim().slice(0, 80) : (file ? `Attached file ${file.originalname}` : 'Posted comment');
     await logTaskAudit({
       taskId,
       performedById: req.user.id,
       action: 'progress_update',
-      details: `${req.user.name} added progress update: "${comment.trim().slice(0, 80)}"`,
+      details: `${req.user.name} added progress update: "${detailsSnippet}"`,
     });
 
     // Notify task owner if commenter is someone else (manager/HR feedback)
-    if (!isOwner) {
+    if (task.employeeId !== req.user.id) {
       await pushNotification({
         tenantId: req.tenantId,
         recipientId: task.employeeId,
         type: 'task_update',
         title: 'New feedback on your task',
-        body: `${req.user.name} commented: "${comment.trim().slice(0, 100)}"`,
+        body: `${req.user.name} commented: "${detailsSnippet.slice(0, 100)}"`,
         entityType: 'task',
         entityId: taskId,
       });
@@ -80,6 +111,9 @@ export async function addTaskComment(req, res, next) {
 
     res.status(201).json(newComment);
   } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message });
+    }
     next(err);
   }
 }
@@ -88,23 +122,108 @@ export async function addTaskComment(req, res, next) {
 export async function listTaskComments(req, res, next) {
   try {
     const { id: taskId } = req.params;
+    const { page, limit } = req.query;
+
+    // Verify task belongs to current tenant and user has access
+    await verifyTaskAccess(taskId, req.user, req.tenantId);
+
+    const result = await commentService.listComments({
+      tenantId: req.tenantId,
+      taskId,
+      page,
+      limit,
+    });
+
+    res.json(result);
+  } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    next(err);
+  }
+}
+
+// ─── GET /api/tasks/:id/comments/:cid/attachments/:aid ──────────────────────
+export async function getTaskCommentAttachment(req, res, next) {
+  try {
+    const { id: taskId, cid, aid } = req.params;
+
+    // Verify task belongs to current tenant and user has access
+    await verifyTaskAccess(taskId, req.user, req.tenantId);
+
+    const attachment = await commentService.getAttachment({
+      tenantId: req.tenantId,
+      taskId,
+      commentId: cid,
+      attachmentId: aid,
+    });
+
+    const stream = await storageService.getDownloadStream(attachment.storageKey);
+
+    const isDownload = req.query.download === 'true';
+    const dispositionType = isDownload ? 'attachment' : 'inline';
+    const encodedFilename = encodeURIComponent(attachment.originalName);
+
+    res.setHeader('Content-Type', attachment.mimeType || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `${dispositionType}; filename="${encodedFilename}"; filename*=UTF-8''${encodedFilename}`);
+    if (attachment.size) {
+      res.setHeader('Content-Length', attachment.size);
+    }
+
+    stream.pipe(res);
+  } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    next(err);
+  }
+}
+
+// ─── DELETE /api/tasks/:id/comments/:cid ────────────────────────────────────
+export async function deleteTaskComment(req, res, next) {
+  try {
+    const { id: taskId, cid } = req.params;
 
     // Verify task belongs to current tenant
-    const task = await prisma.task.findFirst({
-      where: { id: taskId, tenantId: req.tenantId },
-    });
-    if (!task) return res.status(404).json({ error: 'Task not found' });
+    await verifyTaskAccess(taskId, req.user, req.tenantId);
 
-    const items = await prisma.taskComment.findMany({
-      where: { taskId },
-      include: {
-        author: { select: { id: true, name: true, role: true, designation: true } },
-      },
-      orderBy: { createdAt: 'asc' },
+    const result = await commentService.deleteComment({
+      tenantId: req.tenantId,
+      taskId,
+      commentId: cid,
+      requestingUser: req.user,
     });
 
-    res.json({ items });
+    res.json(result);
   } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    next(err);
+  }
+}
+
+// ─── DELETE /api/tasks/:id/comments/:cid/attachments/:aid ───────────────────
+export async function deleteTaskCommentAttachment(req, res, next) {
+  try {
+    const { id: taskId, cid, aid } = req.params;
+
+    // Verify task belongs to current tenant
+    await verifyTaskAccess(taskId, req.user, req.tenantId);
+
+    const result = await commentService.deleteAttachment({
+      tenantId: req.tenantId,
+      taskId,
+      commentId: cid,
+      attachmentId: aid,
+      requestingUser: req.user,
+    });
+
+    res.json(result);
+  } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message });
+    }
     next(err);
   }
 }
@@ -114,11 +233,8 @@ export async function listTaskAudit(req, res, next) {
   try {
     const { id: taskId } = req.params;
 
-    // Verify task belongs to current tenant
-    const task = await prisma.task.findFirst({
-      where: { id: taskId, tenantId: req.tenantId },
-    });
-    if (!task) return res.status(404).json({ error: 'Task not found' });
+    // Verify task belongs to current tenant and user has access
+    await verifyTaskAccess(taskId, req.user, req.tenantId);
 
     const items = await prisma.taskAuditLog.findMany({
       where: { taskId },
@@ -130,33 +246,11 @@ export async function listTaskAudit(req, res, next) {
 
     res.json({ items });
   } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message });
+    }
     next(err);
   }
 }
 
-// ─── DELETE /api/tasks/:id/comments/:cid ────────────────────────────────────
-export async function deleteTaskComment(req, res, next) {
-  try {
-    const { id: taskId, cid } = req.params;
-
-    // Verify comment belongs to the task and task belongs to requester's tenant
-    const comment = await prisma.taskComment.findUnique({
-      where: { id: cid },
-      include: { task: true },
-    });
-    if (!comment || comment.taskId !== taskId || comment.task.tenantId !== req.tenantId) {
-      return res.status(404).json({ error: 'Comment not found' });
-    }
-
-    // Only author or admin/HR can delete
-    if (comment.authorId !== req.user.id && !['SUPER_ADMIN', 'HR', 'ADMIN'].includes(req.user.role)) {
-      return res.status(403).json({ error: 'Access forbidden' });
-    }
-
-    await prisma.taskComment.delete({ where: { id: cid } });
-    res.json({ success: true });
-  } catch (err) {
-    next(err);
-  }
-}
 

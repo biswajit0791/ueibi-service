@@ -8,6 +8,7 @@ const router = Router();
 router.post('/tasks', requireAuth, requireTenant, createTask);
 router.get('/tasks', requireAuth, requireTenant, listTasks);
 router.patch('/tasks/:id/status', requireAuth, requireTenant, updateTaskStatus);
+router.patch('/tasks/:id', requireAuth, requireTenant, updateTask);
 router.put('/tasks/:id', requireAuth, requireTenant, updateTask);
 router.delete('/tasks/:id', requireAuth, requireTenant, deleteTask);
 

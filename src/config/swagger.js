@@ -31,6 +31,11 @@ const options = {
       { name: 'Tasks', description: 'Task board, dependencies, comments, and audit logs' },
       { name: 'Goals', description: 'Goal & OKR management' },
       { name: 'Notifications', description: 'Real-time alert notifications' },
+      { name: 'Leaves & WFH', description: 'Leave & Work From Home applications, dynamic balances, and two-level approval workflow' },
+      { name: 'Appraisals', description: 'Employee self-ratings, manager evaluations, and performance reviews' },
+      { name: 'External Reviews', description: 'Client & external stakeholder performance review requests and submissions' },
+      { name: 'Reports & Analytics', description: 'Enterprise performance and HR analytics summary' },
+      { name: 'Uploads', description: 'Secure document and file uploads' },
       { name: 'Dev', description: 'Development-only endpoints (disabled in production)' },
     ],
     components: {
@@ -420,6 +425,19 @@ const options = {
             isDependencyOf: { type: 'string', nullable: true },
           },
         },
+        TaskCommentAttachment: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', example: 'att_1725183829_abc123' },
+            originalName: { type: 'string', example: 'architecture_diagram.png' },
+            storedName: { type: 'string', example: '1725183829-abc123-architecture_diagram.png' },
+            mimeType: { type: 'string', example: 'image/png' },
+            size: { type: 'integer', example: 245123 },
+            storageKey: { type: 'string', example: 'tenants/tenant123/tasks/task456/1725183829-abc123-architecture_diagram.png' },
+            storageProvider: { type: 'string', example: 'LOCAL' },
+            createdAt: { type: 'string', format: 'date-time' },
+          },
+        },
         TaskComment: {
           type: 'object',
           properties: {
@@ -427,7 +445,10 @@ const options = {
             taskId: { type: 'string', example: 'cltask12345' },
             authorId: { type: 'string', example: 'cmtclxzzq0001uuek23nbb04s' },
             comment: { type: 'string', example: 'Finished schema design.' },
-            attachments: { type: 'array', items: { type: 'string' } },
+            attachments: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/TaskCommentAttachment' },
+            },
             createdAt: { type: 'string', format: 'date-time' },
             author: {
               type: 'object',
@@ -494,7 +515,7 @@ const options = {
             description: { type: 'string', example: 'Refactor goals repository module to support direct tenancy.' },
             category: { type: 'string', example: 'Project Delivery' },
             goalType: { type: 'string', example: 'General' },
-            priority: { type: 'string', enum: ['high', 'medium', 'low'], example: 'medium' },
+            priority: { type: 'string', enum: ['high', 'medium', 'low', 'critical'], example: 'medium' },
             financialYear: { type: 'string', example: 'FY 2026-27' },
             quarter: { type: 'string', example: 'Q1' },
             startDate: { type: 'string', format: 'date-time' },
@@ -503,6 +524,68 @@ const options = {
             specialNotes: { type: 'string', example: 'Ensure that the indexes are added to tenantId.' },
             dueDate: { type: 'string', format: 'date' },
             employeeId: { type: 'string' },
+          },
+        },
+        GoalUpdateRequest: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', example: 'Improve product stability' },
+            description: { type: 'string', example: 'Refactor goals module.' },
+            category: { type: 'string', example: 'Performance & Delivery' },
+            goalType: { type: 'string', example: 'OKR' },
+            priority: { type: 'string', enum: ['high', 'medium', 'low', 'critical'] },
+            financialYear: { type: 'string', example: 'FY 2026-27' },
+            quarter: { type: 'string', example: 'Q1' },
+            startDate: { type: 'string', format: 'date-time' },
+            targetDate: { type: 'string', format: 'date-time' },
+            specialNotes: { type: 'string' },
+            status: { type: 'string', example: 'DRAFT' },
+          },
+        },
+        GoalReviewRequest: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', enum: ['APPROVE', 'REJECT'], example: 'APPROVE' },
+            comment: { type: 'string', example: 'Goal deliverables successfully verified against SLAs.' },
+            rating: { type: 'integer', minimum: 1, maximum: 5, example: 5 },
+          },
+        },
+        GoalComment: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', example: 'clcomm12345' },
+            goalId: { type: 'string', example: 'clgoal12345' },
+            comment: { type: 'string', example: 'Progress update: completed integration testing.' },
+            attachments: { type: 'array', items: { type: 'string' } },
+            createdAt: { type: 'string', format: 'date-time' },
+            author: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                name: { type: 'string' },
+                role: { type: 'string' },
+                designation: { type: 'string' },
+              },
+            },
+          },
+        },
+        GoalAuditLog: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            goalId: { type: 'string' },
+            action: { type: 'string', example: 'GOAL_SUBMITTED' },
+            details: { type: 'string', example: 'Arjun Sharma submitted goal for review.' },
+            createdAt: { type: 'string', format: 'date-time' },
+            performedBy: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                name: { type: 'string' },
+                role: { type: 'string' },
+              },
+            },
           },
         },
 
@@ -519,6 +602,149 @@ const options = {
             entityId: { type: 'string' },
             isRead: { type: 'boolean', example: false },
             createdAt: { type: 'string', format: 'date-time' },
+          },
+        },
+
+        // ── Leave & WFH schemas ──
+        LeaveBalanceDetail: {
+          type: 'object',
+          properties: {
+            total: { type: 'integer', example: 18 },
+            used: { type: 'integer', example: 5 },
+            pending: { type: 'integer', example: 2 },
+            remaining: { type: 'integer', example: 13 },
+          },
+        },
+        LeaveBalancesResponse: {
+          type: 'object',
+          properties: {
+            annual: { $ref: '#/components/schemas/LeaveBalanceDetail' },
+            sick: { $ref: '#/components/schemas/LeaveBalanceDetail' },
+            casual: { $ref: '#/components/schemas/LeaveBalanceDetail' },
+            wfh: { $ref: '#/components/schemas/LeaveBalanceDetail' },
+          },
+        },
+        LeaveRequest: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', example: 'clleave12345' },
+            employeeId: { type: 'string', example: 'clemp12345' },
+            employee: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                name: { type: 'string', example: 'Arjun Sharma' },
+                email: { type: 'string', example: 'arjun@company.com' },
+                department: { type: 'string', example: 'Engineering' },
+                designation: { type: 'string', example: 'Senior Engineer' },
+                managerId: { type: 'string', nullable: true },
+              },
+            },
+            type: { type: 'string', example: 'Sick Leave' },
+            requestType: { type: 'string', enum: ['LEAVE', 'WFH'], example: 'LEAVE' },
+            leaveType: { type: 'string', example: 'Sick Leave' },
+            startDate: { type: 'string', format: 'date', example: '2026-09-02' },
+            endDate: { type: 'string', format: 'date', example: '2026-09-03' },
+            totalDays: { type: 'integer', example: 2 },
+            reason: { type: 'string', example: 'Medical appointment' },
+            status: { type: 'string', enum: ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED'], example: 'PENDING' },
+            managerStatus: { type: 'string', enum: ['Pending', 'Approved', 'Rejected'], example: 'Pending' },
+            managerId: { type: 'string', nullable: true },
+            managerComment: { type: 'string', nullable: true },
+            managerActedAt: { type: 'string', format: 'date-time', nullable: true },
+            hrStatus: { type: 'string', enum: ['Pending', 'Approved', 'Rejected', 'Not Required'], example: 'Pending' },
+            hrId: { type: 'string', nullable: true },
+            hrComment: { type: 'string', nullable: true },
+            hrActedAt: { type: 'string', format: 'date-time', nullable: true },
+            createdAt: { type: 'string', format: 'date-time' },
+            updatedAt: { type: 'string', format: 'date-time' },
+          },
+        },
+        CreateLeaveRequest: {
+          type: 'object',
+          required: ['startDate', 'endDate', 'reason'],
+          properties: {
+            requestType: { type: 'string', enum: ['LEAVE', 'WFH'], default: 'LEAVE' },
+            leaveType: { type: 'string', example: 'Casual Leave' },
+            startDate: { type: 'string', format: 'date', example: '2026-09-02' },
+            endDate: { type: 'string', format: 'date', example: '2026-09-03' },
+            reason: { type: 'string', example: 'Family wedding out of town.' },
+          },
+        },
+
+        // ── Appraisal schemas ──
+        AppraisalReview: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            employeeId: { type: 'string' },
+            cycleId: { type: 'string' },
+            selfRating: { type: 'number', example: 4.5 },
+            selfComments: { type: 'string', example: 'Exceeded project deliverables on time.' },
+            managerRating: { type: 'number', example: 4.8 },
+            managerComments: { type: 'string', example: 'Outstanding technical contribution.' },
+            status: { type: 'string', enum: ['PENDING_SELF', 'PENDING_MANAGER', 'COMPLETED'], example: 'COMPLETED' },
+            createdAt: { type: 'string', format: 'date-time' },
+            updatedAt: { type: 'string', format: 'date-time' },
+          },
+        },
+        SubmitSelfRatingRequest: {
+          type: 'object',
+          required: ['rating', 'comments'],
+          properties: {
+            cycleId: { type: 'string', example: 'clcycle12345' },
+            rating: { type: 'number', minimum: 1, maximum: 5, example: 4.5 },
+            comments: { type: 'string', example: 'Achieved quarterly sprint targets.' },
+          },
+        },
+        SubmitManagerRatingRequest: {
+          type: 'object',
+          required: ['managerRating', 'managerComments'],
+          properties: {
+            managerRating: { type: 'number', minimum: 1, maximum: 5, example: 4.8 },
+            managerComments: { type: 'string', example: 'Exceptional leadership and execution.' },
+          },
+        },
+
+        // ── External Review schemas ──
+        ExternalReviewRequest: {
+          type: 'object',
+          required: ['employeeId', 'clientName', 'clientEmail'],
+          properties: {
+            employeeId: { type: 'string' },
+            clientName: { type: 'string', example: 'Acme Corp Lead' },
+            clientEmail: { type: 'string', format: 'email', example: 'client@acme.com' },
+            projectRole: { type: 'string', example: 'Lead Architect' },
+          },
+        },
+        SubmitExternalReviewRequest: {
+          type: 'object',
+          required: ['rating', 'feedback'],
+          properties: {
+            rating: { type: 'number', minimum: 1, maximum: 5, example: 5 },
+            feedback: { type: 'string', example: 'Great communication and prompt delivery.' },
+            skillsDemonstrated: { type: 'array', items: { type: 'string' }, example: ['Node.js', 'PostgreSQL', 'Architecture'] },
+          },
+        },
+
+        // ── Analytics & Upload schemas ──
+        AnalyticsSummary: {
+          type: 'object',
+          properties: {
+            totalEmployees: { type: 'integer', example: 48 },
+            activeGoals: { type: 'integer', example: 120 },
+            completedTasks: { type: 'integer', example: 340 },
+            averageAppraisalRating: { type: 'number', example: 4.3 },
+            leaveApprovalRate: { type: 'number', example: 92.5 },
+          },
+        },
+        FileUploadResponse: {
+          type: 'object',
+          properties: {
+            message: { type: 'string', example: 'File uploaded successfully' },
+            fileName: { type: 'string', example: '1725189000-12345678-document.pdf' },
+            originalName: { type: 'string', example: 'document.pdf' },
+            path: { type: 'string', example: '/uploads/1725189000-12345678-document.pdf' },
           },
         },
       },
@@ -1532,24 +1758,45 @@ const options = {
       '/tasks/{id}/comments': {
         get: {
           tags: ['Tasks'],
-          summary: 'List all comments on a task',
+          summary: 'List all comments on a task with pagination',
           operationId: 'listTaskComments',
           security: [{ userCookie: [] }],
           parameters: [
             { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Task ID' },
+            { name: 'page', in: 'query', required: false, schema: { type: 'integer', default: 1 }, description: 'Page number' },
+            { name: 'limit', in: 'query', required: false, schema: { type: 'integer', default: 20 }, description: 'Items per page' },
           ],
           responses: {
             200: {
-              description: 'Comments list retrieved',
-              content: { 'application/json': { schema: { type: 'object', properties: { items: { type: 'array', items: { $ref: '#/components/schemas/TaskComment' } } } } } },
+              description: 'Comments list retrieved successfully',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      items: { type: 'array', items: { $ref: '#/components/schemas/TaskComment' } },
+                      pagination: {
+                        type: 'object',
+                        properties: {
+                          page: { type: 'integer', example: 1 },
+                          limit: { type: 'integer', example: 20 },
+                          total: { type: 'integer', example: 5 },
+                          pages: { type: 'integer', example: 1 },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
             },
             401: { description: 'Unauthorized' },
+            403: { description: 'Access forbidden' },
             404: { description: 'Task not found' },
           },
         },
         post: {
           tags: ['Tasks'],
-          summary: 'Add a comment (progress update) on a task',
+          summary: 'Add a comment / feedback with optional file attachment',
           operationId: 'addTaskComment',
           security: [{ userCookie: [] }],
           parameters: [
@@ -1558,13 +1805,20 @@ const options = {
           requestBody: {
             required: true,
             content: {
+              'multipart/form-data': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    comment: { type: 'string', description: 'Comment text content', example: 'Added initial test suites.' },
+                    file: { type: 'string', format: 'binary', description: 'Optional attachment file (Max 10MB)' },
+                  },
+                },
+              },
               'application/json': {
                 schema: {
                   type: 'object',
-                  required: ['comment'],
                   properties: {
                     comment: { type: 'string', example: 'Finished API integrations.' },
-                    attachments: { type: 'array', items: { type: 'string' } },
                   },
                 },
               },
@@ -1572,11 +1826,12 @@ const options = {
           },
           responses: {
             201: {
-              description: 'Comment added successfully',
+              description: 'Comment created successfully',
               content: { 'application/json': { schema: { $ref: '#/components/schemas/TaskComment' } } },
             },
-            400: { description: 'Missing comment text' },
+            400: { description: 'Validation failed or missing comment text / attachment' },
             401: { description: 'Unauthorized' },
+            403: { description: 'Access forbidden' },
             404: { description: 'Task not found' },
           },
         },
@@ -1584,7 +1839,7 @@ const options = {
       '/tasks/{id}/comments/{cid}': {
         delete: {
           tags: ['Tasks'],
-          summary: 'Delete a comment',
+          summary: 'Delete a comment and its attachments',
           operationId: 'deleteTaskComment',
           security: [{ userCookie: [] }],
           parameters: [
@@ -1599,6 +1854,53 @@ const options = {
             401: { description: 'Unauthorized' },
             403: { description: 'Access forbidden' },
             404: { description: 'Comment not found' },
+          },
+        },
+      },
+      '/tasks/{id}/comments/{cid}/attachments/{aid}': {
+        get: {
+          tags: ['Tasks'],
+          summary: 'Stream / download an authorized comment attachment file',
+          operationId: 'getTaskCommentAttachment',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Task ID' },
+            { name: 'cid', in: 'path', required: true, schema: { type: 'string' }, description: 'Comment ID' },
+            { name: 'aid', in: 'path', required: true, schema: { type: 'string' }, description: 'Attachment ID' },
+            { name: 'download', in: 'query', required: false, schema: { type: 'boolean', default: false }, description: 'Set true for download attachment header' },
+          ],
+          responses: {
+            200: {
+              description: 'Attachment file binary stream',
+              content: {
+                'application/octet-stream': {
+                  schema: { type: 'string', format: 'binary' },
+                },
+              },
+            },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Access forbidden' },
+            404: { description: 'Attachment or task not found' },
+          },
+        },
+        delete: {
+          tags: ['Tasks'],
+          summary: 'Delete a specific attachment from a comment',
+          operationId: 'deleteTaskCommentAttachment',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Task ID' },
+            { name: 'cid', in: 'path', required: true, schema: { type: 'string' }, description: 'Comment ID' },
+            { name: 'aid', in: 'path', required: true, schema: { type: 'string' }, description: 'Attachment ID' },
+          ],
+          responses: {
+            200: {
+              description: 'Attachment deleted successfully',
+              content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean', example: true } } } } },
+            },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Access forbidden' },
+            404: { description: 'Attachment not found' },
           },
         },
       },
@@ -1785,6 +2087,954 @@ const options = {
             401: { description: 'Unauthorized' },
             403: { description: 'Access forbidden' },
             404: { description: 'Notification not found' },
+          },
+        },
+      },
+
+      // ── Leave & WFH Endpoints ──
+      '/leaves': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'List leave requests (My, Team, or Company wide)',
+          operationId: 'listLeaveRequests',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'scope', in: 'query', required: false, schema: { type: 'string', enum: ['my', 'team', 'company'], default: 'my' }, description: 'Query scope' },
+            { name: 'status', in: 'query', required: false, schema: { type: 'string', enum: ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED'] }, description: 'Filter by status' },
+            { name: 'page', in: 'query', required: false, schema: { type: 'integer', default: 1 } },
+            { name: 'limit', in: 'query', required: false, schema: { type: 'integer', default: 50 } },
+          ],
+          responses: {
+            200: {
+              description: 'Leave requests retrieved successfully',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      items: { type: 'array', items: { $ref: '#/components/schemas/LeaveRequest' } },
+                      pagination: {
+                        type: 'object',
+                        properties: {
+                          page: { type: 'integer' },
+                          limit: { type: 'integer' },
+                          total: { type: 'integer' },
+                          pages: { type: 'integer' },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Access forbidden' },
+          },
+        },
+        post: {
+          tags: ['Leaves & WFH'],
+          summary: 'Submit a new Leave or Work From Home request',
+          operationId: 'createLeaveRequest',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/CreateLeaveRequest' },
+              },
+            },
+          },
+          responses: {
+            201: {
+              description: 'Leave request submitted successfully',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveRequest' } } },
+            },
+            400: { description: 'Validation error, insufficient balance, or date overlap' },
+            401: { description: 'Unauthorized' },
+          },
+        },
+      },
+      '/leaves/balances': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'Get leave and WFH balances for authenticated employee',
+          operationId: 'getMyLeaveBalances',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'year', in: 'query', required: false, schema: { type: 'integer', default: 2026 }, description: 'Year' },
+          ],
+          responses: {
+            200: {
+              description: 'Leave balances retrieved',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveBalancesResponse' } } },
+            },
+            401: { description: 'Unauthorized' },
+          },
+        },
+      },
+      '/leaves/{id}/manager/approve': {
+        patch: {
+          tags: ['Leaves & WFH'],
+          summary: 'Manager approves leave request',
+          operationId: 'managerApproveLeave',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Leave Request ID' },
+          ],
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: { comment: { type: 'string', example: 'Approved by Manager' } },
+                },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: 'Manager approval registered',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveRequest' } } },
+            },
+            400: { description: 'Invalid state transition' },
+            403: { description: 'Access forbidden: not reporting manager' },
+            404: { description: 'Request not found' },
+          },
+        },
+      },
+      '/leaves/{id}/manager/reject': {
+        patch: {
+          tags: ['Leaves & WFH'],
+          summary: 'Manager rejects leave request',
+          operationId: 'managerRejectLeave',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Leave Request ID' },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['comment'],
+                  properties: { comment: { type: 'string', example: 'Project deadline conflict.' } },
+                },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: 'Manager rejection registered',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveRequest' } } },
+            },
+            400: { description: 'Missing rejection reason or invalid state' },
+            403: { description: 'Access forbidden: not reporting manager' },
+            404: { description: 'Request not found' },
+          },
+        },
+      },
+      '/leaves/{id}/hr/approve': {
+        patch: {
+          tags: ['Leaves & WFH'],
+          summary: 'HR provides final approval for leave request',
+          operationId: 'hrApproveLeave',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Leave Request ID' },
+          ],
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: { comment: { type: 'string', example: 'HR approved' } },
+                },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: 'HR final approval registered',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveRequest' } } },
+            },
+            400: { description: 'Manager has not approved yet' },
+            403: { description: 'Access forbidden: HR authorization required' },
+            404: { description: 'Request not found' },
+          },
+        },
+      },
+      '/leaves/{id}/hr/reject': {
+        patch: {
+          tags: ['Leaves & WFH'],
+          summary: 'HR rejects leave request',
+          operationId: 'hrRejectLeave',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Leave Request ID' },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['comment'],
+                  properties: { comment: { type: 'string', example: 'Policy violation.' } },
+                },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: 'HR rejection registered',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveRequest' } } },
+            },
+            400: { description: 'Missing rejection reason' },
+            403: { description: 'Access forbidden: HR authorization required' },
+            404: { description: 'Request not found' },
+          },
+        },
+      },
+      '/leaves/{id}/cancel': {
+        post: {
+          tags: ['Leaves & WFH'],
+          summary: 'Employee cancels pending leave request',
+          operationId: 'cancelLeaveRequest',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Leave Request ID' },
+          ],
+          responses: {
+            200: {
+              description: 'Leave request cancelled',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveRequest' } } },
+            },
+            400: { description: 'Cannot cancel non-pending request' },
+            403: { description: 'Access forbidden: not owner' },
+            404: { description: 'Request not found' },
+          },
+        },
+      },
+
+      // ── Goal Management Endpoints ──
+      '/goals/categories': {
+        get: {
+          tags: ['Goals'],
+          summary: 'List available dynamic goal categories',
+          operationId: 'getGoalCategories',
+          security: [{ userCookie: [] }],
+          responses: {
+            200: {
+              description: 'List of goal categories',
+              content: { 'application/json': { schema: { type: 'object', properties: { categories: { type: 'array', items: { type: 'string' } } } } } },
+            },
+          },
+        },
+      },
+      '/goals/types': {
+        get: {
+          tags: ['Goals'],
+          summary: 'List supported goal types (General, KPI, OKR, etc.)',
+          operationId: 'getGoalTypes',
+          security: [{ userCookie: [] }],
+          responses: {
+            200: {
+              description: 'List of goal types',
+              content: { 'application/json': { schema: { type: 'object', properties: { types: { type: 'array', items: { type: 'string' } } } } } },
+            },
+          },
+        },
+      },
+      '/goals/priorities': {
+        get: {
+          tags: ['Goals'],
+          summary: 'List goal priority levels',
+          operationId: 'getGoalPriorities',
+          security: [{ userCookie: [] }],
+          responses: {
+            200: {
+              description: 'List of priorities',
+              content: { 'application/json': { schema: { type: 'object', properties: { priorities: { type: 'array', items: { type: 'string' } } } } } },
+            },
+          },
+        },
+      },
+      '/goals/assignable-users': {
+        get: {
+          tags: ['Goals'],
+          summary: 'List employees eligible for goal assignment based on RBAC and reporting downline',
+          operationId: 'getGoalAssignableUsers',
+          security: [{ userCookie: [] }],
+          responses: {
+            200: {
+              description: 'List of assignable users',
+              content: { 'application/json': { schema: { type: 'object', properties: { users: { type: 'array', items: { type: 'object' } } } } } },
+            },
+          },
+        },
+      },
+      '/goals': {
+        get: {
+          tags: ['Goals'],
+          summary: 'List goals with optional filtering',
+          operationId: 'listGoals',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'employeeId', in: 'query', schema: { type: 'string' }, description: 'Filter by employee' },
+            { name: 'status', in: 'query', schema: { type: 'string' }, description: 'Filter by workflow status' },
+            { name: 'financialYear', in: 'query', schema: { type: 'string' }, description: 'Filter by financial year' },
+            { name: 'category', in: 'query', schema: { type: 'string' }, description: 'Filter by category' },
+          ],
+          responses: {
+            200: {
+              description: 'List of goals with tasks and audit logs',
+              content: { 'application/json': { schema: { type: 'object', properties: { items: { type: 'array', items: { $ref: '#/components/schemas/Goal' } } } } } },
+            },
+          },
+        },
+        post: {
+          tags: ['Goals'],
+          summary: 'Create a new Goal',
+          operationId: 'createGoal',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/GoalCreateRequest' } } },
+          },
+          responses: {
+            201: {
+              description: 'Goal created successfully',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/Goal' } } },
+            },
+            400: { description: 'Validation failed' },
+            403: { description: 'Forbidden: unauthorized goal assignment' },
+          },
+        },
+      },
+      '/goals/{id}': {
+        get: {
+          tags: ['Goals'],
+          summary: 'Get goal details by ID',
+          operationId: 'getGoalById',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/Goal' } } } },
+            404: { description: 'Goal not found' },
+          },
+        },
+        patch: {
+          tags: ['Goals'],
+          summary: 'Update goal details',
+          operationId: 'updateGoal',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/GoalUpdateRequest' } } },
+          },
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/Goal' } } } },
+            400: { description: 'Validation failed' },
+            403: { description: 'Forbidden' },
+            404: { description: 'Goal not found' },
+          },
+        },
+        delete: {
+          tags: ['Goals'],
+          summary: 'Delete a goal',
+          operationId: 'deleteGoal',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: {
+            200: { description: 'Goal deleted successfully' },
+            403: { description: 'Forbidden' },
+            404: { description: 'Goal not found' },
+          },
+        },
+      },
+      '/goals/{id}/submit': {
+        post: {
+          tags: ['Goals'],
+          summary: 'Employee submits completed goal for manager review',
+          operationId: 'submitGoal',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: {
+            200: { description: 'Goal submitted for manager review', content: { 'application/json': { schema: { $ref: '#/components/schemas/Goal' } } } },
+            400: { description: 'Incomplete tasks or invalid status' },
+            403: { description: 'Only goal assignee can submit' },
+          },
+        },
+      },
+      '/goals/{id}/approve': {
+        post: {
+          tags: ['Goals'],
+          summary: 'Manager approves goal and forwards for HR review',
+          operationId: 'managerApproveGoal',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            content: { 'application/json': { schema: { type: 'object', properties: { comment: { type: 'string' }, rating: { type: 'integer' } } } } },
+          },
+          responses: {
+            200: { description: 'Goal approved by manager', content: { 'application/json': { schema: { $ref: '#/components/schemas/Goal' } } } },
+            403: { description: 'Forbidden: not reporting manager' },
+          },
+        },
+      },
+      '/goals/{id}/reject': {
+        post: {
+          tags: ['Goals'],
+          summary: 'Manager requests changes or rejects goal',
+          operationId: 'managerRejectGoal',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { type: 'object', required: ['comment'], properties: { comment: { type: 'string' } } } } },
+          },
+          responses: {
+            200: { description: 'Goal returned for revisions', content: { 'application/json': { schema: { $ref: '#/components/schemas/Goal' } } } },
+            400: { description: 'Rejection reason is required' },
+          },
+        },
+      },
+      '/goals/{id}/hr-approve': {
+        post: {
+          tags: ['Goals'],
+          summary: 'HR gives final sign-off and marks goal as COMPLETED',
+          operationId: 'hrApproveGoal',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: {
+            200: { description: 'Goal finalized as COMPLETED', content: { 'application/json': { schema: { $ref: '#/components/schemas/Goal' } } } },
+            403: { description: 'Forbidden: HR role required' },
+          },
+        },
+      },
+      '/goals/{id}/hr-reject': {
+        post: {
+          tags: ['Goals'],
+          summary: 'HR requests revisions on goal',
+          operationId: 'hrRejectGoal',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { type: 'object', required: ['comment'], properties: { comment: { type: 'string' } } } } },
+          },
+          responses: {
+            200: { description: 'Goal returned for revisions by HR', content: { 'application/json': { schema: { $ref: '#/components/schemas/Goal' } } } },
+          },
+        },
+      },
+      '/goals/{id}/resubmit': {
+        post: {
+          tags: ['Goals'],
+          summary: 'Employee resubmits revised goal for review',
+          operationId: 'resubmitGoal',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: {
+            200: { description: 'Goal resubmitted for manager review', content: { 'application/json': { schema: { $ref: '#/components/schemas/Goal' } } } },
+          },
+        },
+      },
+      '/goals/{id}/comments': {
+        get: {
+          tags: ['Goals'],
+          summary: 'Get comments and feedback for a goal',
+          operationId: 'listGoalComments',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: {
+            200: { content: { 'application/json': { schema: { type: 'object', properties: { items: { type: 'array', items: { $ref: '#/components/schemas/GoalComment' } } } } } } },
+          },
+        },
+        post: {
+          tags: ['Goals'],
+          summary: 'Post feedback or progress update comment on a goal',
+          operationId: 'addGoalComment',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { type: 'object', required: ['comment'], properties: { comment: { type: 'string' }, attachments: { type: 'array', items: { type: 'string' } } } } } },
+          },
+          responses: {
+            201: { content: { 'application/json': { schema: { $ref: '#/components/schemas/GoalComment' } } } },
+          },
+        },
+      },
+      '/goals/{id}/audit': {
+        get: {
+          tags: ['Goals'],
+          summary: 'Get audit history logs for a goal',
+          operationId: 'listGoalAudit',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: {
+            200: { content: { 'application/json': { schema: { type: 'object', properties: { items: { type: 'array', items: { $ref: '#/components/schemas/GoalAuditLog' } } } } } } },
+          },
+        },
+      },
+
+      // ── Task Management Endpoints ──
+      '/tasks': {
+        get: {
+          tags: ['Tasks'],
+          summary: 'List tasks with optional filtering',
+          operationId: 'listTasks',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'employeeId', in: 'query', schema: { type: 'string' }, description: 'Employee user ID or "all"' },
+            { name: 'fy', in: 'query', schema: { type: 'string' }, description: 'Financial year filter' },
+          ],
+          responses: {
+            200: {
+              description: 'List of tasks',
+              content: { 'application/json': { schema: { type: 'object', properties: { items: { type: 'array', items: { $ref: '#/components/schemas/Task' } } } } } },
+            },
+          },
+        },
+        post: {
+          tags: ['Tasks'],
+          summary: 'Create a new task',
+          operationId: 'createTask',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/TaskCreateRequest' } } },
+          },
+          responses: {
+            201: {
+              description: 'Task created successfully',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/Task' } } },
+            },
+            400: { description: 'Validation failed' },
+            403: { description: 'Unauthorized task assignment' },
+          },
+        },
+      },
+      '/tasks/{id}': {
+        patch: {
+          tags: ['Tasks'],
+          summary: 'Update task fields (PATCH)',
+          operationId: 'patchTask',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/TaskUpdateRequest' } } },
+          },
+          responses: {
+            200: { description: 'Task updated', content: { 'application/json': { schema: { $ref: '#/components/schemas/Task' } } } },
+            400: { description: 'Validation failed' },
+            404: { description: 'Task not found' },
+          },
+        },
+        put: {
+          tags: ['Tasks'],
+          summary: 'Update task fields (PUT)',
+          operationId: 'putTask',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/TaskUpdateRequest' } } },
+          },
+          responses: {
+            200: { description: 'Task updated', content: { 'application/json': { schema: { $ref: '#/components/schemas/Task' } } } },
+            400: { description: 'Validation failed' },
+            404: { description: 'Task not found' },
+          },
+        },
+        delete: {
+          tags: ['Tasks'],
+          summary: 'Delete task',
+          operationId: 'deleteTask',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: {
+            200: { description: 'Task deleted successfully' },
+            403: { description: 'Forbidden' },
+            404: { description: 'Task not found' },
+          },
+        },
+      },
+      '/tasks/{id}/status': {
+        patch: {
+          tags: ['Tasks'],
+          summary: 'Quickly update task board status and progress',
+          operationId: 'updateTaskStatus',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['status'],
+                  properties: {
+                    status: { type: 'string', enum: ['todo', 'in_progress', 'pending_on_others', 'in_review', 'done'] },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: 'Status updated', content: { 'application/json': { schema: { $ref: '#/components/schemas/Task' } } } },
+          },
+        },
+      },
+      '/tasks/{id}/comments': {
+        get: {
+          tags: ['Tasks'],
+          summary: 'List comments for a task',
+          operationId: 'listTaskComments',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: {
+            200: { content: { 'application/json': { schema: { type: 'object', properties: { items: { type: 'array', items: { $ref: '#/components/schemas/TaskComment' } } } } } } },
+          },
+        },
+        post: {
+          tags: ['Tasks'],
+          summary: 'Add a comment with optional file attachment to a task',
+          operationId: 'addTaskComment',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            content: {
+              'multipart/form-data': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    comment: { type: 'string', example: 'Refactored controller' },
+                    file: { type: 'string', format: 'binary' },
+                  },
+                },
+              },
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    comment: { type: 'string', example: 'Refactored controller' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            201: { content: { 'application/json': { schema: { $ref: '#/components/schemas/TaskComment' } } } },
+          },
+        },
+      },
+      '/tasks/{id}/comments/{cid}': {
+        delete: {
+          tags: ['Tasks'],
+          summary: 'Delete a comment from a task',
+          operationId: 'deleteTaskComment',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'cid', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          responses: {
+            200: { description: 'Comment deleted' },
+          },
+        },
+      },
+      '/tasks/{id}/comments/{cid}/attachments/{aid}': {
+        get: {
+          tags: ['Tasks'],
+          summary: 'Download a task comment attachment',
+          operationId: 'getTaskCommentAttachment',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'cid', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'aid', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          responses: {
+            200: { description: 'Binary attachment file stream' },
+          },
+        },
+        delete: {
+          tags: ['Tasks'],
+          summary: 'Delete an attachment from a task comment',
+          operationId: 'deleteTaskCommentAttachment',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'cid', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'aid', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          responses: {
+            200: { description: 'Attachment deleted' },
+          },
+        },
+      },
+      '/tasks/{id}/audit': {
+        get: {
+          tags: ['Tasks'],
+          summary: 'Get audit history logs for a task',
+          operationId: 'listTaskAudit',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: {
+            200: { content: { 'application/json': { schema: { type: 'object', properties: { items: { type: 'array', items: { $ref: '#/components/schemas/TaskAuditLog' } } } } } } },
+          },
+        },
+      },
+
+      // ── Notifications Endpoints ──
+      '/notifications': {
+        get: {
+          tags: ['Notifications'],
+          summary: 'List user alert notifications',
+          operationId: 'listNotifications',
+          security: [{ userCookie: [] }],
+          responses: {
+            200: { content: { 'application/json': { schema: { type: 'object', properties: { items: { type: 'array', items: { $ref: '#/components/schemas/UserNotification' } } } } } } },
+          },
+        },
+      },
+      '/notifications/read-all': {
+        patch: {
+          tags: ['Notifications'],
+          summary: 'Mark all notifications as read',
+          operationId: 'markAllNotificationsRead',
+          security: [{ userCookie: [] }],
+          responses: {
+            200: { description: 'All notifications marked as read' },
+          },
+        },
+      },
+      '/notifications/{id}/read': {
+        patch: {
+          tags: ['Notifications'],
+          summary: 'Mark specific notification as read',
+          operationId: 'markNotificationRead',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: {
+            200: { description: 'Notification marked as read' },
+          },
+        },
+      },
+      '/notifications/{id}': {
+        delete: {
+          tags: ['Notifications'],
+          summary: 'Delete notification',
+          operationId: 'deleteNotification',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: {
+            200: { description: 'Notification deleted' },
+          },
+        },
+      },
+
+      // ── Appraisals Endpoints ──
+      '/appraisals/submit': {
+        post: {
+          tags: ['Appraisals'],
+          summary: 'Submit employee self-rating for an active appraisal cycle',
+          operationId: 'submitSelfRating',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/SubmitSelfRatingRequest' } } },
+          },
+          responses: {
+            200: {
+              description: 'Self-rating submitted successfully',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/AppraisalReview' } } },
+            },
+            400: { description: 'Validation error or cycle closed' },
+            401: { description: 'Unauthorized' },
+          },
+        },
+      },
+      '/appraisals/{id}/manager-review': {
+        patch: {
+          tags: ['Appraisals'],
+          summary: 'Submit manager review and evaluation for employee appraisal',
+          operationId: 'submitManagerRating',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Appraisal Review ID' },
+          ],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/SubmitManagerRatingRequest' } } },
+          },
+          responses: {
+            200: {
+              description: 'Manager review saved',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/AppraisalReview' } } },
+            },
+            400: { description: 'Self-rating not completed' },
+            403: { description: 'Access forbidden: not assigned manager' },
+            404: { description: 'Appraisal review not found' },
+          },
+        },
+      },
+      '/appraisals': {
+        get: {
+          tags: ['Appraisals'],
+          summary: 'List appraisal reviews for employee or manager direct reports',
+          operationId: 'listAppraisals',
+          security: [{ userCookie: [] }],
+          responses: {
+            200: {
+              description: 'Appraisal reviews retrieved',
+              content: {
+                'application/json': {
+                  schema: { type: 'array', items: { $ref: '#/components/schemas/AppraisalReview' } },
+                },
+              },
+            },
+            401: { description: 'Unauthorized' },
+          },
+        },
+      },
+
+      // ── External Reviews Endpoints ──
+      '/reviews/request': {
+        post: {
+          tags: ['External Reviews'],
+          summary: 'Initiate an external/client stakeholder review invitation',
+          operationId: 'requestExReview',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/ExternalReviewRequest' } } },
+          },
+          responses: {
+            201: {
+              description: 'Review invitation generated',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      token: { type: 'string', example: 'rev_abc123xyz' },
+                      inviteUrl: { type: 'string', example: 'http://localhost:5173/review/rev_abc123xyz' },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: 'Validation error' },
+            401: { description: 'Unauthorized' },
+          },
+        },
+      },
+      '/public/reviews/{token}': {
+        get: {
+          tags: ['External Reviews'],
+          summary: 'Get public review invitation details by secure token',
+          operationId: 'getExReviewByToken',
+          parameters: [
+            { name: 'token', in: 'path', required: true, schema: { type: 'string' }, description: 'Secure review token' },
+          ],
+          responses: {
+            200: {
+              description: 'Review details retrieved',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      employeeName: { type: 'string', example: 'Arjun Sharma' },
+                      clientName: { type: 'string', example: 'Acme Corp Lead' },
+                      status: { type: 'string', example: 'PENDING' },
+                    },
+                  },
+                },
+              },
+            },
+            404: { description: 'Invalid or expired review token' },
+          },
+        },
+        post: {
+          tags: ['External Reviews'],
+          summary: 'Submit external stakeholder review feedback',
+          operationId: 'submitExReview',
+          parameters: [
+            { name: 'token', in: 'path', required: true, schema: { type: 'string' }, description: 'Secure review token' },
+          ],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/SubmitExternalReviewRequest' } } },
+          },
+          responses: {
+            200: {
+              description: 'Review feedback recorded successfully',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: { success: { type: 'boolean', example: true } },
+                  },
+                },
+              },
+            },
+            400: { description: 'Review already submitted or invalid payload' },
+            404: { description: 'Invalid or expired review token' },
+          },
+        },
+      },
+
+      // ── Reports & Analytics Endpoints ──
+      '/reports/analytics': {
+        get: {
+          tags: ['Reports & Analytics'],
+          summary: 'Get high-level organizational analytics and KPI summary',
+          operationId: 'getAnalyticsSummary',
+          security: [{ userCookie: [] }],
+          responses: {
+            200: {
+              description: 'Analytics summary retrieved',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/AnalyticsSummary' } } },
+            },
+            401: { description: 'Unauthorized' },
+          },
+        },
+      },
+
+      // ── Uploads Endpoints ──
+      '/upload': {
+        post: {
+          tags: ['Uploads'],
+          summary: 'Upload a document or image file (max 5MB)',
+          operationId: 'uploadFile',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'multipart/form-data': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    file: { type: 'string', format: 'binary' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: 'File uploaded successfully',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/FileUploadResponse' } } },
+            },
+            400: { description: 'No file uploaded or size limit exceeded' },
+            401: { description: 'Unauthorized' },
           },
         },
       },

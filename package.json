@@ -11,7 +11,9 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
-    "prisma:studio": "prisma studio"
+    "prisma:studio": "prisma studio",
+    "list-companies": "node list-companies.js",
+    "reset-password": "node reset-password.js"
   },
   "dependencies": {
     "@prisma/client": "^6.3.0",

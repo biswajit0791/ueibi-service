@@ -46,17 +46,45 @@ async function assertTaskOwner(id, requestingUser, tenantId) {
   const task = await prisma.task.findFirst({ where: { id, tenantId } });
   if (!task) throw { status: 404, message: 'Task not found' };
 
-  const allowedRoles = ['SUPER_ADMIN', 'ADMIN', 'HR'];
-  if (task.employeeId !== requestingUser.id && !allowedRoles.includes(requestingUser.role)) {
-    // Managers can edit/delete their direct report's tasks
+  const allowedRoles = ['SUPER_ADMIN', 'ADMIN', 'HR', 'LEADERSHIP', 'OWNER'];
+  if (allowedRoles.includes(requestingUser.role)) {
+    return task;
+  }
+
+  // Assigned employee owns the execution of the task
+  if (task.employeeId === requestingUser.id) {
+    return task;
+  }
+
+  // Managers can edit/delete their direct report's tasks
+  if (requestingUser.role === 'MANAGER') {
     const subordinate = await prisma.tenantUser.findFirst({
       where: { id: task.employeeId, managerId: requestingUser.id, tenantId },
     });
-    if (!subordinate) {
-      throw { status: 403, message: "Access forbidden: cannot edit another employee's task" };
+    if (subordinate) {
+      return task;
+    }
+
+    // If this is a companion dependency task, check if the manager manages the parent task owner
+    if (task.isDependencyOf) {
+      const parentTask = await prisma.task.findFirst({
+        where: { id: task.isDependencyOf, tenantId },
+      });
+      if (parentTask) {
+        if (parentTask.employeeId === requestingUser.id) {
+          return task;
+        }
+        const parentSubordinate = await prisma.tenantUser.findFirst({
+          where: { id: parentTask.employeeId, managerId: requestingUser.id, tenantId },
+        });
+        if (parentSubordinate) {
+          return task;
+        }
+      }
     }
   }
-  return task;
+
+  throw { status: 403, message: "Access forbidden: cannot edit another employee's task" };
 }
 
 // ─── Helper: validate goal belongs to same tenant ─────────────────────────
@@ -271,11 +299,16 @@ export async function listTasks(req, res, next) {
 export async function updateTaskStatus(req, res, next) {
   try {
     const { id } = req.params;
-    const { status } = req.body || {};
+    const { status, progress } = req.body || {};
     const tenantId = req.tenantId;
 
     if (!status) {
       return res.status(400).json({ error: 'Task status is required' });
+    }
+
+    const validStatuses = ['todo', 'in_progress', 'pending_on_others', 'in_review', 'done', 'pending_approval', 'rejected'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({ error: 'Invalid task status' });
     }
 
     const existing = await assertTaskOwner(id, req.user, tenantId).catch(e => {
@@ -284,15 +317,20 @@ export async function updateTaskStatus(req, res, next) {
     });
     if (!existing) return;
 
-    let progressUpdate = undefined;
-    if (status === 'done') progressUpdate = 100;
-    else if (status === 'todo') progressUpdate = 0;
+    let progressUpdate = progress !== undefined ? Number(progress) : undefined;
+    if (progressUpdate === undefined) {
+      if (status === 'done') progressUpdate = 100;
+      else if (status === 'todo') progressUpdate = 0;
+      else if (status === 'in_progress' && (!existing.progress || existing.progress === 0)) progressUpdate = 10;
+    } else {
+      progressUpdate = Math.min(100, Math.max(0, progressUpdate));
+    }
 
     const updated = await prisma.task.update({
       where: { id },
       data: { 
         status,
-        ...(progressUpdate !== undefined && { progress: progressUpdate })
+        ...(progressUpdate !== undefined && !isNaN(progressUpdate) && { progress: progressUpdate })
       },
     });
 
@@ -365,7 +403,7 @@ export async function updateTask(req, res, next) {
     const {
       title, priority, startDate, dueDate, financialYear,
       tags, goalId, isPrivate, isStandalone, weight,
-      description, status, progress, dependency, isDependencyOf,
+      description, status, progress, dependency, isDependencyOf, employeeId,
     } = parsed.data;
 
     // Date validation on update too
@@ -385,6 +423,57 @@ export async function updateTask(req, res, next) {
       return null;
     });
     if (!existing) return;
+
+    const allowedRoles = ['SUPER_ADMIN', 'ADMIN', 'HR', 'LEADERSHIP', 'OWNER'];
+    const isElevated = allowedRoles.includes(req.user.role);
+    let isDirectManager = false;
+    if (req.user.role === 'MANAGER') {
+      const subordinate = await prisma.tenantUser.findFirst({
+        where: { id: existing.employeeId, managerId: req.user.id, tenantId },
+      });
+      isDirectManager = !!subordinate;
+    }
+
+    // ── Field-level authorization checks ─────────────────────────────────
+    // 1. Reassignment guard: employees cannot reassign tasks
+    if (employeeId !== undefined && employeeId !== existing.employeeId) {
+      if (!isElevated && !isDirectManager) {
+        return res.status(403).json({ success: false, error: 'Forbidden: Employees cannot reassign tasks' });
+      }
+      try {
+        await resolveTargetEmployee(req.user, tenantId, employeeId);
+      } catch (e) {
+        return res.status(e.status || 500).json({ success: false, message: e.message });
+      }
+    }
+
+    // 2. Goal assignment guard: employees cannot move task between goals
+    if (goalId !== undefined && goalId !== existing.goalId) {
+      if (!isElevated && !isDirectManager) {
+        return res.status(403).json({ success: false, error: 'Forbidden: Employees cannot reassign task goal' });
+      }
+    }
+
+    // 3. Weight guard: employees cannot alter task weight
+    if (weight !== undefined && weight !== existing.weight) {
+      if (!isElevated && !isDirectManager) {
+        return res.status(403).json({ success: false, error: 'Forbidden: Employees cannot modify task weight' });
+      }
+    }
+
+    // 4. Dependency parent mapping guard
+    if (isDependencyOf !== undefined && isDependencyOf !== existing.isDependencyOf) {
+      if (!isElevated && !isDirectManager) {
+        return res.status(403).json({ success: false, error: 'Forbidden: Employees cannot modify dependency structure' });
+      }
+    }
+
+    // 5. Dependency approval guard: employees cannot approve dependencies directly
+    if (dependency !== undefined && dependency !== null) {
+      if (dependency.status === 'approved' && existing.dependency?.status !== 'approved' && !isElevated && !isDirectManager) {
+        return res.status(403).json({ success: false, error: 'Forbidden: Employees cannot approve dependencies' });
+      }
+    }
 
     // If goalId is being updated, validate tenant scope
     let resolvedGoalId = undefined;
@@ -417,7 +506,7 @@ export async function updateTask(req, res, next) {
     const updated = await prisma.task.update({
       where: { id },
       data: {
-        ...(title !== undefined && { title }),
+        ...(title !== undefined && { title: title.trim() }),
         ...(priority !== undefined && { priority }),
         ...(finalStatus !== undefined && { status: finalStatus }),
         ...(finalProgress !== undefined && { progress: finalProgress }),
@@ -426,12 +515,13 @@ export async function updateTask(req, res, next) {
         ...(financialYear !== undefined && { financialYear }),
         ...(tags !== undefined && { tags }),
         ...(resolvedGoalId !== undefined && { goalId: resolvedGoalId }),
-        ...(isPrivate !== undefined && { isPrivate }),
-        ...(isStandalone !== undefined && { isStandalone }),
-        ...(weight !== undefined && { weight }),
+        ...(isPrivate !== undefined && (isElevated || isDirectManager || existing.employeeId === req.user.id) && { isPrivate }),
+        ...(isStandalone !== undefined && (isElevated || isDirectManager) && { isStandalone }),
+        ...(weight !== undefined && (isElevated || isDirectManager) && { weight }),
         ...(description !== undefined && { description }),
-        ...(dependency !== undefined && { dependency: dependency || null }),
-        ...(isDependencyOf !== undefined && { isDependencyOf: isDependencyOf || null }),
+        ...(dependency !== undefined && (isElevated || isDirectManager) && { dependency: dependency || null }),
+        ...(isDependencyOf !== undefined && (isElevated || isDirectManager) && { isDependencyOf: isDependencyOf || null }),
+        ...(employeeId !== undefined && (isElevated || isDirectManager) && { employeeId }),
       },
     });
 
