@@ -20,12 +20,15 @@ import reportsRoutes from './routes/reports.routes.js';
 import registryRoutes from './routes/registry.routes.js';
 import uploadRoutes from './routes/upload.routes.js';
 import activityRoutes from './routes/activity.routes.js';
+import policyRoutes from './routes/policy.routes.js';
 import { notFound } from './middleware/notFound.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
 import { swaggerUiServe, swaggerUiSetup, swaggerSpec } from './config/swagger.js';
 
 const app = express();
+
+app.set('trust proxy', true);
 
 app.use(helmet());
 app.use(cors({ origin: env.corsOrigin, credentials: true }));
@@ -58,6 +61,7 @@ app.use('/api', reportsRoutes);
 app.use('/api', registryRoutes);
 app.use('/api', uploadRoutes);
 app.use('/api', activityRoutes);
+app.use('/api', policyRoutes);
 if (env.nodeEnv !== 'production') {
   app.use('/api', devRoutes);
 }

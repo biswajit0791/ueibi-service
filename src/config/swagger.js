@@ -35,6 +35,7 @@ const options = {
       { name: 'Appraisals', description: 'Employee self-ratings, manager evaluations, and performance reviews' },
       { name: 'External Reviews', description: 'Client & external stakeholder performance review requests and submissions' },
       { name: 'Reports & Analytics', description: 'Enterprise performance and HR analytics summary' },
+      { name: 'Policies & Compliance', description: 'Corporate policies, electronic signatures, versioning, reminders, and auditable compliance registry' },
       { name: 'Uploads', description: 'Secure document and file uploads' },
       { name: 'Dev', description: 'Development-only endpoints (disabled in production)' },
     ],
@@ -745,6 +746,170 @@ const options = {
             fileName: { type: 'string', example: '1725189000-12345678-document.pdf' },
             originalName: { type: 'string', example: 'document.pdf' },
             path: { type: 'string', example: '/uploads/1725189000-12345678-document.pdf' },
+          },
+        },
+
+        // ── Policies & Compliance schemas ──
+        PolicyItem: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', example: 'cmtk4hy3o000cuuuo9ngxfkud' },
+            title: { type: 'string', example: 'IT Security & Clean Desk Policy 2026' },
+            description: { type: 'string', nullable: true, example: 'Mandatory information security and physical clean desk regulations.' },
+            content: { type: 'string', example: 'All employees must adhere to clean desk principles and lock machines when unattended.' },
+            category: { type: 'string', example: 'Compliance' },
+            version: { type: 'integer', example: 1 },
+            status: { type: 'string', enum: ['DRAFT', 'PUBLISHED', 'ARCHIVED'], example: 'PUBLISHED' },
+            pdfUrl: { type: 'string', nullable: true, example: '/uploads/it-security-policy.pdf' },
+            pdfOriginalName: { type: 'string', nullable: true, example: 'it-security.pdf' },
+            contentHash: { type: 'string', nullable: true, example: '4dd5683aa35273b9c02d02dee1e1059e6ad5aa6642fbc568c8b337edf847ea29' },
+            effectiveDate: { type: 'string', format: 'date-time', nullable: true },
+            dueDate: { type: 'string', format: 'date-time', nullable: true },
+            publishedAt: { type: 'string', format: 'date-time', nullable: true },
+            createdAt: { type: 'string', format: 'date-time' },
+            updatedAt: { type: 'string', format: 'date-time' },
+            totalAssigned: { type: 'integer', example: 25 },
+            signedCount: { type: 'integer', example: 20 },
+            pendingCount: { type: 'integer', example: 5 },
+            compliancePercentage: { type: 'integer', example: 80 },
+          },
+        },
+        EmployeePolicyItem: {
+          type: 'object',
+          properties: {
+            assignmentId: { type: 'string', example: 'cmtk4opvk000juuvkmquwaveb' },
+            id: { type: 'string', example: 'cmtk4oox2000euuvkhxnmcc4v' },
+            title: { type: 'string', example: 'IT Security & Clean Desk Policy 2026' },
+            description: { type: 'string', nullable: true },
+            content: { type: 'string' },
+            category: { type: 'string', example: 'Compliance' },
+            version: { type: 'integer', example: 1 },
+            pdfUrl: { type: 'string', nullable: true },
+            pdfOriginalName: { type: 'string', nullable: true },
+            publishedAt: { type: 'string', format: 'date-time', nullable: true },
+            assignedAt: { type: 'string', format: 'date-time' },
+            dueAt: { type: 'string', format: 'date-time', nullable: true },
+            status: { type: 'string', enum: ['PENDING', 'SIGNED', 'OVERDUE', 'REVOKED'], example: 'PENDING' },
+            signedAt: { type: 'string', format: 'date-time', nullable: true },
+            hasSigned: { type: 'boolean', example: false },
+            acceptance: {
+              type: 'object',
+              nullable: true,
+              properties: {
+                id: { type: 'string' },
+                signedAt: { type: 'string', format: 'date-time' },
+                ipAddress: { type: 'string', example: '127.0.0.1 (Localhost)' },
+                complianceCheck: { type: 'string', example: 'Verified Audit' },
+                contentHash: { type: 'string' },
+              },
+            },
+          },
+        },
+        CreatePolicyRequest: {
+          type: 'object',
+          required: ['title', 'content'],
+          properties: {
+            title: { type: 'string', example: 'Zero Trust & Access Control Policy' },
+            content: { type: 'string', example: 'All internal systems must be accessed through corporate MFA and VPN.' },
+            category: { type: 'string', example: 'Security' },
+            description: { type: 'string', nullable: true, example: 'Zero Trust security mandates for 2026' },
+            status: { type: 'string', enum: ['DRAFT', 'PUBLISHED'], default: 'PUBLISHED' },
+            pdfUrl: { type: 'string', nullable: true },
+            pdfOriginalName: { type: 'string', nullable: true },
+            effectiveDate: { type: 'string', format: 'date' },
+            dueDate: { type: 'string', format: 'date' },
+            assignees: {
+              oneOf: [
+                { type: 'string', enum: ['ALL'] },
+                { type: 'array', items: { type: 'string' } },
+              ],
+              example: 'ALL',
+            },
+          },
+        },
+        UpdatePolicyRequest: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', example: 'Zero Trust & Access Control Policy (v2)' },
+            content: { type: 'string', example: 'Updated zero trust requirements...' },
+            category: { type: 'string', example: 'Security' },
+            description: { type: 'string', nullable: true },
+            status: { type: 'string', enum: ['DRAFT', 'PUBLISHED', 'ARCHIVED'] },
+            pdfUrl: { type: 'string', nullable: true },
+            pdfOriginalName: { type: 'string', nullable: true },
+            effectiveDate: { type: 'string', format: 'date' },
+            dueDate: { type: 'string', format: 'date' },
+            incrementVersion: { type: 'boolean', example: true },
+            assignees: {
+              oneOf: [
+                { type: 'string', enum: ['ALL'] },
+                { type: 'array', items: { type: 'string' } },
+              ],
+            },
+          },
+        },
+        SignPolicyRequest: {
+          type: 'object',
+          required: ['acknowledged'],
+          properties: {
+            acknowledged: { type: 'boolean', example: true },
+          },
+        },
+        SignPolicyResponse: {
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: true },
+            message: { type: 'string', example: 'Policy electronically signed and verified successfully' },
+            acceptance: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                policyId: { type: 'string' },
+                policyVersion: { type: 'integer', example: 1 },
+                signedAt: { type: 'string', format: 'date-time' },
+                ipAddress: { type: 'string', example: '127.0.0.1 (Localhost)' },
+                userAgent: { type: 'string' },
+                complianceCheck: { type: 'string', example: 'Verified Audit' },
+                contentHash: { type: 'string' },
+                legalDeclaration: { type: 'string' },
+              },
+            },
+          },
+        },
+        ComplianceRegistryItem: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            userId: { type: 'string' },
+            employeeName: { type: 'string', example: 'Pratik Parida' },
+            userEmail: { type: 'string', example: 'pratik@acmecorp.com' },
+            userRole: { type: 'string', example: 'EMPLOYEE' },
+            policyId: { type: 'string' },
+            signedPolicyMandate: { type: 'string', example: 'IT Security & Clean Desk Policy 2026' },
+            policyCategory: { type: 'string', example: 'Compliance' },
+            policyVersion: { type: 'integer', example: 1 },
+            auditIpAddress: { type: 'string', example: '127.0.0.1 (Localhost)' },
+            verificationTimestamp: { type: 'string', format: 'date-time' },
+            complianceCheck: { type: 'string', example: 'Verified Audit' },
+            contentHash: { type: 'string' },
+          },
+        },
+        PendingComplianceItem: {
+          type: 'object',
+          properties: {
+            assignmentId: { type: 'string' },
+            policyId: { type: 'string' },
+            policyTitle: { type: 'string' },
+            policyCategory: { type: 'string' },
+            policyVersion: { type: 'integer' },
+            userId: { type: 'string' },
+            userName: { type: 'string' },
+            userEmail: { type: 'string' },
+            assignedAt: { type: 'string', format: 'date-time' },
+            dueAt: { type: 'string', format: 'date-time', nullable: true },
+            status: { type: 'string', example: 'PENDING' },
+            reminderCount: { type: 'integer', example: 0 },
+            reminderSentAt: { type: 'string', format: 'date-time', nullable: true },
           },
         },
       },
@@ -3035,6 +3200,376 @@ const options = {
             },
             400: { description: 'No file uploaded or size limit exceeded' },
             401: { description: 'Unauthorized' },
+          },
+        },
+      },
+
+      // ── Policies & Compliance Endpoints ──
+      '/policies/my': {
+        get: {
+          tags: ['Policies & Compliance'],
+          summary: 'List policies assigned to current authenticated employee',
+          operationId: 'getMyPolicies',
+          security: [{ userCookie: [] }],
+          responses: {
+            200: {
+              description: 'List of assigned policies with status and signature details',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      items: {
+                        type: 'array',
+                        items: { $ref: '#/components/schemas/EmployeePolicyItem' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            401: { description: 'Unauthorized' },
+          },
+        },
+      },
+      '/policies/my/{id}': {
+        get: {
+          tags: ['Policies & Compliance'],
+          summary: 'Get details of a single policy assigned to current employee',
+          operationId: 'getMyPolicyById',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Policy ID' },
+          ],
+          responses: {
+            200: {
+              description: 'Policy assignment details retrieved',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/EmployeePolicyItem' } } },
+            },
+            401: { description: 'Unauthorized' },
+            404: { description: 'Policy not assigned or not found' },
+          },
+        },
+      },
+      '/policies/{id}/sign': {
+        post: {
+          tags: ['Policies & Compliance'],
+          summary: 'Digitally sign & accept a corporate policy mandate',
+          description: 'Captures IP address and user-agent server-side, generates SHA-256 verification hash, and logs an immutable audit event.',
+          operationId: 'signPolicy',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Policy ID' },
+          ],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/SignPolicyRequest' } } },
+          },
+          responses: {
+            200: {
+              description: 'Policy agreement digitally signed and certified',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/SignPolicyResponse' } } },
+            },
+            400: { description: 'Already signed or policy not in published state' },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Not assigned to this policy' },
+            404: { description: 'Policy not found' },
+          },
+        },
+      },
+      '/policies': {
+        get: {
+          tags: ['Policies & Compliance'],
+          summary: 'List corporate policies with calculated compliance statistics (HR/Admin)',
+          operationId: 'listPolicies',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'status', in: 'query', schema: { type: 'string', enum: ['ALL', 'DRAFT', 'PUBLISHED', 'ARCHIVED'] } },
+            { name: 'category', in: 'query', schema: { type: 'string' } },
+            { name: 'search', in: 'query', schema: { type: 'string' } },
+          ],
+          responses: {
+            200: {
+              description: 'Policies list retrieved with compliance metrics',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      items: { type: 'array', items: { $ref: '#/components/schemas/PolicyItem' } },
+                      total: { type: 'integer' },
+                    },
+                  },
+                },
+              },
+            },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden — requires HR/Admin privileges' },
+          },
+        },
+        post: {
+          tags: ['Policies & Compliance'],
+          summary: 'Publish new corporate policy and assign to employees (HR/Admin)',
+          operationId: 'createPolicy',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/CreatePolicyRequest' } } },
+          },
+          responses: {
+            201: {
+              description: 'Policy created, assigned, and published successfully',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/PolicyItem' } } },
+            },
+            400: { description: 'Validation failed' },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden — requires HR/Admin privileges' },
+          },
+        },
+      },
+      '/policies/{id}': {
+        get: {
+          tags: ['Policies & Compliance'],
+          summary: 'Get policy details with assignment breakdown (HR/Admin)',
+          operationId: 'getPolicyById',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          responses: {
+            200: {
+              description: 'Policy details with employee assignment breakdown',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/PolicyItem' } } },
+            },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden' },
+            404: { description: 'Policy not found' },
+          },
+        },
+        put: {
+          tags: ['Policies & Compliance'],
+          summary: 'Update policy text, version, or assign additional employees (HR/Admin)',
+          operationId: 'updatePolicy',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/UpdatePolicyRequest' } } },
+          },
+          responses: {
+            200: {
+              description: 'Policy updated successfully',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/PolicyItem' } } },
+            },
+            400: { description: 'Validation failed' },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden' },
+            404: { description: 'Policy not found' },
+          },
+        },
+        delete: {
+          tags: ['Policies & Compliance'],
+          summary: 'Permanently delete a corporate policy and its assignment records (HR/Admin)',
+          operationId: 'deletePolicy',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          responses: {
+            200: {
+              description: 'Policy deleted successfully',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      success: { type: 'boolean', example: true },
+                      message: { type: 'string', example: 'Policy deleted successfully' },
+                    },
+                  },
+                },
+              },
+            },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden' },
+            404: { description: 'Policy not found' },
+          },
+        },
+      },
+      '/policies/{id}/publish': {
+        post: {
+          tags: ['Policies & Compliance'],
+          summary: 'Publish a draft policy and assign to target employees',
+          operationId: 'publishPolicy',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    assignees: {
+                      oneOf: [{ type: 'string', enum: ['ALL'] }, { type: 'array', items: { type: 'string' } }],
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: 'Policy published' },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden' },
+          },
+        },
+      },
+      '/policies/{id}/archive': {
+        post: {
+          tags: ['Policies & Compliance'],
+          summary: 'Archive a policy mandate (HR/Admin)',
+          operationId: 'archivePolicy',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          responses: {
+            200: { description: 'Policy archived successfully' },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden' },
+          },
+        },
+      },
+      '/policies/{id}/reminders': {
+        post: {
+          tags: ['Policies & Compliance'],
+          summary: 'Dispatch digital sign-off reminders to non-compliant employees (HR/Admin)',
+          operationId: 'sendPolicyReminders',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    userId: { type: 'string', nullable: true, description: 'Optional: target specific user. If omitted, sends to all pending employees.' },
+                    customMessage: { type: 'string', nullable: true },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: 'Reminders dispatched successfully',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      success: { type: 'boolean', example: true },
+                      count: { type: 'integer', example: 4 },
+                      message: { type: 'string', example: 'Successfully dispatched sign-off reminders to 4 employee(s).' },
+                    },
+                  },
+                },
+              },
+            },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden' },
+          },
+        },
+      },
+      '/policies/compliance/registry': {
+        get: {
+          tags: ['Policies & Compliance'],
+          summary: 'HR Compliance Sign-Off Registry with auditable IP & timestamps',
+          operationId: 'getComplianceRegistry',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'policyId', in: 'query', schema: { type: 'string' } },
+            { name: 'search', in: 'query', schema: { type: 'string' } },
+            { name: 'page', in: 'query', schema: { type: 'integer', default: 1 } },
+            { name: 'limit', in: 'query', schema: { type: 'integer', default: 50 } },
+          ],
+          responses: {
+            200: {
+              description: 'Audit registry items retrieved',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      items: { type: 'array', items: { $ref: '#/components/schemas/ComplianceRegistryItem' } },
+                      total: { type: 'integer' },
+                      page: { type: 'integer' },
+                      totalPages: { type: 'integer' },
+                    },
+                  },
+                },
+              },
+            },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden' },
+          },
+        },
+      },
+      '/policies/compliance/pending': {
+        get: {
+          tags: ['Policies & Compliance'],
+          summary: 'List non-compliant employees across active mandates (HR/Admin)',
+          operationId: 'getPendingCompliance',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'policyId', in: 'query', schema: { type: 'string' } },
+          ],
+          responses: {
+            200: {
+              description: 'Pending non-signed employee records',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      items: { type: 'array', items: { $ref: '#/components/schemas/PendingComplianceItem' } },
+                      total: { type: 'integer' },
+                    },
+                  },
+                },
+              },
+            },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden' },
+          },
+        },
+      },
+      '/policies/compliance/export': {
+        get: {
+          tags: ['Policies & Compliance'],
+          summary: 'Export digital compliance registry as RFC-4180 CSV (HR/Admin)',
+          operationId: 'exportComplianceCSV',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'policyId', in: 'query', schema: { type: 'string' } },
+          ],
+          responses: {
+            200: {
+              description: 'CSV file download containing digital acceptance audit logs',
+              content: {
+                'text/csv': {
+                  schema: { type: 'string', format: 'binary' },
+                },
+              },
+            },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden' },
           },
         },
       },
