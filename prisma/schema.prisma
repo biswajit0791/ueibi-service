@@ -40,6 +40,10 @@ model Tenant {
   notifications     Notification[]
   goals             Goal[]
   tasks             Task[]
+  policies          Policy[]
+  policyAssignments PolicyAssignment[]
+  policyAcceptances PolicyAcceptance[]
+  policyAuditLogs   PolicyAuditLog[]
 
   @@map("tenants")
 }
@@ -98,6 +102,14 @@ model TenantUser {
   approvedLeaves LeaveRequest[]      @relation("ApprovedLeaves")
   reviews        PerformanceReview[] @relation("EmployeeReviews")
   exReviews      ExEmployerReview[]  @relation("EmployeeExReviews")
+  // Policies & Compliance Relations
+  createdPolicies   Policy[]           @relation("PolicyAuthor")
+  publishedPolicies Policy[]           @relation("PolicyPublisher")
+  assignedPolicies  PolicyAssignment[] @relation("PolicyAssigner")
+  policyAssignments PolicyAssignment[] @relation("UserPolicyAssignments")
+  policyAcceptances PolicyAcceptance[] @relation("UserPolicyAcceptances")
+  policyAuditLogs   PolicyAuditLog[]   @relation("PolicyAuditActor")
+
   // Activity & Notifications
   taskComments   TaskComment[]       @relation("TaskCommentAuthor")
   taskAuditLogs  TaskAuditLog[]      @relation("TaskAuditPerformer")
@@ -584,3 +596,124 @@ model NonJoinerRecord {
   @@index([email])
   @@map("non_joiner_records")
 }
+
+// ── Policies & Digital Compliance ──────────────────────────────────────────
+
+enum PolicyStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum PolicyAssignmentStatus {
+  PENDING
+  SIGNED
+  OVERDUE
+  REVOKED
+}
+
+model Policy {
+  id              String             @id @default(cuid())
+  tenantId        String
+  tenant          Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  title           String
+  description     String?            @db.Text
+  content         String             @db.Text
+  category        String             @default("Compliance") // Compliance, HR Operations, Legal & Ethics, Security, etc.
+  status          PolicyStatus       @default(DRAFT)
+  version         Int                @default(1)
+  pdfUrl          String?
+  pdfOriginalName String?
+  contentHash     String?
+  effectiveDate   DateTime?
+  dueDate         DateTime?
+  publishedAt     DateTime?
+  createdById     String
+  createdBy       TenantUser         @relation("PolicyAuthor", fields: [createdById], references: [id])
+  publishedById   String?
+  publishedBy     TenantUser?        @relation("PolicyPublisher", fields: [publishedById], references: [id])
+  assignments     PolicyAssignment[]
+  acceptances     PolicyAcceptance[]
+  auditLogs       PolicyAuditLog[]
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@map("policies")
+}
+
+model PolicyAssignment {
+  id             String                 @id @default(cuid())
+  tenantId       String
+  tenant         Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  policyId       String
+  policy         Policy                 @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  userId         String
+  user           TenantUser             @relation("UserPolicyAssignments", fields: [userId], references: [id], onDelete: Cascade)
+  policyVersion  Int                    @default(1)
+  assignedById   String?
+  assignedBy     TenantUser?            @relation("PolicyAssigner", fields: [assignedById], references: [id])
+  assignedAt     DateTime               @default(now())
+  dueAt          DateTime?
+  status         PolicyAssignmentStatus @default(PENDING)
+  signedAt       DateTime?
+  acceptanceId   String?                @unique
+  acceptance     PolicyAcceptance?      @relation(fields: [acceptanceId], references: [id])
+  reminderSentAt DateTime?
+  reminderCount  Int                    @default(0)
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  @@unique([policyId, userId, policyVersion])
+  @@index([tenantId])
+  @@index([userId, status])
+  @@index([policyId, status])
+  @@map("policy_assignments")
+}
+
+model PolicyAcceptance {
+  id               String            @id @default(cuid())
+  tenantId         String
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  policyId         String
+  policy           Policy            @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  policyVersion    Int
+  assignmentId     String            @unique
+  assignment       PolicyAssignment?
+  userId           String
+  user             TenantUser        @relation("UserPolicyAcceptances", fields: [userId], references: [id], onDelete: Cascade)
+  signedAt         DateTime          @default(now())
+  ipAddress        String
+  userAgent        String            @db.Text
+  contentHash      String?
+  complianceCheck  String            @default("Verified Audit")
+  legalDeclaration String            @db.Text
+  createdAt        DateTime          @default(now())
+
+  @@index([tenantId])
+  @@index([userId])
+  @@index([policyId])
+  @@map("policy_acceptances")
+}
+
+model PolicyAuditLog {
+  id          String      @id @default(cuid())
+  tenantId    String
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  policyId    String?
+  policy      Policy?     @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  actorUserId String
+  actor       TenantUser  @relation("PolicyAuditActor", fields: [actorUserId], references: [id])
+  action      String      // POLICY_CREATED | POLICY_UPDATED | POLICY_PUBLISHED | POLICY_ASSIGNED | POLICY_SIGNED | POLICY_ARCHIVED | POLICY_REMINDER_SENT
+  details     String?     @db.Text
+  ipAddress   String?
+  userAgent   String?     @db.Text
+  metadata    Json?
+  createdAt   DateTime    @default(now())
+
+  @@index([tenantId])
+  @@index([policyId])
+  @@map("policy_audit_logs")
+}
+
