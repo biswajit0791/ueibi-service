@@ -1,0 +1,75 @@
+{
+  "users": [
+    {
+      "id": "cmtk36qg40002uugct2yczbge",
+      "name": "Biswajit HR",
+      "email": "biswajitparida1291@gmail.com",
+      "role": "HR",
+      "tenantId": "cmtk36q8w0000uugcje3gk1pf"
+    },
+    {
+      "id": "cmtk36qm80004uugc0pfwdr3n",
+      "name": "Biswajit Director",
+      "email": "biswajitparida0791@gmail.com",
+      "role": "SUPER_ADMIN",
+      "tenantId": "cmtk36q8w0000uugcje3gk1pf"
+    },
+    {
+      "id": "cmtk36qp80006uugc93fi7jl2",
+      "name": "Biswajit Admin",
+      "email": "biswajitparida5@gmail.com",
+      "role": "ADMIN",
+      "tenantId": "cmtk36q8w0000uugcje3gk1pf"
+    },
+    {
+      "id": "cmtk36qs80008uugcnn77vkr9",
+      "name": "Biswajit Manager",
+      "email": "manager@acmecorp.com",
+      "role": "MANAGER",
+      "tenantId": "cmtk36q8w0000uugcje3gk1pf"
+    },
+    {
+      "id": "cmtk36qy8000auugchbczkscy",
+      "name": "pratik parida",
+      "email": "pratik@acmecorp.com",
+      "role": "EMPLOYEE",
+      "tenantId": "cmtk36q8w0000uugcje3gk1pf"
+    },
+    {
+      "id": "cmtl7wsfz0001uutwkxpju0mp",
+      "name": "Test Peer Colleague",
+      "email": "test-peer-1788421374717@acmetest.com",
+      "role": "EMPLOYEE",
+      "tenantId": "cmtk36q8w0000uugcje3gk1pf"
+    }
+  ],
+  "goals": [
+    {
+      "id": "cmtl9ebcd003nuu1g4fp99npi",
+      "tenantId": "cmtk36q8w0000uugcje3gk1pf",
+      "title": "GOOGLE O AUTH lOGIN",
+      "description": "USER DIRCTLY LOGIN THROUGH GOOGLE",
+      "goalType": "Development",
+      "category": "Technical Skills",
+      "priority": "high",
+      "createdBy": "pratik parida",
+      "progress": 100,
+      "status": "COMPLETED",
+      "financialYear": "FY 2026-27",
+      "quarter": "All",
+      "startDate": "2026-12-02T00:00:00.000Z",
+      "targetDate": "2026-12-02T00:00:00.000Z",
+      "attachments": [
+        "Capturertdgrthgr.PNG",
+        "Capturertdgrthgr.PNG"
+      ],
+      "specialNotes": "HR Note: HR approved and finalized",
+      "dueDate": null,
+      "employeeId": "cmtk36qy8000auugchbczkscy",
+      "milestones": 0,
+      "completedMilestones": 0,
+      "createdAt": "2026-09-03T08:24:31.981Z",
+      "updatedAt": "2026-09-03T12:16:52.503Z"
+    }
+  ]
+}

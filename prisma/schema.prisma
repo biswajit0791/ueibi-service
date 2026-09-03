@@ -10,6 +10,7 @@ datasource db {
 enum UserRole {
   SUPER_ADMIN
   ADMIN
+  CMD
   HR
   FINANCE
   MANAGER
@@ -44,6 +45,9 @@ model Tenant {
   policyAssignments PolicyAssignment[]
   policyAcceptances PolicyAcceptance[]
   policyAuditLogs   PolicyAuditLog[]
+  appraisalCycles   AppraisalCycle[]
+  appraisalParameters AppraisalParameter[]
+  peerNominations   PeerNomination[]
 
   @@map("tenants")
 }
@@ -101,7 +105,10 @@ model TenantUser {
   leaveRequests  LeaveRequest[]      @relation("EmployeeLeaves")
   approvedLeaves LeaveRequest[]      @relation("ApprovedLeaves")
   reviews        PerformanceReview[] @relation("EmployeeReviews")
+  hrSignedOffReviews PerformanceReview[] @relation("HrSignoffActor")
   exReviews      ExEmployerReview[]  @relation("EmployeeExReviews")
+  nominatedReviewsAsReviewee PeerNomination[] @relation("NominationReviewee")
+  nominatedReviewsAsReviewer PeerNomination[] @relation("NominationReviewer")
   // Policies & Compliance Relations
   createdPolicies   Policy[]           @relation("PolicyAuthor")
   publishedPolicies Policy[]           @relation("PolicyPublisher")
@@ -484,36 +491,155 @@ model LeaveRequest {
   @@map("leave_requests")
 }
 
-model AppraisalCycle {
-  id        String              @id @default(cuid())
-  name      String
-  startDate DateTime
-  endDate   DateTime
-  status    String              @default("ACTIVE") // ACTIVE | CLOSED
-  reviews   PerformanceReview[]
-  createdAt DateTime            @default(now())
-  updatedAt DateTime            @updatedAt
+enum AppraisalFrequency {
+  ANNUAL
+  QUARTERLY
+  MONTHLY
+}
 
+enum AppraisalCycleStatus {
+  ACTIVE
+  CLOSED
+}
+
+enum ReviewStatus {
+  DRAFT
+  SUBMITTED
+  MANAGER_REVIEWED
+  COMPLETED
+}
+
+enum HrSignoffStatus {
+  PENDING_RELEASE
+  RELEASED
+}
+
+enum NominationStatus {
+  PENDING
+  COMPLETED
+  REJECTED
+}
+
+model AppraisalCycle {
+  id          String               @id @default(cuid())
+  tenantId    String
+  tenant      Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String
+  frequency   AppraisalFrequency   @default(ANNUAL)
+  startDate   DateTime
+  endDate     DateTime
+  status      AppraisalCycleStatus @default(ACTIVE)
+  parameters  AppraisalParameter[]
+  reviews     PerformanceReview[]
+  nominations PeerNomination[]
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  @@index([tenantId])
   @@map("appraisal_cycles")
 }
 
-model PerformanceReview {
-  id             String         @id @default(cuid())
-  cycleId        String
-  cycle          AppraisalCycle @relation(fields: [cycleId], references: [id], onDelete: Cascade)
-  employeeId     String
-  employee       TenantUser     @relation("EmployeeReviews", fields: [employeeId], references: [id], onDelete: Cascade)
-  selfRating     Decimal?       @db.Decimal(3, 2)
-  selfRemarks    String?        @db.Text
-  managerRating  Decimal?       @db.Decimal(3, 2)
-  managerRemarks String?        @db.Text
-  status         String         @default("DRAFT") // DRAFT | SUBMITTED | COMPLETED
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
+model AppraisalParameter {
+  id        String             @id @default(cuid())
+  tenantId  String
+  tenant    Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  cycleId   String
+  cycle     AppraisalCycle     @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  name      String
+  order     Int                @default(1)
+  isActive  Boolean            @default(true)
+  scores    ReviewScore[]
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
 
+  @@index([tenantId])
+  @@index([cycleId])
+  @@map("appraisal_parameters")
+}
+
+model PerformanceReview {
+  id                  String             @id @default(cuid())
+  cycleId             String
+  cycle               AppraisalCycle     @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  employeeId          String
+  employee            TenantUser         @relation("EmployeeReviews", fields: [employeeId], references: [id], onDelete: Cascade)
+  reviewType          AppraisalFrequency @default(ANNUAL)
+  dueDate             DateTime?
+  status              ReviewStatus       @default(DRAFT)
+  selfAccomplishments String?            @db.Text
+  selfWeaknesses      String?            @db.Text
+  selfRating          Decimal?           @db.Decimal(3, 2)
+  selfSubmittedAt     DateTime?
+  managerRemarks      String?            @db.Text
+  managerRating       Decimal?           @db.Decimal(3, 2)
+  managerSubmittedAt  DateTime?
+  hikePercentage      Decimal?           @db.Decimal(5, 2)
+  hrSignoffStatus     HrSignoffStatus    @default(PENDING_RELEASE)
+  hrRemarks           String?            @db.Text
+  hrSignedOffById     String?
+  hrSignedOffBy       TenantUser?        @relation("HrSignoffActor", fields: [hrSignedOffById], references: [id])
+  hrSignedOffAt       DateTime?
+  scores              ReviewScore[]
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  @@unique([cycleId, employeeId, reviewType])
   @@index([employeeId])
   @@index([cycleId])
   @@map("performance_reviews")
+}
+
+model ReviewScore {
+  id           String             @id @default(cuid())
+  reviewId     String
+  review       PerformanceReview  @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  parameterId  String
+  parameter    AppraisalParameter @relation(fields: [parameterId], references: [id], onDelete: Cascade)
+  selfScore    Int?
+  managerScore Int?
+  hrScore      Int?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  @@unique([reviewId, parameterId])
+  @@index([reviewId])
+  @@index([parameterId])
+  @@map("review_scores")
+}
+
+model PeerNomination {
+  id         String           @id @default(cuid())
+  tenantId   String
+  tenant     Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  cycleId    String
+  cycle      AppraisalCycle   @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  revieweeId String
+  reviewee   TenantUser       @relation("NominationReviewee", fields: [revieweeId], references: [id], onDelete: Cascade)
+  reviewerId String
+  reviewer   TenantUser       @relation("NominationReviewer", fields: [reviewerId], references: [id], onDelete: Cascade)
+  status     NominationStatus @default(PENDING)
+  feedback   PeerFeedback?
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  @@unique([cycleId, revieweeId, reviewerId])
+  @@index([tenantId])
+  @@index([reviewerId, status])
+  @@index([revieweeId])
+  @@map("peer_nominations")
+}
+
+model PeerFeedback {
+  id           String         @id @default(cuid())
+  nominationId String         @unique
+  nomination   PeerNomination @relation(fields: [nominationId], references: [id], onDelete: Cascade)
+  rating       Decimal        @db.Decimal(3, 2)
+  strengths    String         @db.Text
+  growthAreas  String         @db.Text
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  @@map("peer_feedbacks")
 }
 
 model ExEmployerReview {

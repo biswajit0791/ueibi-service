@@ -16,7 +16,8 @@
     "list-companies": "node list-companies.js",
     "reset-password": "node reset-password.js",
     "seed-users": "node seed-users.js",
-    "check-users": "node check-users.js"
+    "check-users": "node check-users.js",
+    "test:appraisal": "node test-appraisal.js"
   },
   "dependencies": {
     "@prisma/client": "^6.3.0",

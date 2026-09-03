@@ -4,8 +4,10 @@ export const createGoalSchema = z.object({
   title: z.string().min(1, "Goal title is required"),
   description: z.string().nullable().optional(),
   category: z.string().nullable().optional(),
-  goalType: z.string().nullable().optional(),
-  priority: z.enum(['low', 'medium', 'high', 'critical']).optional().default('medium'),
+  priority: z.preprocess(
+    (val) => typeof val === 'string' ? val.toLowerCase() : val,
+    z.enum(['low', 'medium', 'high', 'critical'])
+  ).optional().default('medium'),
   financialYear: z.string().nullable().optional(),
   quarter: z.string().nullable().optional(),
   startDate: z.string().nullable().optional(),
@@ -20,7 +22,10 @@ export const updateGoalSchema = z.object({
   description: z.string().nullable().optional(),
   category: z.string().nullable().optional(),
   goalType: z.string().nullable().optional(),
-  priority: z.enum(['low', 'medium', 'high', 'critical']).optional(),
+  priority: z.preprocess(
+    (val) => typeof val === 'string' ? val.toLowerCase() : val,
+    z.enum(['low', 'medium', 'high', 'critical'])
+  ).optional(),
   financialYear: z.string().nullable().optional(),
   quarter: z.string().nullable().optional(),
   startDate: z.string().nullable().optional(),
