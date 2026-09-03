@@ -1,0 +1,76 @@
+{
+  "status": 200,
+  "testData": {
+    "goals": [
+      {
+        "id": "cmtl9ebcd003nuu1g4fp99npi",
+        "tenantId": "cmtk36q8w0000uugcje3gk1pf",
+        "title": "GOOGLE O AUTH lOGIN",
+        "description": "USER DIRCTLY LOGIN THROUGH GOOGLE",
+        "goalType": "Development",
+        "category": "Technical Skills",
+        "priority": "high",
+        "createdBy": "pratik parida",
+        "progress": 100,
+        "status": "COMPLETED",
+        "financialYear": "FY 2026-27",
+        "quarter": "All",
+        "startDate": "2026-12-02T00:00:00.000Z",
+        "targetDate": "2026-12-02T00:00:00.000Z",
+        "attachments": [
+          "Capturertdgrthgr.PNG",
+          "Capturertdgrthgr.PNG"
+        ],
+        "specialNotes": "HR Note: HR approved and finalized",
+        "dueDate": null,
+        "employeeId": "cmtk36qy8000auugchbczkscy",
+        "milestones": 0,
+        "completedMilestones": 0,
+        "createdAt": "2026-09-03T08:24:31.981Z",
+        "updatedAt": "2026-09-03T12:16:52.503Z",
+        "tasks": [
+          {
+            "id": "cmtl9fl47003quu1gqjyzqaho",
+            "title": "GOOGLE 0 AUTH LOGIN",
+            "status": "done",
+            "priority": "high",
+            "dueDate": "2026-12-02T00:00:00.000Z"
+          }
+        ],
+        "employee": {
+          "id": "cmtk36qy8000auugchbczkscy",
+          "name": "pratik parida",
+          "email": "pratik@acmecorp.com",
+          "department": null,
+          "designation": null
+        }
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 5,
+      "total": 1,
+      "totalPages": 1,
+      "hasNextPage": false,
+      "hasPrevPage": false
+    },
+    "metrics": {
+      "totalGoals": 1,
+      "completedGoals": 1,
+      "inProgressGoals": 0,
+      "averageProgress": 100,
+      "alignmentScore": 5,
+      "milestonesTotal": 0,
+      "milestonesCompleted": 0,
+      "completionRate": 100
+    },
+    "employee": {
+      "id": "cmtk36qy8000auugchbczkscy",
+      "name": "pratik parida",
+      "email": "pratik@acmecorp.com",
+      "department": null,
+      "designation": null,
+      "role": "EMPLOYEE"
+    }
+  }
+}

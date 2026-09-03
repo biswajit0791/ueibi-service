@@ -674,36 +674,326 @@ const options = {
         },
 
         // ── Appraisal schemas ──
-        AppraisalReview: {
+        AppraisalCycle: {
           type: 'object',
           properties: {
-            id: { type: 'string' },
-            employeeId: { type: 'string' },
-            cycleId: { type: 'string' },
-            selfRating: { type: 'number', example: 4.5 },
-            selfComments: { type: 'string', example: 'Exceeded project deliverables on time.' },
-            managerRating: { type: 'number', example: 4.8 },
-            managerComments: { type: 'string', example: 'Outstanding technical contribution.' },
-            status: { type: 'string', enum: ['PENDING_SELF', 'PENDING_MANAGER', 'COMPLETED'], example: 'COMPLETED' },
-            createdAt: { type: 'string', format: 'date-time' },
-            updatedAt: { type: 'string', format: 'date-time' },
+            id:         { type: 'string', example: 'clcycle12345' },
+            tenantId:   { type: 'string', example: 'cltenant123' },
+            name:       { type: 'string', example: 'FY 2024-2025' },
+            frequency:  { type: 'string', enum: ['ANNUAL', 'QUARTERLY', 'MONTHLY'], example: 'ANNUAL' },
+            startDate:  { type: 'string', format: 'date-time' },
+            endDate:    { type: 'string', format: 'date-time' },
+            status:     { type: 'string', enum: ['ACTIVE', 'CLOSED'], example: 'ACTIVE' },
+            parameters: { type: 'array', items: { $ref: '#/components/schemas/AppraisalParameter' } },
+            createdAt:  { type: 'string', format: 'date-time' },
+            updatedAt:  { type: 'string', format: 'date-time' },
+          },
+        },
+        AppraisalParameter: {
+          type: 'object',
+          properties: {
+            id:       { type: 'string', example: 'clparam12345' },
+            cycleId:  { type: 'string', example: 'clcycle12345' },
+            name:     { type: 'string', example: 'Technical Skills' },
+            order:    { type: 'integer', example: 1 },
+            isActive: { type: 'boolean', example: true },
+          },
+        },
+        PerformanceReview: {
+          type: 'object',
+          properties: {
+            id:                  { type: 'string', example: 'clreview12345' },
+            cycleId:             { type: 'string', example: 'clcycle12345' },
+            employeeId:          { type: 'string', example: 'cluser12345' },
+            reviewType:          { type: 'string', enum: ['ANNUAL', 'QUARTERLY', 'MONTHLY'], example: 'ANNUAL' },
+            status:              { type: 'string', enum: ['DRAFT', 'SUBMITTED', 'MANAGER_REVIEWED', 'COMPLETED'], example: 'DRAFT' },
+            selfAccomplishments: { type: 'string', nullable: true, example: 'Delivered the database migration on time.' },
+            selfWeaknesses:      { type: 'string', nullable: true, example: 'Need to improve presentation skills.' },
+            selfRating:          { type: 'number', nullable: true, example: 4.2 },
+            selfSubmittedAt:     { type: 'string', format: 'date-time', nullable: true },
+            managerRemarks:      { type: 'string', nullable: true, example: 'Strong technical delivery.' },
+            managerRating:       { type: 'number', nullable: true, example: 4.5 },
+            managerSubmittedAt:  { type: 'string', format: 'date-time', nullable: true },
+            hikePercentage:      { type: 'number', nullable: true, example: 12 },
+            hrSignoffStatus:     { type: 'string', enum: ['PENDING_RELEASE', 'RELEASED'], example: 'PENDING_RELEASE' },
+            hrRemarks:           { type: 'string', nullable: true },
+            hrSignedOffAt:       { type: 'string', format: 'date-time', nullable: true },
+            dueDate:             { type: 'string', format: 'date-time', nullable: true },
+            scores:              { type: 'array', items: { $ref: '#/components/schemas/ReviewScore' } },
+            createdAt:           { type: 'string', format: 'date-time' },
+            updatedAt:           { type: 'string', format: 'date-time' },
+          },
+        },
+        ReviewScore: {
+          type: 'object',
+          properties: {
+            id:           { type: 'string' },
+            reviewId:     { type: 'string' },
+            parameterId:  { type: 'string' },
+            selfScore:    { type: 'integer', minimum: 1, maximum: 5, nullable: true, example: 4 },
+            managerScore: { type: 'integer', minimum: 1, maximum: 5, nullable: true, example: 4 },
+            hrScore:      { type: 'integer', minimum: 1, maximum: 5, nullable: true, example: 4 },
+            parameter:    { $ref: '#/components/schemas/AppraisalParameter' },
+          },
+        },
+        UpdateCycleRequest: {
+          type: 'object',
+          properties: {
+            name:      { type: 'string', example: 'FY 2025-2026' },
+            frequency: { type: 'string', enum: ['ANNUAL', 'QUARTERLY', 'MONTHLY'], example: 'QUARTERLY' },
+            startDate: { type: 'string', format: 'date-time', example: '2025-04-01T00:00:00Z' },
+            endDate:   { type: 'string', format: 'date-time', example: '2026-03-31T00:00:00Z' },
+            status:    { type: 'string', enum: ['ACTIVE', 'CLOSED'], example: 'ACTIVE' },
+          },
+        },
+        UpdateParameterRequest: {
+          type: 'object',
+          properties: {
+            name:     { type: 'string', example: 'Leadership & Initiative' },
+            order:    { type: 'integer', minimum: 1, maximum: 20, example: 3 },
+            isActive: { type: 'boolean', example: false },
+          },
+        },
+        ScoreInput: {
+          type: 'object',
+          required: ['parameterId'],
+          properties: {
+            parameterId: { type: 'string', example: 'clparam12345' },
+            selfScore:    { type: 'integer', minimum: 1, maximum: 5, example: 4 },
+            managerScore: { type: 'integer', minimum: 1, maximum: 5, example: 5 },
+            hrScore:      { type: 'integer', minimum: 1, maximum: 5, example: 4 },
+          },
+        },
+        SelfAssessmentRequest: {
+          type: 'object',
+          properties: {
+            selfAccomplishments: { type: 'string', maxLength: 5000, example: 'Completed microservices migration with zero downtime.' },
+            selfWeaknesses:      { type: 'string', maxLength: 5000, example: 'Need to improve async communication during cross-team projects.' },
+            selfRating:          { type: 'number', minimum: 1, maximum: 5, example: 4.2 },
+            submit:              { type: 'boolean', default: false, example: true, description: 'Set to true to finalize and submit (locks the form)' },
+            scores: {
+              type: 'array',
+              items: {
+                type: 'object',
+                required: ['parameterId', 'selfScore'],
+                properties: {
+                  parameterId: { type: 'string', example: 'clparam12345' },
+                  selfScore:   { type: 'integer', minimum: 1, maximum: 5, example: 4 },
+                },
+              },
+            },
+          },
+        },
+        ManagerReviewRequest: {
+          type: 'object',
+          properties: {
+            managerRemarks: { type: 'string', maxLength: 5000, example: 'Consistent high-quality output throughout the cycle.' },
+            managerRating:  { type: 'number', minimum: 1, maximum: 5, example: 4.5 },
+            scores: {
+              type: 'array',
+              items: {
+                type: 'object',
+                required: ['parameterId', 'managerScore'],
+                properties: {
+                  parameterId:  { type: 'string', example: 'clparam12345' },
+                  managerScore: { type: 'integer', minimum: 1, maximum: 5, example: 5 },
+                },
+              },
+            },
+          },
+        },
+        HrAuditRequest: {
+          type: 'object',
+          properties: {
+            hikePercentage:  { type: 'number', minimum: 0, maximum: 100, example: 12 },
+            hrSignoffStatus: { type: 'string', enum: ['PENDING_RELEASE', 'RELEASED'], example: 'RELEASED' },
+            hrRemarks:       { type: 'string', maxLength: 3000, example: 'Compensation review finalized and approved.' },
+            scores: {
+              type: 'array',
+              items: {
+                type: 'object',
+                required: ['parameterId', 'hrScore'],
+                properties: {
+                  parameterId: { type: 'string', example: 'clparam12345' },
+                  hrScore:     { type: 'integer', minimum: 1, maximum: 5, example: 4 },
+                },
+              },
+            },
+          },
+        },
+        PeerNominationRequest: {
+          type: 'object',
+          required: ['reviewerId'],
+          properties: {
+            reviewerId: { type: 'string', example: 'cluser56789', description: 'The ID of the colleague you are nominating to give you feedback' },
+            revieweeId: { type: 'string', example: 'cluser12345', description: 'Optional — defaults to the requesting user' },
+          },
+        },
+        PeerFeedbackRequest: {
+          type: 'object',
+          required: ['rating', 'strengths', 'growthAreas'],
+          properties: {
+            rating:      { type: 'number', minimum: 1, maximum: 5, example: 4.5 },
+            strengths:   { type: 'string', minLength: 10, maxLength: 3000, example: 'Exceptional problem-solver who unblocks teammates quickly.' },
+            growthAreas: { type: 'string', minLength: 10, maxLength: 3000, example: 'Could delegate more to junior team members.' },
+          },
+        },
+        PeerNomination: {
+          type: 'object',
+          properties: {
+            id:         { type: 'string' },
+            cycleId:    { type: 'string' },
+            revieweeId: { type: 'string' },
+            reviewerId: { type: 'string' },
+            status:     { type: 'string', enum: ['PENDING', 'COMPLETED', 'REJECTED'], example: 'PENDING' },
+            createdAt:  { type: 'string', format: 'date-time' },
+          },
+        },
+        PeerFeedbackItem: {
+          type: 'object',
+          properties: {
+            id:          { type: 'string' },
+            rating:      { type: 'number', example: 4.5 },
+            strengths:   { type: 'string', example: 'Outstanding technical contribution.' },
+            growthAreas: { type: 'string', example: 'Needs to improve documentation habits.' },
+            reviewerId:  { type: 'string', nullable: true, description: 'Null for non-CMD users (anonymized)' },
+            createdAt:   { type: 'string', format: 'date-time' },
           },
         },
         SubmitSelfRatingRequest: {
           type: 'object',
-          required: ['rating', 'comments'],
           properties: {
-            cycleId: { type: 'string', example: 'clcycle12345' },
-            rating: { type: 'number', minimum: 1, maximum: 5, example: 4.5 },
-            comments: { type: 'string', example: 'Achieved quarterly sprint targets.' },
+            cycleId:             { type: 'string', example: 'clcycle12345', description: 'Optional appraisal cycle ID. Defaults to active cycle.' },
+            frequency:           { type: 'string', enum: ['ANNUAL', 'QUARTERLY', 'MONTHLY'], example: 'MONTHLY' },
+            periodName:          { type: 'string', example: 'September 2026', description: 'Optional month/quarter/period name' },
+            rating:              { type: 'number', minimum: 1, maximum: 5, example: 4.5, description: 'Overall self-rating (1 to 5)' },
+            comments:            { type: 'string', example: 'Achieved quarterly sprint targets.', description: 'Overall comments' },
+            selfAccomplishments: { type: 'string', example: 'Delivered database migration and microservices architecture.' },
+            selfWeaknesses:      { type: 'string', example: 'Need to improve async documentation habits.' },
+            selfRating:          { type: 'number', minimum: 1, maximum: 5, example: 4.5 },
+            submit:              { type: 'boolean', example: true, description: 'True to submit and lock review, false for draft' },
+            scores: {
+              type: 'array',
+              description: 'Parameter-wise rating scores',
+              items: {
+                type: 'object',
+                required: ['parameterId', 'selfScore'],
+                properties: {
+                  parameterId: { type: 'string', example: 'clparam12345' },
+                  selfScore:   { type: 'integer', minimum: 1, maximum: 5, example: 4 },
+                },
+              },
+            },
           },
         },
         SubmitManagerRatingRequest: {
           type: 'object',
-          required: ['managerRating', 'managerComments'],
           properties: {
-            managerRating: { type: 'number', minimum: 1, maximum: 5, example: 4.8 },
-            managerComments: { type: 'string', example: 'Exceptional leadership and execution.' },
+            managerRating:  { type: 'number', minimum: 1, maximum: 5, example: 4.8, description: 'Overall manager rating (1 to 5)' },
+            managerRemarks: { type: 'string', example: 'Exceptional leadership and execution throughout the cycle.' },
+            managerComments:{ type: 'string', example: 'Exceptional leadership and execution throughout the cycle.' },
+            scores: {
+              type: 'array',
+              description: 'Parameter-wise scores assigned by manager',
+              items: {
+                type: 'object',
+                required: ['parameterId', 'managerScore'],
+                properties: {
+                  parameterId:  { type: 'string', example: 'clparam12345' },
+                  managerScore: { type: 'integer', minimum: 1, maximum: 5, example: 5 },
+                },
+              },
+            },
+          },
+        },
+        UpdateReviewRequest: {
+          type: 'object',
+          description: 'Partial update for a performance review (RBAC governed)',
+          properties: {
+            selfAccomplishments: { type: 'string', maxLength: 5000, example: 'Updated key accomplishments for the month.' },
+            selfWeaknesses:      { type: 'string', maxLength: 5000, example: 'Identified training areas in system architecture.' },
+            selfRating:          { type: 'number', minimum: 1, maximum: 5, example: 4.0 },
+            managerRemarks:      { type: 'string', maxLength: 5000, example: 'Solid execution and team contribution.' },
+            managerRating:       { type: 'number', minimum: 1, maximum: 5, example: 4.5 },
+            status:              { type: 'string', enum: ['DRAFT', 'SUBMITTED', 'MANAGER_REVIEWED', 'COMPLETED'], example: 'SUBMITTED' },
+            hikePercentage:      { type: 'number', minimum: 0, maximum: 100, example: 10.5 },
+          },
+        },
+        AppraisalListResponse: {
+          type: 'object',
+          properties: {
+            reviews: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/PerformanceReview' },
+            },
+            pagination: {
+              type: 'object',
+              properties: {
+                page:        { type: 'integer', example: 1 },
+                limit:       { type: 'integer', example: 10 },
+                total:       { type: 'integer', example: 25 },
+                totalPages:  { type: 'integer', example: 3 },
+                hasNextPage: { type: 'boolean', example: true },
+                hasPrevPage: { type: 'boolean', example: false },
+              },
+            },
+            total:      { type: 'integer', example: 25 },
+            page:       { type: 'integer', example: 1 },
+            totalPages: { type: 'integer', example: 3 },
+          },
+        },
+        SyncGoalsToAppraisalRequest: {
+          type: 'object',
+          properties: {
+            reviewId: { type: 'string', example: 'clreview12345', description: 'Target review ID' },
+            cycleId: { type: 'string', example: 'clcycle12345', description: 'Target cycle ID' },
+            frequency: { type: 'string', enum: ['ANNUAL', 'QUARTERLY', 'MONTHLY'], example: 'MONTHLY' },
+            periodName: { type: 'string', example: 'September 2026' },
+          },
+        },
+        SyncGoalsToAppraisalResponse: {
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: true },
+            message: { type: 'string', example: 'Synchronized 2 goal(s) into appraisal draft successfully' },
+            accomplishmentsText: { type: 'string', example: 'Key Delivered Objectives & Goal Alignments:\n• GOOGLE O AUTH LOGIN (Completed)' },
+            suggestedRating: { type: 'number', example: 5.0 },
+            review: { $ref: '#/components/schemas/PerformanceReview' },
+          },
+        },
+        GoalAlignmentMetrics: {
+          type: 'object',
+          properties: {
+            totalGoals: { type: 'integer', example: 4 },
+            completedGoals: { type: 'integer', example: 3 },
+            inProgressGoals: { type: 'integer', example: 1 },
+            averageProgress: { type: 'number', example: 85 },
+            alignmentScore: { type: 'number', example: 4.3 },
+            milestonesTotal: { type: 'integer', example: 12 },
+            milestonesCompleted: { type: 'integer', example: 10 },
+            completionRate: { type: 'integer', example: 75 },
+          },
+        },
+        GoalAlignmentResponse: {
+          type: 'object',
+          properties: {
+            goals: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/Goal' },
+            },
+            pagination: {
+              type: 'object',
+              properties: {
+                page: { type: 'integer', example: 1 },
+                limit: { type: 'integer', example: 5 },
+                total: { type: 'integer', example: 4 },
+                totalPages: { type: 'integer', example: 1 },
+                hasNextPage: { type: 'boolean', example: false },
+                hasPrevPage: { type: 'boolean', example: false },
+              },
+            },
+            metrics: { $ref: '#/components/schemas/GoalAlignmentMetrics' },
+            employee: { $ref: '#/components/schemas/Employee' },
           },
         },
 
@@ -2163,6 +2453,53 @@ const options = {
           },
         },
       },
+      '/goals/mine': {
+        get: {
+          tags: ['Goals', 'Appraisals'],
+          summary: 'Fetch goals and rollup alignment metrics for employee appraisal with pagination',
+          operationId: 'getMyGoalsForAppraisal',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'employeeId', in: 'query', schema: { type: 'string' }, description: 'Target employee ID (defaults to logged-in user or downline subordinate)' },
+            { name: 'page', in: 'query', schema: { type: 'integer', default: 1 }, description: 'Page number for pagination' },
+            { name: 'limit', in: 'query', schema: { type: 'integer', default: 5 }, description: 'Number of goals per page (max 100)' },
+            { name: 'search', in: 'query', schema: { type: 'string' }, description: 'Search term filtering title, description, or category' },
+            { name: 'status', in: 'query', schema: { type: 'string' }, description: 'Filter by goal status (e.g. COMPLETED, IN_PROGRESS, DRAFT)' },
+            { name: 'category', in: 'query', schema: { type: 'string' }, description: 'Filter by goal category' },
+          ],
+          responses: {
+            200: {
+              description: 'Exact created goals with pagination and rollup alignment metrics',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/GoalAlignmentResponse' } } },
+            },
+            400: { description: 'Validation failed' },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Access forbidden — target user is not in reporting downline' },
+            404: { description: 'Target employee not found in organization' },
+          },
+        },
+      },
+      '/goals/sync-to-appraisal': {
+        post: {
+          tags: ['Goals', 'Appraisals'],
+          summary: 'Synchronize completed and active goals into employee self-assessment accomplishments',
+          operationId: 'syncGoalsToAppraisal',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: false,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/SyncGoalsToAppraisalRequest' } } },
+          },
+          responses: {
+            200: {
+              description: 'Goals successfully formatted and appended to self-appraisal draft',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/SyncGoalsToAppraisalResponse' } } },
+            },
+            400: { description: 'Validation failed or no goals found to sync' },
+            401: { description: 'Unauthorized' },
+            404: { description: 'Review record not found' },
+          },
+        },
+      },
       '/goals/{id}': {
         delete: {
           tags: ['Goals'],
@@ -3004,71 +3341,6 @@ const options = {
         },
       },
 
-      // ── Appraisals Endpoints ──
-      '/appraisals/submit': {
-        post: {
-          tags: ['Appraisals'],
-          summary: 'Submit employee self-rating for an active appraisal cycle',
-          operationId: 'submitSelfRating',
-          security: [{ userCookie: [] }],
-          requestBody: {
-            required: true,
-            content: { 'application/json': { schema: { $ref: '#/components/schemas/SubmitSelfRatingRequest' } } },
-          },
-          responses: {
-            200: {
-              description: 'Self-rating submitted successfully',
-              content: { 'application/json': { schema: { $ref: '#/components/schemas/AppraisalReview' } } },
-            },
-            400: { description: 'Validation error or cycle closed' },
-            401: { description: 'Unauthorized' },
-          },
-        },
-      },
-      '/appraisals/{id}/manager-review': {
-        patch: {
-          tags: ['Appraisals'],
-          summary: 'Submit manager review and evaluation for employee appraisal',
-          operationId: 'submitManagerRating',
-          security: [{ userCookie: [] }],
-          parameters: [
-            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Appraisal Review ID' },
-          ],
-          requestBody: {
-            required: true,
-            content: { 'application/json': { schema: { $ref: '#/components/schemas/SubmitManagerRatingRequest' } } },
-          },
-          responses: {
-            200: {
-              description: 'Manager review saved',
-              content: { 'application/json': { schema: { $ref: '#/components/schemas/AppraisalReview' } } },
-            },
-            400: { description: 'Self-rating not completed' },
-            403: { description: 'Access forbidden: not assigned manager' },
-            404: { description: 'Appraisal review not found' },
-          },
-        },
-      },
-      '/appraisals': {
-        get: {
-          tags: ['Appraisals'],
-          summary: 'List appraisal reviews for employee or manager direct reports',
-          operationId: 'listAppraisals',
-          security: [{ userCookie: [] }],
-          responses: {
-            200: {
-              description: 'Appraisal reviews retrieved',
-              content: {
-                'application/json': {
-                  schema: { type: 'array', items: { $ref: '#/components/schemas/AppraisalReview' } },
-                },
-              },
-            },
-            401: { description: 'Unauthorized' },
-          },
-        },
-      },
-
       // ── External Reviews Endpoints ──
       '/reviews/request': {
         post: {
@@ -3573,9 +3845,965 @@ const options = {
           },
         },
       },
+
+      // ── Appraisal Module Paths ─────────────────────────────────────────────
+
+      '/appraisals/submit': {
+        post: {
+          tags: ['Appraisals'],
+          summary: 'Submit employee self-rating for an active appraisal cycle',
+          description: 'Submit or save employee self-assessment and ratings for the active appraisal cycle. Auto-creates review if not present.',
+          operationId: 'submitSelfRating',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/SubmitSelfRatingRequest' },
+                example: {
+                  rating: 4.5,
+                  comments: 'Achieved quarterly sprint targets and led microservices migration.',
+                  selfAccomplishments: 'Delivered database migration on time with zero downtime.',
+                  selfWeaknesses: 'Need to improve async documentation habits.',
+                  submit: true,
+                  scores: [
+                    { parameterId: 'clparam12345', selfScore: 4 },
+                    { parameterId: 'clparam67890', selfScore: 5 },
+                  ],
+                },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: 'Self-rating submitted successfully',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/PerformanceReview' } } },
+            },
+            400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+            401: { description: 'Unauthorized' },
+          },
+        },
+      },
+      '/appraisals/{id}/manager-review': {
+        patch: {
+          tags: ['Appraisals'],
+          summary: 'Submit manager review and evaluation for employee appraisal',
+          description: 'Submit manager remarks and parameter scores for an employee performance review.',
+          operationId: 'submitManagerRating',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Performance Review ID' },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/SubmitManagerRatingRequest' },
+                example: {
+                  managerRating: 4.8,
+                  managerRemarks: 'Exceptional leadership and execution throughout the cycle. Exceeded SLA targets.',
+                  scores: [
+                    { parameterId: 'clparam12345', managerScore: 5 },
+                    { parameterId: 'clparam67890', managerScore: 4 },
+                  ],
+                },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: 'Manager review saved successfully',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/PerformanceReview' } } },
+            },
+            400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+            403: { description: 'Access forbidden: not assigned manager' },
+            404: { description: 'Review not found' },
+          },
+        },
+      },
+      '/appraisals': {
+        get: {
+          tags: ['Appraisals'],
+          summary: 'List appraisal reviews for employee or manager direct reports',
+          description: 'Retrieve all appraisal reviews across cycles for the authenticated user.',
+          operationId: 'listAppraisals',
+          security: [{ userCookie: [] }],
+          responses: {
+            200: {
+              description: 'Appraisal reviews retrieved',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      reviews: { type: 'array', items: { $ref: '#/components/schemas/PerformanceReview' } },
+                    },
+                  },
+                },
+              },
+            },
+            401: { description: 'Unauthorized' },
+          },
+        },
+      },
+
+      // ───── Appraisals & Performance Reviews ─────
+      '/appraisals/submit': {
+        post: {
+          tags: ['Appraisals'],
+          summary: 'Submit employee self-rating, accomplishments, and parameter scores',
+          description: 'Submits or saves draft for employee self-assessment. Links automatically to the active monthly, quarterly, or annual cycle.',
+          operationId: 'submitSelfRating',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/SubmitSelfRatingRequest' },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: 'Appraisal review recorded / updated',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/PerformanceReview' },
+                },
+              },
+            },
+            400: { description: 'Validation failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+            401: { description: 'Unauthorized' },
+          },
+        },
+      },
+      '/appraisals': {
+        get: {
+          tags: ['Appraisals'],
+          summary: 'List my appraisal submissions with pagination and search filter',
+          operationId: 'listAppraisals',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'page', in: 'query', schema: { type: 'integer', default: 1 }, description: 'Page number' },
+            { name: 'limit', in: 'query', schema: { type: 'integer', default: 10 }, description: 'Items per page (max 100)' },
+            { name: 'search', in: 'query', schema: { type: 'string' }, description: 'Search across cycle name, accomplishments, remarks' },
+            { name: 'frequency', in: 'query', schema: { type: 'string', enum: ['ANNUAL', 'QUARTERLY', 'MONTHLY'] }, description: 'Filter by cycle frequency' },
+            { name: 'status', in: 'query', schema: { type: 'string', enum: ['DRAFT', 'SUBMITTED', 'MANAGER_REVIEWED', 'COMPLETED'] }, description: 'Filter by review status' },
+          ],
+          responses: {
+            200: {
+              description: 'Paginated list of appraisals',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/AppraisalListResponse' },
+                },
+              },
+            },
+            401: { description: 'Unauthorized' },
+          },
+        },
+      },
+      '/appraisals/{id}': {
+        get: {
+          tags: ['Appraisals'],
+          summary: 'Get full appraisal breakdown by ID with employee profile and scores',
+          operationId: 'getAppraisalById',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: {
+            200: {
+              description: 'Complete appraisal breakdown',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      review: { $ref: '#/components/schemas/PerformanceReview' },
+                    },
+                  },
+                },
+              },
+            },
+            404: { description: 'Appraisal not found' },
+          },
+        },
+        patch: {
+          tags: ['Appraisals'],
+          summary: 'Update appraisal review fields (RBAC governed)',
+          operationId: 'updateAppraisalReview',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/UpdateReviewRequest' },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: 'Updated review record',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      success: { type: 'boolean', example: true },
+                      review: { $ref: '#/components/schemas/PerformanceReview' },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: 'Validation error' },
+            403: { description: 'Access denied: Insufficient permissions' },
+            404: { description: 'Appraisal not found' },
+          },
+        },
+        delete: {
+          tags: ['Appraisals'],
+          summary: 'Delete appraisal review record (Employee owner, Manager, or Admin)',
+          operationId: 'deleteAppraisalReview',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: {
+            200: {
+              description: 'Appraisal review deleted successfully',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      success: { type: 'boolean', example: true },
+                      message: { type: 'string', example: 'Appraisal review record deleted successfully.' },
+                      deletedId: { type: 'string' },
+                    },
+                  },
+                },
+              },
+            },
+            403: { description: 'Access denied' },
+            404: { description: 'Review not found' },
+          },
+        },
+      },
+      '/appraisals/{id}/manager-review': {
+        patch: {
+          tags: ['Appraisals'],
+          summary: 'Submit manager review for an employee appraisal',
+          operationId: 'submitManagerRatingForAppraisal',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/SubmitManagerRatingRequest' },
+              },
+            },
+          },
+          responses: {
+            200: { description: 'Manager evaluation saved', content: { 'application/json': { schema: { $ref: '#/components/schemas/PerformanceReview' } } } },
+            400: { description: 'Validation error' },
+            403: { description: 'Forbidden' },
+            404: { description: 'Review not found' },
+          },
+        },
+      },
+      '/performance-reviews/{id}': {
+        get: {
+          tags: ['Appraisals'],
+          summary: 'Get performance review by ID',
+          operationId: 'getPerformanceReviewById',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: {
+            200: { description: 'Review breakdown', content: { 'application/json': { schema: { type: 'object', properties: { review: { $ref: '#/components/schemas/PerformanceReview' } } } } } },
+            404: { description: 'Review not found' },
+          },
+        },
+        patch: {
+          tags: ['Appraisals'],
+          summary: 'Update performance review metadata (RBAC)',
+          operationId: 'updatePerformanceReviewById',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/UpdateReviewRequest' },
+              },
+            },
+          },
+          responses: {
+            200: { description: 'Review updated', content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, review: { $ref: '#/components/schemas/PerformanceReview' } } } } } },
+            403: { description: 'Access denied' },
+            404: { description: 'Review not found' },
+          },
+        },
+        delete: {
+          tags: ['Appraisals'],
+          summary: 'Delete performance review by ID',
+          operationId: 'deletePerformanceReviewById',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: {
+            200: { description: 'Review deleted', content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, message: { type: 'string' } } } } } },
+            403: { description: 'Access denied' },
+            404: { description: 'Review not found' },
+          },
+        },
+      },
+
+      '/appraisal-cycles/active': {
+        get: {
+          tags: ['Appraisals'],
+          summary: 'Get active appraisal cycle with parameters (supports dynamic cadence & month)',
+          operationId: 'getActiveCycle',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'frequency', in: 'query', schema: { type: 'string', enum: ['MONTHLY', 'QUARTERLY', 'ANNUAL'], default: 'MONTHLY' }, description: 'Appraisal cadence' },
+            { name: 'period', in: 'query', schema: { type: 'string' }, description: 'Specific month/quarter period name, e.g. "September 2026"' },
+            { name: 'cycleId', in: 'query', schema: { type: 'string' }, description: 'Target cycle ID' },
+          ],
+          responses: {
+            200: {
+              description: 'Active cycle with parameters and available cycles',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      cycle: { $ref: '#/components/schemas/AppraisalCycle' },
+                      parameters: { type: 'array', items: { $ref: '#/components/schemas/AppraisalParameter' } },
+                      availableCycles: { type: 'array', items: { $ref: '#/components/schemas/AppraisalCycle' } },
+                      currentPeriods: {
+                        type: 'object',
+                        properties: {
+                          monthly: { type: 'object' },
+                          quarterly: { type: 'object' },
+                          annual: { type: 'object' },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            401: { description: 'Unauthorized' },
+          },
+        },
+      },
+      '/appraisal-cycles/{id}': {
+        patch: {
+          tags: ['Appraisals'],
+          summary: 'Update cycle settings (HR / SUPER_ADMIN / CMD only)',
+          operationId: 'updateCycle',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/UpdateCycleRequest' },
+                example: {
+                  name: 'FY 2025-2026',
+                  frequency: 'ANNUAL',
+                  startDate: '2025-04-01T00:00:00.000Z',
+                  endDate: '2026-03-31T00:00:00.000Z',
+                  status: 'ACTIVE',
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: 'Updated cycle', content: { 'application/json': { schema: { $ref: '#/components/schemas/AppraisalCycle' } } } },
+            400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+            403: { description: 'Forbidden — insufficient role' },
+            404: { description: 'Cycle not found' },
+          },
+        },
+      },
+      '/appraisal-parameters/{id}': {
+        patch: {
+          tags: ['Appraisals'],
+          summary: 'Enable / disable or rename a rating parameter (HR / SUPER_ADMIN / CMD only)',
+          operationId: 'updateParameter',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/UpdateParameterRequest' },
+                example: {
+                  name: 'Leadership & Initiative',
+                  order: 3,
+                  isActive: true,
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: 'Updated parameter', content: { 'application/json': { schema: { $ref: '#/components/schemas/AppraisalParameter' } } } },
+            400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+            403: { description: 'Forbidden' },
+            404: { description: 'Parameter not found' },
+          },
+        },
+      },
+      '/performance-reviews/mine': {
+        get: {
+          tags: ['Appraisals'],
+          summary: 'Get my performance review for current or specified cadence/period',
+          operationId: 'getMyReview',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'frequency', in: 'query', schema: { type: 'string', enum: ['MONTHLY', 'QUARTERLY', 'ANNUAL'] } },
+            { name: 'period', in: 'query', schema: { type: 'string' } },
+            { name: 'cycleId', in: 'query', schema: { type: 'string' } },
+          ],
+          responses: {
+            200: {
+              description: 'Review and active parameters',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      review: { $ref: '#/components/schemas/PerformanceReview' },
+                      activeParameters: { type: 'array', items: { $ref: '#/components/schemas/AppraisalParameter' } },
+                    },
+                  },
+                },
+              },
+            },
+            401: { description: 'Unauthorized' },
+          },
+        },
+      },
+      '/performance-reviews/mine/all': {
+        get: {
+          tags: ['Appraisals'],
+          summary: 'Get all my reviews across all cycles with pagination & search',
+          operationId: 'getMyAllReviews',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'page', in: 'query', schema: { type: 'integer', default: 1 } },
+            { name: 'limit', in: 'query', schema: { type: 'integer', default: 10 } },
+            { name: 'search', in: 'query', schema: { type: 'string' } },
+            { name: 'frequency', in: 'query', schema: { type: 'string', enum: ['ANNUAL', 'QUARTERLY', 'MONTHLY'] } },
+            { name: 'status', in: 'query', schema: { type: 'string', enum: ['DRAFT', 'SUBMITTED', 'MANAGER_REVIEWED', 'COMPLETED'] } },
+          ],
+          responses: {
+            200: {
+              description: 'Paginated performance review list',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/AppraisalListResponse' },
+                },
+              },
+            },
+            401: { description: 'Unauthorized' },
+          },
+        },
+      },
+      '/performance-reviews/{id}/self': {
+        patch: {
+          tags: ['Appraisals'],
+          summary: 'Save or submit self assessment (employee only — own review)',
+          description: 'Call this endpoint to save progress (submit=false) or finalize (submit=true). Get the review ID from GET /performance-reviews/mine, and parameter IDs from the activeParameters array.',
+          operationId: 'updateSelfAssessment',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Performance Review ID — get from GET /performance-reviews/mine' }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/SelfAssessmentRequest' },
+                example: {
+                  selfAccomplishments: 'Delivered the full database migration with zero downtime. Led architecture design for the new microservices layer.',
+                  selfWeaknesses: 'Need to improve async communication and documentation during cross-team projects.',
+                  scores: [
+                    { parameterId: '<get from GET /performance-reviews/mine → activeParameters[0].id>', selfScore: 4 },
+                    { parameterId: '<activeParameters[1].id>', selfScore: 5 },
+                    { parameterId: '<activeParameters[2].id>', selfScore: 3 },
+                    { parameterId: '<activeParameters[3].id>', selfScore: 4 },
+                    { parameterId: '<activeParameters[4].id>', selfScore: 5 },
+                  ],
+                  submit: false,
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: 'Updated performance review', content: { 'application/json': { schema: { $ref: '#/components/schemas/PerformanceReview' } } } },
+            400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+            403: { description: 'Forbidden — can only update own self-assessment' },
+            404: { description: 'Review not found' },
+          },
+        },
+      },
+      '/goals/mine': {
+        get: {
+          tags: ['Appraisals', 'Goals'],
+          summary: 'Get goals aligned with performance review (with rollup metrics & completion statistics)',
+          operationId: 'getAppraisalGoals',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'employeeId', in: 'query', schema: { type: 'string' }, description: 'Target employee ID (defaults to current user)' },
+          ],
+          responses: {
+            200: {
+              description: 'Goals alignment list with rollup completion metrics',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      goals: { type: 'array', items: { $ref: '#/components/schemas/Goal' } },
+                      metrics: {
+                        type: 'object',
+                        properties: {
+                          totalGoals: { type: 'integer', example: 5 },
+                          completedGoals: { type: 'integer', example: 3 },
+                          inProgressGoals: { type: 'integer', example: 2 },
+                          averageProgress: { type: 'integer', example: 78 },
+                          alignmentScore: { type: 'number', example: 4.2 },
+                          completionRate: { type: 'integer', example: 60 },
+                          milestonesTotal: { type: 'integer', example: 14 },
+                          milestonesCompleted: { type: 'integer', example: 11 },
+                        },
+                      },
+                      employee: { $ref: '#/components/schemas/Employee' },
+                    },
+                  },
+                },
+              },
+            },
+            401: { description: 'Unauthorized' },
+          },
+        },
+      },
+      '/goals/sync-to-appraisal': {
+        post: {
+          tags: ['Appraisals', 'Goals'],
+          summary: 'Synchronize completed goals directly into employee appraisal accomplishments',
+          operationId: 'syncGoalsToAppraisal',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    reviewId: { type: 'string' },
+                    frequency: { type: 'string', enum: ['MONTHLY', 'QUARTERLY', 'ANNUAL'] },
+                    periodName: { type: 'string' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: 'Accomplishments synchronized into performance review',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      success: { type: 'boolean', example: true },
+                      message: { type: 'string' },
+                      accomplishmentsText: { type: 'string' },
+                      suggestedRating: { type: 'number', example: 4.2 },
+                      review: { $ref: '#/components/schemas/PerformanceReview' },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: 'No goals found to sync' },
+            401: { description: 'Unauthorized' },
+          },
+        },
+      },
+      '/performance-reviews/employee/{employeeId}': {
+        get: {
+          tags: ['Appraisals'],
+          summary: 'Get a direct report\'s review (Manager / HR / CMD)',
+          operationId: 'getEmployeeReviewForManager',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'employeeId', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'cycleId', in: 'query', schema: { type: 'string' }, description: 'Defaults to the active cycle' },
+          ],
+          responses: {
+            200: { description: 'Review and parameters', content: { 'application/json': { schema: { type: 'object', properties: { review: { $ref: '#/components/schemas/PerformanceReview' }, activeParameters: { type: 'array', items: { $ref: '#/components/schemas/AppraisalParameter' } } } } } } },
+            403: { description: 'Forbidden — not the manager of this employee' },
+            404: { description: 'Employee not found' },
+          },
+        },
+      },
+      '/performance-reviews/{id}/manager': {
+        patch: {
+          tags: ['Appraisals'],
+          summary: 'Submit manager evaluation for a direct report (Manager / HR / CMD)',
+          description: 'Get the review ID from GET /performance-reviews/employee/{employeeId}. Use the activeParameters from the same response for parameterId values.',
+          operationId: 'updateManagerReview',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Performance Review ID — get from GET /performance-reviews/employee/{employeeId}' }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/ManagerReviewRequest' },
+                example: {
+                  managerRemarks: 'Consistent high-quality delivery throughout the cycle. Showed strong initiative during the platform migration. Needs to improve cross-team communication.',
+                  scores: [
+                    { parameterId: '<activeParameters[0].id>', managerScore: 5 },
+                    { parameterId: '<activeParameters[1].id>', managerScore: 4 },
+                    { parameterId: '<activeParameters[2].id>', managerScore: 4 },
+                    { parameterId: '<activeParameters[3].id>', managerScore: 5 },
+                    { parameterId: '<activeParameters[4].id>', managerScore: 4 },
+                  ],
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: 'Updated review', content: { 'application/json': { schema: { $ref: '#/components/schemas/PerformanceReview' } } } },
+            400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+            403: { description: 'Forbidden' },
+            404: { description: 'Review not found' },
+          },
+        },
+      },
+      '/performance-reviews/{employeeId}/hr-audit': {
+        get: {
+          tags: ['Appraisals'],
+          summary: 'Get HR audit view for an employee\'s review (HR / SUPER_ADMIN / CMD)',
+          operationId: 'getHrAuditReview',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'employeeId', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'cycleId', in: 'query', schema: { type: 'string' } },
+          ],
+          responses: {
+            200: { description: 'Review with HR audit fields', content: { 'application/json': { schema: { $ref: '#/components/schemas/PerformanceReview' } } } },
+            403: { description: 'Forbidden' },
+            404: { description: 'Employee not found' },
+          },
+        },
+      },
+      '/performance-reviews/{id}/hr-audit': {
+        patch: {
+          tags: ['Appraisals'],
+          summary: 'Set hike %, HR scores, and release sign-off (HR / SUPER_ADMIN)',
+          description: 'Step 1: Save hike and HR scores (hrSignoffStatus omitted or PENDING_RELEASE). Step 2: Release the appraisal by setting hrSignoffStatus=RELEASED — this is irreversible and notifies the employee.',
+          operationId: 'updateHrAuditReview',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Performance Review ID — get from GET /performance-reviews/{employeeId}/hr-audit' }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/HrAuditRequest' },
+                example: {
+                  hikePercentage: 12,
+                  hrRemarks: 'Strong performance — compensation reviewed and approved by leadership.',
+                  hrSignoffStatus: 'PENDING_RELEASE',
+                  scores: [
+                    { parameterId: '<activeParameters[0].id>', hrScore: 5 },
+                    { parameterId: '<activeParameters[1].id>', hrScore: 4 },
+                    { parameterId: '<activeParameters[2].id>', hrScore: 4 },
+                    { parameterId: '<activeParameters[3].id>', hrScore: 5 },
+                    { parameterId: '<activeParameters[4].id>', hrScore: 4 },
+                  ],
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: 'Updated review with hike details', content: { 'application/json': { schema: { $ref: '#/components/schemas/PerformanceReview' } } } },
+            400: { description: 'Validation error or review already released', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+            403: { description: 'Forbidden' },
+            409: { description: 'Audit sign-off already released — immutable' },
+          },
+        },
+      },
+      '/peer-nominations': {
+        post: {
+          tags: ['Appraisals'],
+          summary: 'Nominate a colleague to give you peer feedback',
+          description: 'Nominate a colleague to leave anonymous 360° feedback about you. Get the reviewerId from GET /team/direct-reports or the employee directory. One nomination per reviewer per cycle.',
+          operationId: 'createPeerNomination',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/PeerNominationRequest' },
+                example: {
+                  reviewerId: 'cmtuser98765abcde',
+                },
+              },
+            },
+          },
+          responses: {
+            201: { description: 'Nomination created', content: { 'application/json': { schema: { $ref: '#/components/schemas/PeerNomination' } } } },
+            400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+            409: { description: 'Nomination already exists for this cycle' },
+          },
+        },
+      },
+      '/peer-nominations/pending-for-me': {
+        get: {
+          tags: ['Appraisals'],
+          summary: 'List peer feedback requests assigned to me (pending)',
+          operationId: 'getPendingNominationsForMe',
+          security: [{ userCookie: [] }],
+          responses: {
+            200: {
+              description: 'Pending nominations',
+              content: { 'application/json': { schema: { type: 'object', properties: { nominations: { type: 'array', items: { $ref: '#/components/schemas/PeerNomination' } } } } } },
+            },
+          },
+        },
+      },
+      '/peer-nominations/{id}/feedback': {
+        post: {
+          tags: ['Appraisals'],
+          summary: 'Submit peer feedback for a nomination assigned to me',
+          description: 'Get the nomination ID from GET /peer-nominations/pending-for-me. Once submitted, cannot be changed. Reviewer identity is anonymized for the reviewee (non-CMD).',
+          operationId: 'submitPeerFeedback',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Nomination ID — get from GET /peer-nominations/pending-for-me' }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/PeerFeedbackRequest' },
+                example: {
+                  rating: 4.5,
+                  strengths: 'Exceptional problem-solver who consistently unblocks teammates. Great at breaking down complex backend issues and explaining them clearly.',
+                  growthAreas: 'Could improve on proactive communication during sprint planning. Sometimes takes on too much solo and misses delegation opportunities.',
+                },
+              },
+            },
+          },
+          responses: {
+            201: { description: 'Feedback submitted successfully' },
+            400: { description: 'Validation error or feedback already submitted', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+            403: { description: 'Forbidden — not the assigned reviewer' },
+            404: { description: 'Nomination not found' },
+          },
+        },
+      },
+      '/peer-feedback/received-by-me': {
+        get: {
+          tags: ['Appraisals'],
+          summary: 'Get peer feedback received by me (reviewer identities masked for non-CMD)',
+          operationId: 'getReceivedPeerFeedback',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'cycleId', in: 'query', schema: { type: 'string' }, description: 'Defaults to active cycle' }],
+          responses: {
+            200: {
+              description: 'Anonymized peer feedback items',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      count: { type: 'integer', example: 3 },
+                      averageRating: { type: 'string', example: '4.3' },
+                      items: { type: 'array', items: { $ref: '#/components/schemas/PeerFeedbackItem' } },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      '/cmd/peer-feedback/{employeeId}': {
+        get: {
+          tags: ['Appraisals'],
+          summary: 'CMD / SUPER_ADMIN: view all peer feedback (with reviewer identities) for an employee',
+          operationId: 'getCmdPeerFeedback',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'employeeId', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'cycleId', in: 'query', schema: { type: 'string' } },
+          ],
+          responses: {
+            200: { description: 'Full peer feedback with reviewer identities', content: { 'application/json': { schema: { type: 'object', properties: { count: { type: 'integer' }, averageRating: { type: 'string' }, items: { type: 'array', items: { $ref: '#/components/schemas/PeerFeedbackItem' } } } } } } },
+            403: { description: 'Forbidden — CMD or SUPER_ADMIN only' },
+          },
+        },
+      },
+      '/team/direct-reports': {
+        get: {
+          tags: ['Appraisals'],
+          summary: 'List direct reports (Manager sees own team; HR/CMD sees all active employees)',
+          operationId: 'getDirectReports',
+          security: [{ userCookie: [] }],
+          responses: {
+            200: {
+              description: 'List of direct reports',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      directReports: { type: 'array', items: { $ref: '#/components/schemas/Employee' } },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+
+      // ───── Appraisals & Performance Reviews ─────
+      '/appraisals': {
+        get: {
+          tags: ['Appraisals'],
+          summary: 'List all appraisal reviews and submission history with pagination and search',
+          operationId: 'listAppraisals',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'page', in: 'query', schema: { type: 'integer', default: 1 }, description: 'Page number' },
+            { name: 'limit', in: 'query', schema: { type: 'integer', default: 10 }, description: 'Items per page (max 100)' },
+            { name: 'search', in: 'query', schema: { type: 'string' }, description: 'Search cycle name, accomplishments, or remarks' },
+            { name: 'frequency', in: 'query', schema: { type: 'string', enum: ['ANNUAL', 'QUARTERLY', 'MONTHLY'] } },
+            { name: 'status', in: 'query', schema: { type: 'string', enum: ['DRAFT', 'SUBMITTED', 'MANAGER_REVIEWED', 'COMPLETED'] } },
+          ],
+          responses: {
+            200: {
+              description: 'Appraisal submissions history',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/AppraisalListResponse' } } },
+            },
+            400: { description: 'Validation failed' },
+            401: { description: 'Unauthorized' },
+          },
+        },
+      },
+      '/appraisals/submit': {
+        post: {
+          tags: ['Appraisals'],
+          summary: 'Submit employee self-rating or save draft for active cycle',
+          operationId: 'submitSelfRating',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/SubmitSelfRatingRequest' } } },
+          },
+          responses: {
+            200: {
+              description: 'Self rating saved or submitted successfully',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/PerformanceReview' } } },
+            },
+            400: { description: 'Validation failed' },
+            401: { description: 'Unauthorized' },
+          },
+        },
+      },
+      '/appraisals/{id}': {
+        get: {
+          tags: ['Appraisals'],
+          summary: 'Get detailed performance review by ID with scores and signoffs',
+          operationId: 'getAppraisalById',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Review ID' },
+          ],
+          responses: {
+            200: {
+              description: 'Review details with computed parameter score averages',
+              content: { 'application/json': { schema: { type: 'object', properties: { review: { $ref: '#/components/schemas/PerformanceReview' } } } } },
+            },
+            400: { description: 'Invalid review ID' },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden' },
+            404: { description: 'Performance review not found' },
+          },
+        },
+        patch: {
+          tags: ['Appraisals'],
+          summary: 'Update review metadata, comments, or ratings (RBAC enforced)',
+          operationId: 'updateAppraisalReview',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Review ID' },
+          ],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/UpdateReviewRequest' } } },
+          },
+          responses: {
+            200: {
+              description: 'Review updated successfully',
+              content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean', example: true }, review: { $ref: '#/components/schemas/PerformanceReview' } } } } },
+            },
+            400: { description: 'Validation failed' },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden' },
+            404: { description: 'Review not found' },
+          },
+        },
+        delete: {
+          tags: ['Appraisals'],
+          summary: 'Delete an appraisal review record (owner, direct manager, HR/Admin)',
+          operationId: 'deleteAppraisalReview',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Review ID' },
+          ],
+          responses: {
+            200: {
+              description: 'Review deleted successfully',
+              content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean', example: true }, message: { type: 'string' }, deletedId: { type: 'string' } } } } },
+            },
+            400: { description: 'Invalid review ID' },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden — not authorized to delete' },
+            404: { description: 'Review not found' },
+          },
+        },
+      },
+      '/appraisals/{id}/manager-review': {
+        patch: {
+          tags: ['Appraisals'],
+          summary: 'Submit manager review evaluation scores and remarks',
+          operationId: 'submitManagerAppraisalRating',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Review ID' },
+          ],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/SubmitManagerRatingRequest' } } },
+          },
+          responses: {
+            200: {
+              description: 'Manager review saved successfully',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/PerformanceReview' } } },
+            },
+            400: { description: 'Validation failed' },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden — not direct manager' },
+            404: { description: 'Review not found' },
+          },
+        },
+      },
     },
   },
   apis: [], // We defined everything inline, no JSDoc annotations needed
+
 };
 
 export const swaggerSpec = swaggerJsdoc(options);

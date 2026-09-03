@@ -17,6 +17,10 @@ import {
   resubmitGoal,
 } from '../controllers/goal.controller.js';
 import {
+  getMyGoals,
+  syncGoalsToAppraisal,
+} from '../controllers/appraisal.controller.js';
+import {
   addGoalComment,
   listGoalComments,
   listGoalAudit,
@@ -36,6 +40,8 @@ router.get('/goals/assignable-users', requireAuth, requireTenant, getAssignableU
 // ── Goal CRUD ──────────────────────────────────────────────────────────────
 router.post('/goals', requireAuth, requireTenant, createGoal);
 router.get('/goals', requireAuth, requireTenant, listGoals);
+router.get('/goals/mine', requireAuth, requireTenant, getMyGoals);
+router.post('/goals/sync-to-appraisal', requireAuth, requireTenant, syncGoalsToAppraisal);
 router.get('/goals/:id', requireAuth, requireTenant, getGoalById);
 router.patch('/goals/:id', requireAuth, requireTenant, updateGoal);
 router.delete('/goals/:id', requireAuth, requireTenant, deleteGoal);

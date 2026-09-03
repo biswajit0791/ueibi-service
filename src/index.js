@@ -10,6 +10,7 @@ initSocket(server);
 server.listen(env.port, async () => {
   console.log(`\n UEIBI Server listening on port ${env.port} [${env.nodeEnv}]`);
   console.log(` Socket.IO: Real-time synchronization active on port ${env.port}`);
+  // Nodemon reload triggered cleanly
 
   // ── Database health check ──
   try {

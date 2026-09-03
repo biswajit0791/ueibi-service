@@ -6,7 +6,7 @@ import { createTaskSchema, updateTaskSchema } from '../validations/task.schema.j
 // ─── Helper: resolve & authorise target employee ───────────────────────────
 // Returns the TenantUser record that will own the task.
 // Verifies the employee belongs to the SAME tenant as the requesting user.
-async function resolveTargetEmployee(requestingUser, tenantId, employeeId) {
+async function resolveTargetEmployee(requestingUser, tenantId, employeeId, isDependency = false, goalId = null) {
   // If no employeeId supplied → default to the requesting user themselves
   if (!employeeId) {
     return { id: requestingUser.id };
@@ -26,19 +26,38 @@ async function resolveTargetEmployee(requestingUser, tenantId, employeeId) {
     throw { status: 403, message: 'Access forbidden: target employee not found in your organisation' };
   }
 
-  // Only HR/Admin/Super-admin can assign across the org freely
-  // Managers can only assign to their direct subordinates
-  const allowedRoles = ['SUPER_ADMIN', 'ADMIN', 'HR'];
-  if (!allowedRoles.includes(requestingUser.role)) {
-    const subordinate = await prisma.tenantUser.findFirst({
-      where: { id: employeeId, managerId: requestingUser.id },
+  // Elevated roles can assign across the org freely
+  const allowedRoles = ['SUPER_ADMIN', 'ADMIN', 'HR', 'LEADERSHIP', 'OWNER', 'CMD', 'DIRECTOR'];
+  if (allowedRoles.includes(requestingUser.role?.toUpperCase())) {
+    return targetUser;
+  }
+
+  // If this is a peer dependency task, allow creating dependency request on colleague within the same organization
+  if (isDependency) {
+    return targetUser;
+  }
+
+  // If adding a task to a goal the requesting user owns or manages
+  if (goalId) {
+    const goal = await prisma.goal.findFirst({
+      where: { id: goalId, tenantId },
     });
-    if (!subordinate) {
-      throw { status: 403, message: 'Access forbidden: you are not authorised to assign tasks to this employee' };
+    if (goal && (goal.employeeId === requestingUser.id || goal.employeeId === employeeId)) {
+      return targetUser;
     }
   }
 
-  return targetUser;
+  // Managers can assign to their subordinates
+  if (requestingUser.role === 'MANAGER') {
+    const subordinate = await prisma.tenantUser.findFirst({
+      where: { id: employeeId, managerId: requestingUser.id, tenantId },
+    });
+    if (subordinate) {
+      return targetUser;
+    }
+  }
+
+  throw { status: 403, message: 'Access forbidden: you are not authorised to assign tasks to this employee' };
 }
 
 // ─── Helper: assert task exists & requester owns/manages it ────────────────
@@ -46,8 +65,8 @@ async function assertTaskOwner(id, requestingUser, tenantId) {
   const task = await prisma.task.findFirst({ where: { id, tenantId } });
   if (!task) throw { status: 404, message: 'Task not found' };
 
-  const allowedRoles = ['SUPER_ADMIN', 'ADMIN', 'HR', 'LEADERSHIP', 'OWNER'];
-  if (allowedRoles.includes(requestingUser.role)) {
+  const allowedRoles = ['SUPER_ADMIN', 'ADMIN', 'HR', 'LEADERSHIP', 'OWNER', 'CMD', 'DIRECTOR'];
+  if (allowedRoles.includes(requestingUser.role?.toUpperCase())) {
     return task;
   }
 
@@ -164,7 +183,7 @@ export async function createTask(req, res, next) {
     // 4. Resolve and authorise the target employee (cross-tenant guard inside)
     let target;
     try {
-      target = await resolveTargetEmployee(req.user, tenantId, employeeId);
+      target = await resolveTargetEmployee(req.user, tenantId, employeeId, !!isDependencyOf, goalId);
     } catch (e) {
       return res.status(e.status || 500).json({ success: false, message: e.message });
     }
@@ -424,10 +443,10 @@ export async function updateTask(req, res, next) {
     });
     if (!existing) return;
 
-    const allowedRoles = ['SUPER_ADMIN', 'ADMIN', 'HR', 'LEADERSHIP', 'OWNER'];
-    const isElevated = allowedRoles.includes(req.user.role);
+    const allowedRoles = ['SUPER_ADMIN', 'ADMIN', 'HR', 'LEADERSHIP', 'OWNER', 'CMD', 'DIRECTOR'];
+    const isElevated = allowedRoles.includes(req.user.role?.toUpperCase());
     let isDirectManager = false;
-    if (req.user.role === 'MANAGER') {
+    if (req.user.role?.toUpperCase() === 'MANAGER') {
       const subordinate = await prisma.tenantUser.findFirst({
         where: { id: existing.employeeId, managerId: req.user.id, tenantId },
       });
@@ -441,7 +460,7 @@ export async function updateTask(req, res, next) {
         return res.status(403).json({ success: false, error: 'Forbidden: Employees cannot reassign tasks' });
       }
       try {
-        await resolveTargetEmployee(req.user, tenantId, employeeId);
+        await resolveTargetEmployee(req.user, tenantId, employeeId, !existing.isDependencyOf, existing.goalId);
       } catch (e) {
         return res.status(e.status || 500).json({ success: false, message: e.message });
       }
