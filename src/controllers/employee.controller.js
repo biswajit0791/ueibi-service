@@ -9,6 +9,7 @@ import {
   updateExEmployeeSchema,
   updateNonJoinerSchema
 } from '../validations/employee.schema.js';
+import { env } from '../config/env.js';
 
 export async function inviteEmployee(req, res, next) {
   try {
@@ -73,7 +74,7 @@ export async function inviteEmployee(req, res, next) {
 
     // Send invitation email
     const subject = `Welcome to UEIBI - Invitation to join ${tenant.companyName}`;
-    const text = `Hello ${name},\n\nYou have been invited to join the ${tenant.companyName} workspace on UEIBI.\n\nYour temporary login credentials are:\nEmail: ${email}\nPassword: ${tempPassword}\n\nPlease log in and complete your onboarding profile here: http://localhost:5173/login`;
+    const text = `Hello ${name},\n\nYou have been invited to join the ${tenant.companyName} workspace on UEIBI.\n\nYour temporary login credentials are:\nEmail: ${email}\nPassword: ${tempPassword}\n\nPlease log in and complete your onboarding profile here: ${env.frontendOrigin}/login`;
     const html = `
       <div style="font-family: sans-serif; padding: 20px; line-height: 1.6;">
         <h2 style="color: #4f46e5;">Welcome to UEIBI</h2>
@@ -85,7 +86,7 @@ export async function inviteEmployee(req, res, next) {
           <p style="margin: 0;">Password: <code>${tempPassword}</code></p>
         </div>
         <p>Please log in with these temporary credentials to complete your onboarding profile:</p>
-        <a href="http://localhost:5173/login" style="display: inline-block; background-color: #4f46e5; color: white; padding: 10px 20px; text-decoration: none; border-radius: 6px; margin: 15px 0;">Log In & Complete Profile</a>
+        <a href="${env.frontendOrigin}/login" style="display: inline-block; background-color: #4f46e5; color: white; padding: 10px 20px; text-decoration: none; border-radius: 6px; margin: 15px 0;">Log In & Complete Profile</a>
         <p style="color: #6b7280; font-size: 13px;">For security reasons, you will be required to change your password upon your first login.</p>
       </div>
     `;
