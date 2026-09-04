@@ -65,6 +65,7 @@ export async function activate(req, res, next) {
         },
       });
 
+      // 1. Create CMD User
       const createdUser = await tx.tenantUser.create({
         data: {
           tenantId: createdTenant.id,
@@ -77,6 +78,41 @@ export async function activate(req, res, next) {
           designation: registration.designation,
         },
       });
+
+      // 2. Create HR User (if different email)
+      if (registration.hrEmail.toLowerCase() !== registration.email.toLowerCase()) {
+        await tx.tenantUser.create({
+          data: {
+            tenantId: createdTenant.id,
+            email: registration.hrEmail,
+            passwordHash: registration.passwordHash,
+            name: 'HR Head',
+            role: 'HR',
+            status: 'ACTIVE',
+            mustChangePassword: false,
+            designation: 'HR Head',
+          },
+        });
+      }
+
+      // 3. Create Finance User (if different email)
+      if (
+        registration.financeEmail.toLowerCase() !== registration.email.toLowerCase() &&
+        registration.financeEmail.toLowerCase() !== registration.hrEmail.toLowerCase()
+      ) {
+        await tx.tenantUser.create({
+          data: {
+            tenantId: createdTenant.id,
+            email: registration.financeEmail,
+            passwordHash: registration.passwordHash,
+            name: 'Finance Head',
+            role: 'FINANCE',
+            status: 'ACTIVE',
+            mustChangePassword: false,
+            designation: 'Finance Head',
+          },
+        });
+      }
 
       return { updated: updatedReg, tenant: createdTenant, tenantUser: createdUser };
     });
