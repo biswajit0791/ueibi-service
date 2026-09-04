@@ -137,14 +137,16 @@ export class PolicyService {
     let targetUserIds = [];
 
     if (assignees === 'ALL') {
-      const allActive = await prisma.tenantUser.findMany({
-        where: { tenantId, status: 'ACTIVE' },
+      // Include INVITED users — employees are INVITED until they complete onboarding,
+      // but they are still real members of the organisation who must receive policies.
+      const allMembers = await prisma.tenantUser.findMany({
+        where: { tenantId, isDeleted: false, status: { in: ['ACTIVE', 'INVITED'] } },
         select: { id: true },
       });
-      targetUserIds = allActive.map(u => u.id);
+      targetUserIds = allMembers.map(u => u.id);
     } else if (Array.isArray(assignees)) {
       const validUsers = await prisma.tenantUser.findMany({
-        where: { tenantId, id: { in: assignees }, status: 'ACTIVE' },
+        where: { tenantId, id: { in: assignees }, isDeleted: false, status: { in: ['ACTIVE', 'INVITED'] } },
         select: { id: true },
       });
       targetUserIds = validUsers.map(u => u.id);
@@ -321,11 +323,12 @@ export class PolicyService {
       // Combine previous assignees with any newly selected assignees
       let allTargetIds = previousUserIds;
       if (data.assignees === 'ALL') {
-        const allActive = await prisma.tenantUser.findMany({
-          where: { tenantId, status: 'ACTIVE' },
+        // Include INVITED users — same fix as assignPolicyInternal
+        const allMembers = await prisma.tenantUser.findMany({
+          where: { tenantId, isDeleted: false, status: { in: ['ACTIVE', 'INVITED'] } },
           select: { id: true },
         });
-        allTargetIds = allActive.map(u => u.id);
+        allTargetIds = allMembers.map(u => u.id);
       } else if (Array.isArray(data.assignees)) {
         allTargetIds = Array.from(new Set([...previousUserIds, ...data.assignees]));
       }
@@ -628,6 +631,65 @@ export class PolicyService {
       },
       orderBy: { assignedAt: 'desc' },
     });
+
+    // ── Self-healing backfill ─────────────────────────────────────────────────
+    // Policies published with "ALL" before the status-filter fix was deployed
+    // will have 0 assignment records for any user. Detect and auto-assign this
+    // user so they see the policy without HR needing to republish.
+    const assignedPolicyIds = new Set(assignments.map(a => a.policyId));
+
+    const unassignedPublished = await prisma.policy.findMany({
+      where: {
+        tenantId,
+        status: 'PUBLISHED',
+        id: { notIn: Array.from(assignedPolicyIds) },
+        // Only backfill org-wide policies: those with 0 assignments at all
+        assignments: { none: {} },
+      },
+      select: {
+        id: true,
+        version: true,
+        createdById: true,
+        dueDate: true,
+        title: true,
+        description: true,
+        content: true,
+        category: true,
+        pdfUrl: true,
+        pdfOriginalName: true,
+        publishedAt: true,
+      },
+    });
+
+    if (unassignedPublished.length > 0) {
+      // Confirm the current user is actually a valid tenant member before backfilling
+      const isMember = await prisma.tenantUser.findFirst({
+        where: { tenantId, id: userId, isDeleted: false, status: { in: ['ACTIVE', 'INVITED'] } },
+        select: { id: true },
+      });
+
+      if (isMember) {
+        const backfillData = unassignedPublished.map(p => ({
+          tenantId,
+          policyId: p.id,
+          policyVersion: p.version,
+          userId,
+          assignedById: p.createdById,
+          assignedAt: new Date(),
+          dueAt: p.dueDate || null,
+          status: 'PENDING',
+        }));
+
+        await prisma.policyAssignment.createMany({
+          data: backfillData,
+          skipDuplicates: true,
+        });
+
+        // Re-fetch so backfilled assignments are included in the response
+        return this.getMyPolicies({ tenantId, userId });
+      }
+    }
+    // ── End self-healing backfill ─────────────────────────────────────────────
 
     // Filter to latest policy version for each unique policy
     const policyMap = new Map();
