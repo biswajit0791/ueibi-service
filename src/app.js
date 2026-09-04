@@ -31,7 +31,8 @@ const app = express();
 app.set('trust proxy', true);
 
 app.use(helmet());
-app.use(cors({ origin: env.corsOrigin, credentials: true }));
+const allowedOrigins = [env.corsOrigin, 'http://localhost:5174'].filter(Boolean);
+app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(express.json());
 app.use(morgan(env.nodeEnv === 'development' ? 'dev' : 'combined'));
 
@@ -45,26 +46,32 @@ app.get('/', (req, res) => res.json({ message: 'UEIBI server running on port 400
 app.use('/api-docs', swaggerUiServe, swaggerUiSetup);
 app.get('/api-docs.json', (req, res) => res.json(swaggerSpec));
 
-app.use('/api', healthRoutes);
-app.use('/api', registrationRoutes);
-app.use('/api', financeRoutes);
-app.use('/api', hrRoutes);
-app.use('/api', adminRoutes);
-app.use('/api', authRoutes);
-app.use('/api', employeeRoutes);
-app.use('/api', goalRoutes);
-app.use('/api', taskRoutes);
-app.use('/api', leaveRoutes);
-app.use('/api', appraisalRoutes);
-app.use('/api', exReviewRoutes);
-app.use('/api', reportsRoutes);
-app.use('/api', registryRoutes);
-app.use('/api', uploadRoutes);
-app.use('/api', activityRoutes);
-app.use('/api', policyRoutes);
+const apiRouter = express.Router();
+apiRouter.use(healthRoutes);
+apiRouter.use(registrationRoutes);
+apiRouter.use(financeRoutes);
+apiRouter.use(hrRoutes);
+apiRouter.use(adminRoutes);
+apiRouter.use(authRoutes);
+apiRouter.use(employeeRoutes);
+apiRouter.use(goalRoutes);
+apiRouter.use(taskRoutes);
+apiRouter.use(leaveRoutes);
+apiRouter.use(appraisalRoutes);
+apiRouter.use(exReviewRoutes);
+apiRouter.use(reportsRoutes);
+apiRouter.use(registryRoutes);
+apiRouter.use(uploadRoutes);
+apiRouter.use(activityRoutes);
+apiRouter.use(policyRoutes);
 if (env.nodeEnv !== 'production') {
-  app.use('/api', devRoutes);
+  apiRouter.use(devRoutes);
 }
+
+// Mount on /api for local dev and standard setups
+app.use('/api', apiRouter);
+// Mount on / for reverse proxies (like Nginx) that strip the /api prefix
+app.use('/', apiRouter);
 
 app.use(notFound);
 app.use(errorHandler);
