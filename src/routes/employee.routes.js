@@ -22,7 +22,7 @@ import { authorize } from '../middleware/rbac.js';
 
 const router = Router();
 
-router.post('/employees', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), inviteEmployee);
+router.post('/employees', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'MANAGER'), inviteEmployee);
 router.patch('/employees/onboard', requireAuth, requireTenant, onboardEmployee);
 router.get('/employees', requireAuth, requireTenant, listEmployees);
 router.patch('/employees/:id', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), updateEmployee);

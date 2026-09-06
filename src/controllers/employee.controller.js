@@ -10,6 +10,7 @@ import {
   updateNonJoinerSchema
 } from '../validations/employee.schema.js';
 import { env } from '../config/env.js';
+import { canCreateRole, getAllowedRoles } from '../lib/roleHierarchy.js';
 
 export async function inviteEmployee(req, res, next) {
   try {
@@ -19,6 +20,29 @@ export async function inviteEmployee(req, res, next) {
     }
 
     const tenantId = req.tenantId;
+
+    // ── Role-creation authorization ───────────────────────────────────────────
+    // Determine the target role (default EMPLOYEE for backward compatibility).
+    const targetRole = (role || 'EMPLOYEE').toUpperCase();
+
+    // Validate the target role is a known UserRole value.
+    const validRoles = [
+      'SUPER_ADMIN', 'ADMIN', 'CMD', 'HR', 'FINANCE',
+      'MANAGER', 'EMPLOYEE', 'STUDENT', 'MENTOR',
+    ];
+    if (!validRoles.includes(targetRole)) {
+      return res.status(400).json({ error: `Invalid role: ${targetRole}` });
+    }
+
+    // Backend is the security authority — check creator permission.
+    const creatorRole = req.user.role;
+    if (!canCreateRole(creatorRole, targetRole)) {
+      return res.status(403).json({
+        error: `Forbidden: ${creatorRole} cannot assign role ${targetRole}`,
+        allowedRoles: getAllowedRoles(creatorRole),
+      });
+    }
+    // ─────────────────────────────────────────────────────────────────────────
 
     // Check duplicate
     const existing = await prisma.tenantUser.findUnique({
@@ -59,7 +83,7 @@ export async function inviteEmployee(req, res, next) {
         email: email.trim().toLowerCase(),
         passwordHash,
         name: name.trim(),
-        role: role || 'EMPLOYEE',
+        role: targetRole, // validated & authorized above
         status: 'INVITED',
         mustChangePassword: true,
         designation,
