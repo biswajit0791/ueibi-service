@@ -21,6 +21,7 @@ import registryRoutes from './routes/registry.routes.js';
 import uploadRoutes from './routes/upload.routes.js';
 import activityRoutes from './routes/activity.routes.js';
 import policyRoutes from './routes/policy.routes.js';
+import hubRoutes from './routes/hub.routes.js';
 import { notFound } from './middleware/notFound.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
@@ -30,14 +31,20 @@ const app = express();
 
 app.set('trust proxy', true);
 
-app.use(helmet());
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" }
+}));
 const allowedOrigins = [env.corsOrigin, 'http://localhost:5174'].filter(Boolean);
 app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(express.json());
 app.use(morgan(env.nodeEnv === 'development' ? 'dev' : 'combined'));
 
-// Serve uploads static directory
-app.use('/uploads', express.static('uploads'));
+// Serve uploads static directory with cross-origin access
+app.use('/uploads', (req, res, next) => {
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  next();
+}, express.static('uploads'));
 
 // Root
 app.get('/', (req, res) => res.json({ message: 'UEIBI server running on port 4000' }));
@@ -122,6 +129,7 @@ apiRouter.use(registryRoutes);
 apiRouter.use(uploadRoutes);
 apiRouter.use(activityRoutes);
 apiRouter.use(policyRoutes);
+apiRouter.use(hubRoutes);
 if (env.nodeEnv !== 'production') {
   apiRouter.use(devRoutes);
 }
