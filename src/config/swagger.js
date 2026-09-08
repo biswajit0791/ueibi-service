@@ -37,6 +37,7 @@ const options = {
       { name: 'Reports & Analytics', description: 'Enterprise performance and HR analytics summary' },
       { name: 'Policies & Compliance', description: 'Corporate policies, electronic signatures, versioning, reminders, and auditable compliance registry' },
       { name: 'Uploads', description: 'Secure document and file uploads' },
+      { name: 'Company Hub', description: 'Team directory and personal hub profile management' },
       { name: 'Dev', description: 'Development-only endpoints (disabled in production)' },
     ],
     components: {
@@ -60,6 +61,117 @@ const options = {
                   message: { type: 'string', example: 'String must contain at least 1 character(s)' },
                   path: { type: 'array', items: { type: 'string' }, example: ['companyName'] },
                 },
+              },
+            },
+          },
+        },
+
+        // ── Company Hub schemas ──
+        HubTeamMember: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', example: 'clxyz123' },
+            name: { type: 'string', example: 'Jane Doe' },
+            role: { type: 'string', example: 'EMPLOYEE' },
+            designation: { type: 'string', example: 'Software Engineer' },
+            department: { type: 'string', example: 'Engineering' },
+            status: { type: 'string', example: 'ACTIVE' },
+            joinDate: { type: 'string', format: 'date-time', nullable: true, example: '2024-01-15T00:00:00.000Z' },
+            hubBio: { type: 'string', example: 'Passionate about building great products.' },
+            hubBirthday: { type: 'string', nullable: true, example: 'June 15 1990' },
+            profileSnaps: { type: 'array', items: { type: 'string', format: 'uri' }, example: ['https://cdn.example.com/snap1.jpg'] },
+            initials: { type: 'string', example: 'JD' },
+          },
+        },
+        UpdateHubProfileRequest: {
+          type: 'object',
+          properties: {
+            hubBio: { type: 'string', maxLength: 500, example: 'Passionate about building great products.' },
+            hubBirthday: { type: 'string', maxLength: 50, nullable: true, example: 'June 15 1990', description: 'Social birthday display string, e.g. "June 15" or "June 15 1990"' },
+            profileSnaps: {
+              type: 'array',
+              maxItems: 10,
+              items: { type: 'string', format: 'uri' },
+              example: ['https://cdn.example.com/snap1.jpg', 'https://cdn.example.com/snap2.jpg'],
+            },
+          },
+          description: 'At least one field must be provided',
+        },
+        HubProfileResponse: {
+          type: 'object',
+          properties: {
+            message: { type: 'string', example: 'Hub profile updated successfully' },
+            profile: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', example: 'clxyz123' },
+                name: { type: 'string', example: 'Jane Doe' },
+                hubBio: { type: 'string', example: 'Passionate about building great products.' },
+                hubBirthday: { type: 'string', format: 'date', nullable: true, example: '1990-06-15' },
+                profileSnaps: { type: 'array', items: { type: 'string', format: 'uri' }, example: [] },
+              },
+            },
+          },
+        },
+        HubEvent: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', example: 'ev_123456789' },
+            tenantId: { type: 'string', example: 'tenant_abc' },
+            createdById: { type: 'string', example: 'user_xyz' },
+            postedBy: { type: 'string', example: 'Priya Menon' },
+            title: { type: 'string', example: 'Tech Innovation Hackathon' },
+            date: { type: 'string', example: 'August 05, 2026' },
+            time: { type: 'string', nullable: true, example: '09:00 AM' },
+            location: { type: 'string', nullable: true, example: 'L4 Hack Space' },
+            description: { type: 'string', example: '48-hour build cycle focusing on AI prompt caches.' },
+            isFeatured: { type: 'boolean', example: true },
+            createdAt: { type: 'string', format: 'date-time' },
+            updatedAt: { type: 'string', format: 'date-time' },
+          },
+        },
+        CreateHubEventRequest: {
+          type: 'object',
+          required: ['title', 'date', 'description'],
+          properties: {
+            title: { type: 'string', example: 'Summer Outing 2026', minLength: 3, maxLength: 120 },
+            date: { type: 'string', example: 'July 18, 2026', minLength: 1, maxLength: 60 },
+            time: { type: 'string', nullable: true, example: '10:00 AM', maxLength: 40 },
+            location: { type: 'string', nullable: true, example: 'Mountain Breeze Resort', maxLength: 150 },
+            description: { type: 'string', example: 'Guidelines and transport details for all employees...', minLength: 5, maxLength: 2000 },
+            isFeatured: { type: 'boolean', example: true },
+            postedBy: { type: 'string', nullable: true, example: 'Priya Menon (HR Lead)', maxLength: 100 },
+          },
+        },
+        UpdateHubEventRequest: {
+          type: 'object',
+          description: 'At least one field must be provided to update',
+          properties: {
+            title: { type: 'string', example: 'Summer Outing 2026 (Updated)', minLength: 3, maxLength: 120 },
+            date: { type: 'string', example: 'July 25, 2026', minLength: 1, maxLength: 60 },
+            time: { type: 'string', nullable: true, example: '11:00 AM', maxLength: 40 },
+            location: { type: 'string', nullable: true, example: 'Mountain Breeze Resort Hall B', maxLength: 150 },
+            description: { type: 'string', example: 'Updated guidelines and transport schedule...', minLength: 5, maxLength: 2000 },
+            isFeatured: { type: 'boolean', example: true },
+            postedBy: { type: 'string', nullable: true, example: 'Priya Menon (HR Lead)', maxLength: 100 },
+          },
+        },
+        HubEventsListResponse: {
+          type: 'object',
+          properties: {
+            items: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/HubEvent' },
+            },
+            pagination: {
+              type: 'object',
+              properties: {
+                page: { type: 'integer', example: 1 },
+                limit: { type: 'integer', example: 6 },
+                total: { type: 'integer', example: 12 },
+                totalPages: { type: 'integer', example: 2 },
+                hasNextPage: { type: 'boolean', example: true },
+                hasPrevPage: { type: 'boolean', example: false },
               },
             },
           },
@@ -4797,6 +4909,224 @@ const options = {
             401: { description: 'Unauthorized' },
             403: { description: 'Forbidden — not direct manager' },
             404: { description: 'Review not found' },
+          },
+        },
+      },
+
+      // ── Company Hub paths ────────────────────────────────────────────────────
+      '/hub/team': {
+        get: {
+          tags: ['Company Hub'],
+          summary: 'Get the full team directory for the authenticated tenant',
+          operationId: 'getHubTeam',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'search', in: 'query', required: false, schema: { type: 'string', maxLength: 100 }, description: 'Search term for name, designation, or department' },
+            { name: 'department', in: 'query', required: false, schema: { type: 'string', maxLength: 100 }, description: 'Filter members by department' },
+          ],
+          responses: {
+            200: {
+              description: 'List of active team members with hub profile data',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      items: {
+                        type: 'array',
+                        items: { $ref: '#/components/schemas/HubTeamMember' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            400: {
+              description: 'Validation failed',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } },
+            },
+            401: { description: 'Unauthorized — valid session required' },
+          },
+        },
+      },
+      '/hub/me': {
+        patch: {
+          tags: ['Company Hub'],
+          summary: 'Update the authenticated user\'s own hub profile (bio, birthday, snaps)',
+          operationId: 'updateMyHubProfile',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/UpdateHubProfileRequest' },
+                examples: {
+                  updateBio: {
+                    summary: 'Update bio only',
+                    value: { hubBio: 'Passionate about building great products.' },
+                  },
+                  updateBirthday: {
+                    summary: 'Update birthday',
+                    value: { hubBirthday: '1990-06-15' },
+                  },
+                  updateProfileSnaps: {
+                    summary: 'Update profile snaps array',
+                    value: { profileSnaps: ['https://cdn.example.com/snap1.jpg', 'https://cdn.example.com/snap2.jpg'] },
+                  },
+                  updateAll: {
+                    summary: 'Update all hub profile fields',
+                    value: {
+                      hubBio: 'Passionate about building great products.',
+                      hubBirthday: '1990-06-15',
+                      profileSnaps: ['https://cdn.example.com/snap1.jpg'],
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: 'Hub profile updated successfully',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/HubProfileResponse' } } },
+            },
+            400: {
+              description: 'Validation failed — invalid fields or no fields provided',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } },
+            },
+            401: { description: 'Unauthorized — valid session required' },
+          },
+        },
+      },
+      '/hub/events': {
+        get: {
+          tags: ['Company Hub'],
+          summary: 'Get paginated corporate events with search, filtering, and sorting',
+          operationId: 'getHubEvents',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'search', in: 'query', required: false, schema: { type: 'string' }, description: 'Search term across title, description, location, or author' },
+            { name: 'filter', in: 'query', required: false, schema: { type: 'string', enum: ['all', 'featured', 'mine'], default: 'all' }, description: 'Quick filter option' },
+            { name: 'sortBy', in: 'query', required: false, schema: { type: 'string', enum: ['newest', 'oldest', 'title_asc', 'title_desc'], default: 'newest' }, description: 'Sort criteria' },
+            { name: 'page', in: 'query', required: false, schema: { type: 'integer', default: 1, minimum: 1 }, description: 'Page number' },
+            { name: 'limit', in: 'query', required: false, schema: { type: 'integer', default: 6, minimum: 1, maximum: 50 }, description: 'Items per page' },
+          ],
+          responses: {
+            200: {
+              description: 'List of corporate events with pagination metadata',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/HubEventsListResponse' } } },
+            },
+            400: {
+              description: 'Validation failed — invalid query parameters',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } },
+            },
+            401: { description: 'Unauthorized — valid session required' },
+          },
+        },
+        post: {
+          tags: ['Company Hub'],
+          summary: 'Create and publish a new corporate event announcement',
+          description: 'Restricted to HR, Managers, Leadership, CMD, and Admins.',
+          operationId: 'createHubEvent',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/CreateHubEventRequest' } } },
+          },
+          responses: {
+            201: {
+              description: 'Corporate event created successfully',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      message: { type: 'string', example: 'Event published successfully' },
+                      event: { $ref: '#/components/schemas/HubEvent' },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: 'Validation failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+            403: { description: 'Forbidden — only HR or Management can create events' },
+            401: { description: 'Unauthorized' },
+          },
+        },
+      },
+      '/hub/events/{id}': {
+        patch: {
+          tags: ['Company Hub'],
+          summary: 'Update a corporate event announcement',
+          description: 'Restricted to event author or HR/Admins.',
+          operationId: 'updateHubEvent',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Event ID' },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/UpdateHubEventRequest' },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: 'Corporate event updated successfully',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      message: { type: 'string', example: 'Event updated successfully' },
+                      event: { $ref: '#/components/schemas/HubEvent' },
+                    },
+                  },
+                },
+              },
+            },
+            400: {
+              description: 'Validation failed',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } },
+            },
+            403: { description: 'Forbidden — not authorized to edit this event' },
+            404: { description: 'Event not found' },
+            401: { description: 'Unauthorized' },
+          },
+        },
+        delete: {
+          tags: ['Company Hub'],
+          summary: 'Delete a corporate event',
+          description: 'Restricted to event author or HR/Admins.',
+          operationId: 'deleteHubEvent',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Event ID' },
+          ],
+          responses: {
+            200: {
+              description: 'Event deleted successfully',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      message: { type: 'string', example: 'Event deleted successfully' },
+                      id: { type: 'string', example: 'ev_123' },
+                    },
+                  },
+                },
+              },
+            },
+            400: {
+              description: 'Validation failed — invalid event ID parameter',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } },
+            },
+            403: { description: 'Forbidden — not authorized to delete this event' },
+            404: { description: 'Event not found' },
+            401: { description: 'Unauthorized' },
           },
         },
       },

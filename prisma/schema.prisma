@@ -48,6 +48,7 @@ model Tenant {
   appraisalCycles   AppraisalCycle[]
   appraisalParameters AppraisalParameter[]
   peerNominations   PeerNomination[]
+  hubEvents         HubEvent[]
 
   @@map("tenants")
 }
@@ -123,10 +124,16 @@ model TenantUser {
   goalComments   GoalComment[]       @relation("GoalCommentAuthor")
   goalAuditLogs  GoalAuditLog[]      @relation("GoalAuditPerformer")
   notifications  Notification[]      @relation("UserNotifications")
+  createdEvents  HubEvent[]          @relation("EventCreator")
 
   remarks   String?
   docs      Json?
   isDeleted Boolean @default(false)
+
+  // Company Hub Profile (employee-controlled social fields)
+  hubBio       String?
+  hubBirthday  String?  // Display string e.g. "June 28" — separate from statutory dob
+  profileSnaps Json?    // Array of uploaded image URL strings
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -841,5 +848,26 @@ model PolicyAuditLog {
   @@index([tenantId])
   @@index([policyId])
   @@map("policy_audit_logs")
+}
+
+model HubEvent {
+  id          String     @id @default(cuid())
+  tenantId    String
+  tenant      Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  title       String
+  date        String
+  time        String?
+  location    String?
+  description String     @db.Text
+  isFeatured  Boolean    @default(true)
+  createdById String
+  createdBy   TenantUser @relation("EventCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  postedBy    String
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@index([tenantId])
+  @@index([createdById])
+  @@map("hub_events")
 }
 
