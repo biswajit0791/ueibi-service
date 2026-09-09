@@ -2,7 +2,7 @@
 ALTER TABLE "goals" ALTER COLUMN "employeeId" DROP NOT NULL;
 
 -- CreateTable
-CREATE TABLE "goal_assignments" (
+CREATE TABLE IF NOT EXISTS "goal_assignments" (
     "id" TEXT NOT NULL,
     "tenantId" TEXT NOT NULL,
     "goalId" TEXT NOT NULL,
@@ -19,31 +19,59 @@ CREATE TABLE "goal_assignments" (
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX "goal_assignments_goalId_employeeId_key" ON "goal_assignments"("goalId", "employeeId");
+CREATE UNIQUE INDEX IF NOT EXISTS "goal_assignments_goalId_employeeId_key" ON "goal_assignments"("goalId", "employeeId");
 
 -- CreateIndex
-CREATE INDEX "goal_assignments_tenantId_idx" ON "goal_assignments"("tenantId");
+CREATE INDEX IF NOT EXISTS "goal_assignments_tenantId_idx" ON "goal_assignments"("tenantId");
 
 -- CreateIndex
-CREATE INDEX "goal_assignments_goalId_idx" ON "goal_assignments"("goalId");
+CREATE INDEX IF NOT EXISTS "goal_assignments_goalId_idx" ON "goal_assignments"("goalId");
 
 -- CreateIndex
-CREATE INDEX "goal_assignments_employeeId_idx" ON "goal_assignments"("employeeId");
+CREATE INDEX IF NOT EXISTS "goal_assignments_employeeId_idx" ON "goal_assignments"("employeeId");
 
 -- CreateIndex
-CREATE INDEX "goal_assignments_assignedById_idx" ON "goal_assignments"("assignedById");
+CREATE INDEX IF NOT EXISTS "goal_assignments_assignedById_idx" ON "goal_assignments"("assignedById");
 
 -- AddForeignKey
-ALTER TABLE "goal_assignments" ADD CONSTRAINT "goal_assignments_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "tenants"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'goal_assignments_tenantId_fkey'
+    ) THEN
+        ALTER TABLE "goal_assignments" ADD CONSTRAINT "goal_assignments_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "tenants"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+    END IF;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "goal_assignments" ADD CONSTRAINT "goal_assignments_goalId_fkey" FOREIGN KEY ("goalId") REFERENCES "goals"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'goal_assignments_goalId_fkey'
+    ) THEN
+        ALTER TABLE "goal_assignments" ADD CONSTRAINT "goal_assignments_goalId_fkey" FOREIGN KEY ("goalId") REFERENCES "goals"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+    END IF;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "goal_assignments" ADD CONSTRAINT "goal_assignments_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "tenant_users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'goal_assignments_employeeId_fkey'
+    ) THEN
+        ALTER TABLE "goal_assignments" ADD CONSTRAINT "goal_assignments_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "tenant_users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+    END IF;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "goal_assignments" ADD CONSTRAINT "goal_assignments_assignedById_fkey" FOREIGN KEY ("assignedById") REFERENCES "tenant_users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'goal_assignments_assignedById_fkey'
+    ) THEN
+        ALTER TABLE "goal_assignments" ADD CONSTRAINT "goal_assignments_assignedById_fkey" FOREIGN KEY ("assignedById") REFERENCES "tenant_users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+    END IF;
+END $$;
 
 -- Backfill legacy goals into goal_assignments
 INSERT INTO "goal_assignments" (
