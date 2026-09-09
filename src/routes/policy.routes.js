@@ -22,7 +22,7 @@ import { authorize } from '../middleware/rbac.js';
 
 const router = Router();
 
-const hrRoles = ['SUPER_ADMIN', 'ADMIN', 'HR', 'LEADERSHIP', 'OWNER'];
+const hrRoles = ['SUPER_ADMIN', 'ADMIN', 'HR', 'LEADERSHIP', 'OWNER', 'CMD', 'DIRECTOR'];
 
 // ── Employee Personal Policy Actions ─────────────────────────────────────────
 router.get('/policies/my', requireAuth, requireTenant, getMyPolicies);
