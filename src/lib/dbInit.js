@@ -116,6 +116,7 @@ export async function ensureAppraisalColumns() {
     }
 
     await ensurePasswordResetTable();
+    await ensureGoalAssignmentsTable();
   } catch (err) {
     console.warn('[dbInit] Notice on appraisal cycle columns init:', err?.message || err);
   }
@@ -155,4 +156,96 @@ export async function ensurePasswordResetTable() {
     console.warn('[dbInit] Notice on password_reset_tokens table init:', err?.message || err);
   }
 }
+
+/**
+ * Ensures goal_assignments table, foreign keys, unique constraints, and indexes exist idempotently.
+ * Automatically backfills existing Goal.employeeId records into GoalAssignment.
+ */
+export async function ensureGoalAssignmentsTable() {
+  try {
+    // 1. Create goal_assignments table if not exists
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "goal_assignments" (
+        "id" TEXT PRIMARY KEY,
+        "tenantId" TEXT NOT NULL REFERENCES "tenants"("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        "goalId" TEXT NOT NULL REFERENCES "goals"("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        "employeeId" TEXT NOT NULL REFERENCES "tenant_users"("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        "assignedById" TEXT REFERENCES "tenant_users"("id") ON DELETE SET NULL ON UPDATE CASCADE,
+        "progress" INTEGER NOT NULL DEFAULT 0,
+        "status" TEXT NOT NULL DEFAULT 'DRAFT',
+        "milestones" INTEGER NOT NULL DEFAULT 0,
+        "completedMilestones" INTEGER NOT NULL DEFAULT 0,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // 2. Make goals.employeeId nullable if needed
+    try {
+      await prisma.$executeRawUnsafe(`
+        ALTER TABLE "goals" ALTER COLUMN "employeeId" DROP NOT NULL;
+      `);
+    } catch {
+      // Column may already be nullable
+    }
+
+    // 3. Create unique constraint on (goalId, employeeId)
+    try {
+      await prisma.$executeRawUnsafe(`
+        CREATE UNIQUE INDEX IF NOT EXISTS "goal_assignments_goalId_employeeId_key" 
+        ON "goal_assignments"("goalId", "employeeId");
+      `);
+    } catch {
+      // Unique index already exists
+    }
+
+    // 4. Create performance indexes
+    try {
+      await prisma.$executeRawUnsafe(`
+        CREATE INDEX IF NOT EXISTS "goal_assignments_tenantId_idx" ON "goal_assignments"("tenantId");
+      `);
+      await prisma.$executeRawUnsafe(`
+        CREATE INDEX IF NOT EXISTS "goal_assignments_goalId_idx" ON "goal_assignments"("goalId");
+      `);
+      await prisma.$executeRawUnsafe(`
+        CREATE INDEX IF NOT EXISTS "goal_assignments_employeeId_idx" ON "goal_assignments"("employeeId");
+      `);
+      await prisma.$executeRawUnsafe(`
+        CREATE INDEX IF NOT EXISTS "goal_assignments_assignedById_idx" ON "goal_assignments"("assignedById");
+      `);
+    } catch {
+      // Indexes already exist
+    }
+
+    // 5. Backfill existing goal assignments from goals table
+    const backfillCount = await prisma.$executeRawUnsafe(`
+      INSERT INTO "goal_assignments" (
+        "id", "tenantId", "goalId", "employeeId", "assignedById", "progress", "status", "milestones", "completedMilestones", "createdAt", "updatedAt"
+      )
+      SELECT 
+        'ga_' || substr(md5(random()::text || g.id || g."employeeId"), 1, 20),
+        g."tenantId",
+        g.id,
+        g."employeeId",
+        NULL,
+        COALESCE(g.progress, 0),
+        COALESCE(g.status, 'DRAFT'),
+        COALESCE(g.milestones, 0),
+        COALESCE(g."completedMilestones", 0),
+        g."createdAt",
+        g."updatedAt"
+      FROM "goals" g
+      WHERE g."employeeId" IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM "goal_assignments" ga 
+          WHERE ga."goalId" = g.id AND ga."employeeId" = g."employeeId"
+        );
+    `);
+
+    console.log(`[dbInit] goal_assignments table verified. Backfilled ${backfillCount} legacy assignments.`);
+  } catch (err) {
+    console.warn('[dbInit] Notice on goal_assignments table init:', err?.message || err);
+  }
+}
+
 

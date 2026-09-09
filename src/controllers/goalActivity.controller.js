@@ -1,4 +1,5 @@
 import { prisma } from '../lib/prisma.js';
+import { goalCommentSchema } from '../validations/goal.schema.js';
 import { logTaskAudit, pushNotification } from './taskActivity.controller.js';
 
 // ─── Helper: write a goal audit log entry ──────────────────────────────────
@@ -12,11 +13,11 @@ async function logGoalAudit({ goalId, performedById, action, details, previousVa
 export async function addGoalComment(req, res, next) {
   try {
     const { id: goalId } = req.params;
-    const { comment, attachments } = req.body || {};
-
-    if (!comment?.trim()) {
-      return res.status(400).json({ error: 'Comment text is required' });
+    const parsed = goalCommentSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
+    const { comment, attachments } = parsed.data;
 
     // Verify goal belongs to current tenant
     const goal = await prisma.goal.findFirst({
