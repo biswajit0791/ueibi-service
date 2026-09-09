@@ -266,10 +266,10 @@ export async function createGoal(req, res, next) {
     const fullGoal = await prisma.goal.findUnique({
       where: { id: goal.id },
       include: {
-        employee: { select: { id: true, name: true, email: true, department: true, designation: true } },
+        employee: { select: { id: true, name: true, email: true, department: true, designation: true, role: true, managerId: true } },
         assignments: {
           include: {
-            employee: { select: { id: true, name: true, email: true, department: true, designation: true } },
+            employee: { select: { id: true, name: true, email: true, department: true, designation: true, role: true, managerId: true } },
             assignedBy: { select: { id: true, name: true, role: true } },
           },
         },
@@ -537,7 +537,7 @@ export async function updateGoal(req, res, next) {
         employee: true,
         assignments: {
           include: {
-            employee: { select: { id: true, name: true, email: true, department: true, designation: true } },
+            employee: { select: { id: true, name: true, email: true, department: true, designation: true, role: true, managerId: true } },
           },
         },
         tasks: true,
