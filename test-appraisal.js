@@ -242,6 +242,165 @@ async function run() {
   });
   assert(forbiddenCycleRes.status === 403, 'RBAC check: Non-HR employee receives 403 Forbidden updating cycle settings');
 
+  // ── Phase 1B: Year + Month Appraisal Cycle Management ──────────────────────
+  console.log(`\n${c.bold('Phase 1B: Year + Month Cycle Creation & Management')}`);
+
+  // Clean up prior test cycle for 2028 March if present
+  const existing2028Cycles = await prisma.appraisalCycle.findMany({
+    where: { tenantId: tenant.id, year: 2028, month: 'March' },
+  });
+  for (const ec of existing2028Cycles) {
+    await prisma.reviewScore.deleteMany({ where: { review: { cycleId: ec.id } } });
+    await prisma.performanceReview.deleteMany({ where: { cycleId: ec.id } });
+    await prisma.peerNomination.deleteMany({ where: { cycleId: ec.id } });
+    await prisma.appraisalCycle.delete({ where: { id: ec.id } });
+  }
+
+  // 1. HR creates an explicit 2028 March cycle
+  const create2028CycleRes = await req('/appraisal-cycles', {
+    method: 'POST',
+    token: hrToken,
+    body: {
+      year: 2028,
+      month: 'March',
+      monthNumber: 3,
+      frequency: 'MONTHLY',
+      name: 'March 2028 Appraisal Cycle',
+      startDate: '2028-03-01T00:00:00.000Z',
+      endDate: '2028-03-31T23:59:59.999Z',
+      dueDate: '2028-04-05T23:59:59.999Z',
+    },
+  });
+  assert(create2028CycleRes.status === 201, 'POST /api/appraisal-cycles creates 2028 March cycle with 201 Created');
+  assert(create2028CycleRes.data?.cycle?.year === 2028, 'Created cycle stores year 2028');
+  assert(create2028CycleRes.data?.cycle?.month === 'March', 'Created cycle stores month March');
+  assert(create2028CycleRes.data?.cycle?.monthNumber === 3, 'Created cycle stores monthNumber 3');
+  const cycle2028Id = create2028CycleRes.data?.cycle?.id;
+
+  // 2. Duplicate prevention (returns 409 Conflict)
+  const dupCycleRes = await req('/appraisal-cycles', {
+    method: 'POST',
+    token: hrToken,
+    body: {
+      year: 2028,
+      month: 'March',
+      frequency: 'MONTHLY',
+    },
+  });
+  assert(dupCycleRes.status === 409, 'Negative test: Duplicate cycle creation for 2028 March returns 409 Conflict');
+
+  // 3. RBAC check: Non-HR employee cannot create cycles
+  const forbiddenCreateRes = await req('/appraisal-cycles', {
+    method: 'POST',
+    token: employeeToken,
+    body: {
+      year: 2029,
+      month: 'December',
+      frequency: 'MONTHLY',
+    },
+  });
+  assert(forbiddenCreateRes.status === 403, 'RBAC check: Non-HR employee receives 403 Forbidden creating cycle');
+
+  // 4. List all cycles for organization
+  const listCyclesRes = await req('/appraisal-cycles?year=2028', { token: hrToken });
+  assert(listCyclesRes.status === 200, 'GET /api/appraisal-cycles lists organization cycles with filter');
+  const has2028March = listCyclesRes.data?.cycles?.some((c) => c.year === 2028 && c.month === 'March');
+  assert(has2028March, 'Cycle registry list includes March 2028 cycle with review statistics');
+
+  // 5. Query active cycle explicitly for 2028 March
+  const get2028ActiveRes = await req('/appraisal-cycles/active?year=2028&month=March', { token: employeeToken });
+  assert(get2028ActiveRes.status === 200, 'GET /api/appraisal-cycles/active?year=2028&month=March resolves 2028 cycle');
+  assert(get2028ActiveRes.data?.cycle?.id === cycle2028Id, 'Resolved cycle matches created 2028 March cycle ID');
+
+  // 6. Employee submits self-rating specifically for Year 2028, Month March
+  const submit2028SelfRes = await req('/appraisals/submit', {
+    method: 'POST',
+    token: employeeToken,
+    body: {
+      year: 2028,
+      month: 'March',
+      frequency: 'MONTHLY',
+      selfRating: 4.8,
+      selfAccomplishments: 'Led Q1 2028 high-throughput microservices overhaul.',
+      selfWeaknesses: 'Continue mentoring junior engineers on distributed tracing.',
+      submit: true,
+      scores: [
+        { parameterId: param1.id, selfScore: 5 },
+        { parameterId: param2.id, selfScore: 4 },
+      ],
+    },
+  });
+  assert(submit2028SelfRes.status === 200, 'POST /api/appraisals/submit accepts explicit year & month payload');
+  assert(submit2028SelfRes.data?.cycleId === cycle2028Id, 'Review is linked to the 2028 March cycle');
+
+  // 7. GET /api/performance-reviews/mine?year=2028&month=March fetches that review
+  const get2028MineRes = await req('/performance-reviews/mine?year=2028&month=March', { token: employeeToken });
+  assert(get2028MineRes.status === 200, 'GET /api/performance-reviews/mine?year=2028&month=March returns 2028 review');
+  assert(get2028MineRes.data?.review?.cycleId === cycle2028Id, 'Fetched review belongs to 2028 March cycle');
+  assert(get2028MineRes.data?.review?.status === 'SUBMITTED', 'Review status for 2028 March is SUBMITTED');
+
+  // ── Year 2031 Month March Dynamic Creation Test ──
+  console.log(`\n  ${c.cyan('Testing Explicit Year 2031 + Month March Dynamic Creation:')}`);
+  const existing2031Cycles = await prisma.appraisalCycle.findMany({
+    where: { tenantId: tenant.id, year: 2031, month: 'March' },
+  });
+  for (const ec of existing2031Cycles) {
+    await prisma.reviewScore.deleteMany({ where: { review: { cycleId: ec.id } } });
+    await prisma.performanceReview.deleteMany({ where: { cycleId: ec.id } });
+    await prisma.peerNomination.deleteMany({ where: { cycleId: ec.id } });
+    await prisma.appraisalCycle.delete({ where: { id: ec.id } });
+  }
+
+  const create2031CycleRes = await req('/appraisal-cycles', {
+    method: 'POST',
+    token: hrToken,
+    body: {
+      year: 2031,
+      month: 'March',
+      monthNumber: 3,
+      frequency: 'MONTHLY',
+      name: 'March 2031 Enterprise Cycle',
+    },
+  });
+  assert(create2031CycleRes.status === 201, 'Admin creates Year 2031 Month March cycle with 201 Created');
+  assert(create2031CycleRes.data?.cycle?.year === 2031, 'Created cycle records year 2031 in DB');
+  assert(create2031CycleRes.data?.cycle?.month === 'March', 'Created cycle records month March in DB');
+  const cycle2031Id = create2031CycleRes.data?.cycle?.id;
+
+  const list2031CyclesRes = await req('/appraisal-cycles', { token: hrToken });
+  assert(list2031CyclesRes.status === 200, 'GET /api/appraisal-cycles returns 200 OK');
+  assert(list2031CyclesRes.data?.distinctYears?.includes(2031), 'Registry aggregates 2031 into distinctYears list');
+  const has2031March = list2031CyclesRes.data?.cycles?.some((c) => c.year === 2031 && c.month === 'March');
+  assert(has2031March, 'Cycle registry list contains March 2031 Enterprise Cycle');
+
+  const get2031ActiveRes = await req('/appraisal-cycles/active?year=2031&month=March', { token: employeeToken });
+  assert(get2031ActiveRes.status === 200, 'GET /api/appraisal-cycles/active?year=2031&month=March resolves 2031 cycle');
+  assert(get2031ActiveRes.data?.cycle?.id === cycle2031Id, 'Resolved cycle matches created 2031 March cycle ID');
+
+  const submit2031SelfRes = await req('/appraisals/submit', {
+    method: 'POST',
+    token: employeeToken,
+    body: {
+      year: 2031,
+      month: 'March',
+      frequency: 'MONTHLY',
+      selfRating: 5.0,
+      selfAccomplishments: 'Delivered visionary 2031 roadmap deliverables.',
+      selfWeaknesses: 'Continue expanding global regional footprint.',
+      submit: true,
+      scores: [
+        { parameterId: param1.id, selfScore: 5 },
+        { parameterId: param2.id, selfScore: 5 },
+      ],
+    },
+  });
+  assert(submit2031SelfRes.status === 200, 'POST /api/appraisals/submit records self review for Year 2031 Month March');
+  assert(submit2031SelfRes.data?.cycleId === cycle2031Id, 'Review is explicitly bound to Year 2031 March cycle');
+
+  const get2031MineRes = await req('/performance-reviews/mine?year=2031&month=March', { token: employeeToken });
+  assert(get2031MineRes.status === 200, 'GET /api/performance-reviews/mine?year=2031&month=March returns 2031 review');
+  assert(get2031MineRes.data?.review?.cycleId === cycle2031Id, 'Review belongs to 2031 March cycle');
+
   // ── Phase 2: Employee Self-Assessment ──────────────────────────────────────
   console.log(`\n${c.bold('Phase 2: Employee Self-Assessment & Rating')}`);
 

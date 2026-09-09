@@ -3,7 +3,9 @@ import { stripPeerReviewerIdentity } from '../lib/privacy.js';
 import { AppraisalNotificationService } from '../services/appraisalNotification.service.js';
 import { goalService } from '../services/goal.service.js';
 import {
+  createCycleSchema,
   updateCycleSchema,
+  createParameterSchema,
   updateParameterSchema,
   selfAssessmentSchema,
   submitSelfRatingSchema,
@@ -14,9 +16,15 @@ import {
   updateReviewSchema,
   listAppraisalsQuerySchema,
   activeCycleQuerySchema,
+  listCyclesQuerySchema,
+  listParametersQuerySchema,
   syncGoalsToAppraisalSchema,
   myGoalsQuerySchema,
   reviewIdParamSchema,
+  cycleIdParamSchema,
+  parameterIdParamSchema,
+  employeeIdParamSchema,
+  nominationIdParamSchema,
 } from '../validations/appraisal.schema.js';
 
 const DEFAULT_PARAMETERS = [
@@ -33,41 +41,53 @@ const MONTH_NAMES = [
 ];
 
 /**
- * Dynamically computes start date, end date, period name, and due date based on live date
+ * Dynamically computes start date, end date, period name, and due date based on live date or explicit year/month
  */
-export function getPeriodMetadata(frequency = 'MONTHLY', targetDate = new Date(), customPeriodName = null) {
+export function getPeriodMetadata(frequency = 'MONTHLY', targetDate = new Date(), customPeriodName = null, explicitYear = null, explicitMonth = null) {
   const date = targetDate instanceof Date ? targetDate : new Date(targetDate);
-  const year = date.getFullYear();
-  const monthIndex = date.getMonth();
+  let year = explicitYear ? parseInt(explicitYear, 10) : date.getFullYear();
+  let monthIndex = date.getMonth();
+  let monthName = MONTH_NAMES[monthIndex];
 
-  if (customPeriodName && typeof customPeriodName === 'string') {
+  if (explicitMonth !== null && explicitMonth !== undefined) {
+    if (typeof explicitMonth === 'number' || (!isNaN(explicitMonth) && !isNaN(parseInt(explicitMonth, 10)))) {
+      const num = parseInt(explicitMonth, 10);
+      monthIndex = Math.max(0, Math.min(11, num - 1));
+      monthName = MONTH_NAMES[monthIndex];
+    } else if (typeof explicitMonth === 'string') {
+      const trimmed = explicitMonth.trim();
+      const idx = MONTH_NAMES.findIndex(m => m.toLowerCase() === trimmed.toLowerCase());
+      if (idx !== -1) {
+        monthIndex = idx;
+        monthName = MONTH_NAMES[idx];
+      }
+    }
+  }
+
+  if (!explicitMonth && customPeriodName && typeof customPeriodName === 'string') {
     const matchedMonth = MONTH_NAMES.findIndex(m => customPeriodName.toLowerCase().includes(m.toLowerCase()));
     if (matchedMonth !== -1) {
+      monthIndex = matchedMonth;
+      monthName = MONTH_NAMES[matchedMonth];
       const yearMatch = customPeriodName.match(/\b(20\d\d)\b/);
-      const parsedYear = yearMatch ? parseInt(yearMatch[1], 10) : year;
-      const startDate = new Date(Date.UTC(parsedYear, matchedMonth, 1, 0, 0, 0));
-      const endDate = new Date(Date.UTC(parsedYear, matchedMonth + 1, 0, 23, 59, 59));
-      return {
-        name: `${MONTH_NAMES[matchedMonth]} ${parsedYear}`,
-        frequency: 'MONTHLY',
-        startDate,
-        endDate,
-        periodLabel: `${MONTH_NAMES[matchedMonth]} ${parsedYear}`,
-        dueDate: endDate,
-      };
+      if (yearMatch && !explicitYear) {
+        year = parseInt(yearMatch[1], 10);
+      }
     }
   }
 
   const freq = (frequency || 'MONTHLY').toUpperCase();
 
   if (freq === 'MONTHLY') {
-    const monthName = MONTH_NAMES[monthIndex];
     const name = `${monthName} ${year}`;
     const startDate = new Date(Date.UTC(year, monthIndex, 1, 0, 0, 0));
     const endDate = new Date(Date.UTC(year, monthIndex + 1, 0, 23, 59, 59));
     return {
       name,
       frequency: 'MONTHLY',
+      year,
+      month: monthName,
+      monthNumber: monthIndex + 1,
       startDate,
       endDate,
       periodLabel: `${monthName} (${year})`,
@@ -76,13 +96,20 @@ export function getPeriodMetadata(frequency = 'MONTHLY', targetDate = new Date()
   }
 
   if (freq === 'QUARTERLY') {
-    const quarter = Math.floor(monthIndex / 3) + 1;
+    let quarter = Math.floor(monthIndex / 3) + 1;
+    if (explicitMonth && typeof explicitMonth === 'string' && /Q([1-4])/i.test(explicitMonth)) {
+      const qMatch = explicitMonth.match(/Q([1-4])/i);
+      if (qMatch) quarter = parseInt(qMatch[1], 10);
+    }
     const qStartMonth = (quarter - 1) * 3;
     const startDate = new Date(Date.UTC(year, qStartMonth, 1, 0, 0, 0));
     const endDate = new Date(Date.UTC(year, qStartMonth + 3, 0, 23, 59, 59));
     return {
       name: `Q${quarter} ${year}`,
       frequency: 'QUARTERLY',
+      year,
+      month: `Q${quarter}`,
+      monthNumber: quarter,
       startDate,
       endDate,
       periodLabel: `Quarterly (Q${quarter} ${year})`,
@@ -100,6 +127,9 @@ export function getPeriodMetadata(frequency = 'MONTHLY', targetDate = new Date()
   return {
     name,
     frequency: 'ANNUAL',
+    year: fyStartYear,
+    month: 'Annual',
+    monthNumber: null,
     startDate,
     endDate,
     periodLabel: `Annual (${name})`,
@@ -116,6 +146,9 @@ async function ensureActiveCycle(tenantId, options = {}) {
     periodName = null,
     cycleId = null,
     targetDate = new Date(),
+    year = null,
+    month = null,
+    createdById = null,
   } = typeof options === 'string' ? { frequency: options } : options;
 
   if (cycleId) {
@@ -128,14 +161,14 @@ async function ensureActiveCycle(tenantId, options = {}) {
     if (foundById) return foundById;
   }
 
-  const period = getPeriodMetadata(frequency, targetDate, periodName);
+  const period = getPeriodMetadata(frequency, targetDate, periodName, year, month);
 
-  // First try finding an exact cycle matching tenant, name, and frequency
+  // First try finding an exact cycle matching tenant, frequency, and name (e.g. "March 2031" or "September 2050")
   let cycle = await prisma.appraisalCycle.findFirst({
     where: {
       tenantId,
-      name: period.name,
       frequency: period.frequency,
+      name: period.name,
     },
     include: {
       parameters: { orderBy: { order: 'asc' } },
@@ -158,14 +191,36 @@ async function ensureActiveCycle(tenantId, options = {}) {
       },
     });
 
-    for (const param of DEFAULT_PARAMETERS) {
+    try {
+      await prisma.$executeRawUnsafe(
+        `UPDATE "appraisal_cycles" SET "year" = $1, "month" = $2, "monthNumber" = $3, "createdById" = $4 WHERE "id" = $5`,
+        period.year,
+        period.month,
+        period.monthNumber,
+        createdById || null,
+        cycle.id
+      );
+    } catch (_) {}
+
+    // Check if the tenant already has parameters from an existing cycle so custom skills carry forward!
+    const existingParams = await prisma.appraisalParameter.findMany({
+      where: { tenantId },
+      distinct: ['name'],
+      orderBy: { order: 'asc' },
+    });
+
+    const paramsToSeed = existingParams.length > 0
+      ? existingParams.map((p) => ({ name: p.name, order: p.order, isActive: p.isActive }))
+      : DEFAULT_PARAMETERS;
+
+    for (const param of paramsToSeed) {
       await prisma.appraisalParameter.create({
         data: {
           tenantId,
           cycleId: cycle.id,
           name: param.name,
           order: param.order,
-          isActive: true,
+          isActive: param.isActive !== false,
         },
       });
     }
@@ -180,29 +235,261 @@ async function ensureActiveCycle(tenantId, options = {}) {
     });
   }
 
-  return cycle;
+  const sDate = new Date(cycle.startDate);
+  return {
+    ...cycle,
+    year: cycle.year || period.year || sDate.getFullYear(),
+    month: cycle.month || period.month || MONTH_NAMES[sDate.getMonth()],
+    monthNumber: cycle.monthNumber || period.monthNumber || (sDate.getMonth() + 1),
+  };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PHASE 2: CYCLE SETTINGS (HR / SUPER_ADMIN / CMD)
-// ─────────────────────────────────────────────────────────────────────────────
+// ── PHASE 2: CYCLE SETTINGS (HR / SUPER_ADMIN / CMD) ─────────────────────────
+
+/**
+ * Explicitly create an appraisal cycle for ANY year and month
+ * POST /api/appraisal-cycles
+ */
+export async function createCycle(req, res, next) {
+  try {
+    const parsed = createCycleSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.errors });
+    }
+
+    const {
+      year,
+      month,
+      monthNumber,
+      frequency = 'MONTHLY',
+      name,
+      startDate,
+      endDate,
+      dueDate,
+      status = 'ACTIVE',
+    } = parsed.data;
+
+    const period = getPeriodMetadata(frequency, new Date(), name, year, month);
+
+    const cycleName = name || period.name;
+    const cycleStartDate = startDate ? new Date(startDate) : period.startDate;
+    const cycleEndDate = endDate ? new Date(endDate) : (dueDate ? new Date(dueDate) : period.endDate);
+
+    // Check if matching cycle already exists
+    let existing = await prisma.appraisalCycle.findFirst({
+      where: {
+        tenantId: req.tenantId,
+        frequency: period.frequency,
+        name: cycleName,
+      },
+      include: {
+        parameters: { orderBy: { order: 'asc' } },
+        createdBy: { select: { id: true, name: true, email: true } },
+      },
+    });
+
+    if (existing) {
+      return res.status(409).json({
+        error: `Appraisal cycle for ${period.frequency} ${period.month || ''} ${period.year || ''} already exists.`,
+        cycle: {
+          ...existing,
+          year: existing.year || period.year,
+          month: existing.month || period.month,
+          monthNumber: existing.monthNumber || period.monthNumber,
+        },
+      });
+    }
+
+    const newCycle = await prisma.appraisalCycle.create({
+      data: {
+        tenantId: req.tenantId,
+        name: cycleName,
+        frequency: period.frequency,
+        startDate: cycleStartDate,
+        endDate: cycleEndDate,
+        status,
+      },
+    });
+
+    try {
+      await prisma.$executeRawUnsafe(
+        `UPDATE "appraisal_cycles" SET "year" = $1, "month" = $2, "monthNumber" = $3, "createdById" = $4 WHERE "id" = $5`,
+        period.year,
+        period.month,
+        monthNumber || period.monthNumber,
+        req.user.id,
+        newCycle.id
+      );
+    } catch (_) {}
+
+    // Clone existing tenant parameters so custom skills carry over to new cycles!
+    const existingParams = await prisma.appraisalParameter.findMany({
+      where: { tenantId: req.tenantId },
+      distinct: ['name'],
+      orderBy: { order: 'asc' },
+    });
+
+    const paramsToSeed = existingParams.length > 0
+      ? existingParams.map((p) => ({ name: p.name, order: p.order, isActive: p.isActive }))
+      : DEFAULT_PARAMETERS;
+
+    for (const param of paramsToSeed) {
+      await prisma.appraisalParameter.create({
+        data: {
+          tenantId: req.tenantId,
+          cycleId: newCycle.id,
+          name: param.name,
+          order: param.order,
+          isActive: param.isActive !== false,
+        },
+      });
+    }
+
+    const createdWithParams = await prisma.appraisalCycle.findUnique({
+      where: { id: newCycle.id },
+      include: {
+        parameters: { orderBy: { order: 'asc' } },
+        createdBy: { select: { id: true, name: true, email: true } },
+      },
+    });
+
+    res.status(201).json({
+      success: true,
+      message: `Appraisal cycle for ${period.name} created successfully.`,
+      cycle: {
+        ...createdWithParams,
+        year: period.year,
+        month: period.month,
+        monthNumber: monthNumber || period.monthNumber,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * List all appraisal cycles for the tenant with optional filters
+ * GET /api/appraisal-cycles
+ */
+export async function listCycles(req, res, next) {
+  try {
+    const parsedQuery = listCyclesQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.errors });
+    }
+    const { year, frequency, status } = parsedQuery.data;
+
+    const where = {
+      tenantId: req.tenantId,
+    };
+
+    if (frequency) where.frequency = frequency.toUpperCase();
+    if (status) where.status = status.toUpperCase();
+
+    const cycles = await prisma.appraisalCycle.findMany({
+      where,
+      include: {
+        parameters: { orderBy: { order: 'asc' } },
+        createdBy: { select: { id: true, name: true, email: true } },
+        _count: {
+          select: { reviews: true, nominations: true },
+        },
+      },
+      orderBy: [{ startDate: 'desc' }, { createdAt: 'desc' }],
+    });
+
+    // Safely retrieve year, month, monthNumber, createdById from PostgreSQL table
+    const rawRows = await prisma.$queryRawUnsafe(
+      `SELECT "id", "year", "month", "monthNumber", "createdById" FROM "appraisal_cycles" WHERE "tenantId" = $1`,
+      req.tenantId
+    ).catch(() => []);
+
+    const metaMap = new Map();
+    for (const r of rawRows) {
+      metaMap.set(r.id, r);
+    }
+
+    let mappedCycles = cycles.map((c) => {
+      const meta = metaMap.get(c.id);
+      const sDate = new Date(c.startDate);
+      const computedYear = meta?.year ?? (c.year || sDate.getFullYear());
+      const computedMonth = meta?.month ?? (c.month || MONTH_NAMES[sDate.getMonth()]);
+      const computedMonthNum = meta?.monthNumber ?? (c.monthNumber || (sDate.getMonth() + 1));
+      const computedCreatedById = meta?.createdById ?? c.createdById;
+
+      return {
+        id: c.id,
+        name: c.name,
+        frequency: c.frequency,
+        year: computedYear,
+        month: computedMonth,
+        monthNumber: computedMonthNum,
+        startDate: c.startDate,
+        endDate: c.endDate,
+        status: c.status,
+        createdById: computedCreatedById,
+        createdBy: c.createdBy,
+        reviewCount: c._count?.reviews || 0,
+        nominationCount: c._count?.nominations || 0,
+        parameters: c.parameters,
+        createdAt: c.createdAt,
+      };
+    });
+
+    if (year) {
+      const filterYear = parseInt(year, 10);
+      mappedCycles = mappedCycles.filter((c) => c.year === filterYear);
+    }
+
+    // Sort by year desc, monthNumber desc, startDate desc
+    mappedCycles.sort((a, b) => {
+      if ((b.year || 0) !== (a.year || 0)) return (b.year || 0) - (a.year || 0);
+      if ((b.monthNumber || 0) !== (a.monthNumber || 0)) return (b.monthNumber || 0) - (a.monthNumber || 0);
+      return new Date(b.startDate).getTime() - new Date(a.startDate).getTime();
+    });
+
+    // Extract all distinct years safely
+    const distinctYearSet = new Set();
+    mappedCycles.forEach((c) => { if (c.year) distinctYearSet.add(c.year); });
+    cycles.forEach((c) => { distinctYearSet.add(new Date(c.startDate).getFullYear()); });
+    const distinctYears = Array.from(distinctYearSet).sort((a, b) => b - a);
+
+    res.json({
+      success: true,
+      count: mappedCycles.length,
+      distinctYears,
+      cycles: mappedCycles,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
 
 export async function getActiveCycle(req, res, next) {
   try {
     const parsedQuery = activeCycleQuerySchema.safeParse(req.query);
-    const freqQuery = (parsedQuery.success && parsedQuery.data.frequency)
-      ? parsedQuery.data.frequency
-      : (req.query.frequency ? req.query.frequency.toUpperCase() : 'MONTHLY');
-    const periodQuery = parsedQuery.success ? (parsedQuery.data.period || null) : (req.query.period || null);
-    const cycleIdQuery = parsedQuery.success ? (parsedQuery.data.cycleId || null) : (req.query.cycleId || null);
+    if (!parsedQuery.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.errors });
+    }
+    const {
+      frequency: freqQuery = 'MONTHLY',
+      period: periodQuery = null,
+      cycleId: cycleIdQuery = null,
+      year: yearQuery = null,
+      month: monthQuery = null,
+    } = parsedQuery.data;
 
     const cycle = await ensureActiveCycle(req.tenantId, {
       frequency: freqQuery,
       periodName: periodQuery,
       cycleId: cycleIdQuery,
+      year: yearQuery,
+      month: monthQuery,
+      createdById: req.user.id,
     });
 
-    // Also fetch all available cycles for this tenant so the user can easily select past/active cycles
+    // Fetch all available cycles for this tenant
     const availableCycles = await prisma.appraisalCycle.findMany({
       where: { tenantId: req.tenantId },
       select: {
@@ -213,7 +500,16 @@ export async function getActiveCycle(req, res, next) {
         endDate: true,
         status: true,
       },
-      orderBy: { startDate: 'desc' },
+      orderBy: [{ startDate: 'desc' }, { createdAt: 'desc' }],
+    });
+
+    const mappedAvailable = availableCycles.map((c) => {
+      const sDate = new Date(c.startDate);
+      return {
+        ...c,
+        year: sDate.getFullYear(),
+        month: MONTH_NAMES[sDate.getMonth()],
+      };
     });
 
     const now = new Date();
@@ -226,12 +522,15 @@ export async function getActiveCycle(req, res, next) {
         id: cycle.id,
         name: cycle.name,
         frequency: cycle.frequency,
+        year: cycle.year,
+        month: cycle.month,
+        monthNumber: cycle.monthNumber,
         startDate: cycle.startDate,
         endDate: cycle.endDate,
         status: cycle.status,
       },
       parameters: cycle.parameters,
-      availableCycles,
+      availableCycles: mappedAvailable,
       currentPeriods: {
         monthly: currentMonthMeta,
         quarterly: currentQuarterMeta,
@@ -245,13 +544,17 @@ export async function getActiveCycle(req, res, next) {
 
 export async function updateCycle(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = cycleIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid cycle ID parameter', details: parsedParams.error.errors });
+    }
+    const { id } = parsedParams.data;
 
     const parsed = updateCycleSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.errors });
     }
-    const { frequency, name, status } = parsed.data;
+    const { frequency, name, status, year, month, endDate, dueDate } = parsed.data;
 
     const cycle = await prisma.appraisalCycle.findFirst({
       where: { id, tenantId: req.tenantId },
@@ -267,6 +570,8 @@ export async function updateCycle(req, res, next) {
         ...(frequency && { frequency }),
         ...(name && { name }),
         ...(status && { status }),
+        ...(endDate && { endDate: new Date(endDate) }),
+        ...(dueDate && { endDate: new Date(dueDate) }),
       },
       include: {
         parameters: {
@@ -275,7 +580,147 @@ export async function updateCycle(req, res, next) {
       },
     });
 
+    if (year !== undefined || month !== undefined) {
+      try {
+        await prisma.$executeRawUnsafe(
+          `UPDATE "appraisal_cycles" SET "year" = COALESCE($1, "year"), "month" = COALESCE($2, "month") WHERE "id" = $3`,
+          year !== undefined ? parseInt(year, 10) : null,
+          month !== undefined ? month : null,
+          id
+        );
+      } catch (_) {}
+    }
+
     res.json(updated);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function createParameter(req, res, next) {
+  try {
+    const parsed = createParameterSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.errors });
+    }
+    const { name, order, isActive, cycleId } = parsed.data;
+
+    let targetCycleId = cycleId;
+    if (!targetCycleId) {
+      const activeCycle = await ensureActiveCycle(req.tenantId, { createdById: req.user.id });
+      targetCycleId = activeCycle.id;
+    }
+
+    const cycle = await prisma.appraisalCycle.findFirst({
+      where: { id: targetCycleId, tenantId: req.tenantId },
+    });
+    if (!cycle) {
+      return res.status(404).json({ error: 'Appraisal cycle not found' });
+    }
+
+    let paramOrder = order;
+    if (!paramOrder) {
+      const lastParam = await prisma.appraisalParameter.findFirst({
+        where: { cycleId: targetCycleId },
+        orderBy: { order: 'desc' },
+      });
+      paramOrder = lastParam ? lastParam.order + 1 : 1;
+    }
+
+    const parameter = await prisma.appraisalParameter.create({
+      data: {
+        tenantId: req.tenantId,
+        cycleId: targetCycleId,
+        name: name.trim(),
+        order: paramOrder,
+        isActive: isActive !== false,
+      },
+    });
+
+    res.status(201).json({
+      success: true,
+      message: `Skill parameter "${parameter.name}" added successfully.`,
+      parameter,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function deleteParameter(req, res, next) {
+  try {
+    const parsedParams = parameterIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid parameter ID parameter', details: parsedParams.error.errors });
+    }
+    const { id } = parsedParams.data;
+
+    const parameter = await prisma.appraisalParameter.findFirst({
+      where: { id, tenantId: req.tenantId },
+      include: {
+        _count: {
+          select: { scores: true },
+        },
+      },
+    });
+
+    if (!parameter) {
+      return res.status(404).json({ error: 'Appraisal parameter not found' });
+    }
+
+    // If review scores already exist for this parameter, soft-deactivate to protect historical integrity
+    if (parameter._count?.scores > 0) {
+      const deactivated = await prisma.appraisalParameter.update({
+        where: { id },
+        data: { isActive: false },
+      });
+      return res.json({
+        success: true,
+        deactivated: true,
+        message: `Parameter "${parameter.name}" has existing review scores and was deactivated.`,
+        parameter: deactivated,
+      });
+    }
+
+    await prisma.appraisalParameter.delete({
+      where: { id },
+    });
+
+    res.json({
+      success: true,
+      message: `Parameter "${parameter.name}" deleted successfully.`,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function listParameters(req, res, next) {
+  try {
+    const parsedQuery = listParametersQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.errors });
+    }
+    const { cycleId } = parsedQuery.data;
+    let targetCycleId = cycleId;
+    if (!targetCycleId) {
+      const active = await ensureActiveCycle(req.tenantId);
+      targetCycleId = active.id;
+    }
+
+    const parameters = await prisma.appraisalParameter.findMany({
+      where: {
+        tenantId: req.tenantId,
+        cycleId: targetCycleId,
+      },
+      orderBy: { order: 'asc' },
+    });
+
+    res.json({
+      success: true,
+      count: parameters.length,
+      parameters,
+    });
   } catch (err) {
     next(err);
   }
@@ -283,7 +728,11 @@ export async function updateCycle(req, res, next) {
 
 export async function updateParameter(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = parameterIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid parameter ID parameter', details: parsedParams.error.errors });
+    }
+    const { id } = parsedParams.data;
 
     const parsed = updateParameterSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -320,14 +769,25 @@ export async function updateParameter(req, res, next) {
 
 export async function getMyReview(req, res, next) {
   try {
-    const freq = req.query.frequency ? req.query.frequency.toUpperCase() : 'MONTHLY';
-    const period = req.query.period || null;
-    const cycleIdQuery = req.query.cycleId || null;
+    const parsedQuery = activeCycleQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.errors });
+    }
+    const {
+      frequency: freq = 'MONTHLY',
+      period = null,
+      cycleId: cycleIdQuery = null,
+      year: yearQuery = null,
+      month: monthQuery = null,
+    } = parsedQuery.data;
 
     const activeCycle = await ensureActiveCycle(req.tenantId, {
       frequency: freq,
       periodName: period,
       cycleId: cycleIdQuery,
+      year: yearQuery,
+      month: monthQuery,
+      createdById: req.user.id,
     });
     const cycleId = activeCycle.id;
 
@@ -385,7 +845,11 @@ export async function getMyReview(req, res, next) {
 
 export async function updateSelfAssessment(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = reviewIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid review ID parameter', details: parsedParams.error.errors });
+    }
+    const { id } = parsedParams.data;
 
     const parsed = selfAssessmentSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -609,7 +1073,7 @@ export async function syncGoalsToAppraisal(req, res, next) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
 
-    const { reviewId, cycleId, frequency, periodName } = parsed.data;
+    const { reviewId, cycleId, frequency, periodName, year, month } = parsed.data;
     const employeeId = req.user.id;
 
     // Fetch employee's goals
@@ -642,7 +1106,7 @@ export async function syncGoalsToAppraisal(req, res, next) {
 
     let targetReviewId = reviewId;
     if (!targetReviewId) {
-      const activeCycle = await ensureActiveCycle(req.tenantId, { frequency, periodName, cycleId });
+      const activeCycle = await ensureActiveCycle(req.tenantId, { frequency, periodName, cycleId, year, month, createdById: req.user.id });
       let existingReview = await prisma.performanceReview.findFirst({
         where: { employeeId, cycleId: activeCycle.id },
       });
@@ -734,15 +1198,30 @@ export async function getDirectReports(req, res, next) {
 
 export async function getEmployeeReviewForManager(req, res, next) {
   try {
-    const { employeeId } = req.params;
-    const freq = req.query.frequency ? req.query.frequency.toUpperCase() : 'MONTHLY';
-    const period = req.query.period || null;
-    const cycleIdQuery = req.query.cycleId || null;
+    const parsedParams = employeeIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid employee ID parameter', details: parsedParams.error.errors });
+    }
+    const { employeeId } = parsedParams.data;
+
+    const parsedQuery = activeCycleQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.errors });
+    }
+    const {
+      frequency: freq = 'MONTHLY',
+      period = null,
+      cycleId: cycleIdQuery = null,
+      year: yearQuery = null,
+      month: monthQuery = null,
+    } = parsedQuery.data;
 
     const activeCycle = await ensureActiveCycle(req.tenantId, {
       cycleId: cycleIdQuery,
       frequency: freq,
       periodName: period,
+      year: yearQuery,
+      month: monthQuery,
     });
     const cycleId = activeCycle.id;
 
@@ -830,7 +1309,11 @@ export async function getEmployeeReviewForManager(req, res, next) {
 
 export async function updateManagerReview(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = reviewIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid review ID parameter', details: parsedParams.error.errors });
+    }
+    const { id } = parsedParams.data;
 
     const parsed = managerReviewSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -928,8 +1411,8 @@ export async function createPeerNomination(req, res, next) {
       return res.status(400).json({ error: 'Validation failed', details: nomParsed.error.errors });
     }
 
-    const { revieweeId, reviewerId, cycleId: passedCycleId } = req.body || {};
-    const activeCycle = await ensureActiveCycle(req.tenantId);
+    const { revieweeId, reviewerId, cycleId: passedCycleId, year, month } = req.body || {};
+    const activeCycle = await ensureActiveCycle(req.tenantId, { cycleId: passedCycleId, year, month });
     const cycleId = passedCycleId || activeCycle.id;
 
     const actualRevieweeId = revieweeId || req.user.id;
@@ -1025,7 +1508,10 @@ export async function createPeerNomination(req, res, next) {
 
 export async function getMyNominatedPeers(req, res, next) {
   try {
-    const activeCycle = await ensureActiveCycle(req.tenantId);
+    const cycleIdQuery = req.query.cycleId || null;
+    const yearQuery = req.query.year ? parseInt(req.query.year, 10) : null;
+    const monthQuery = req.query.month || null;
+    const activeCycle = await ensureActiveCycle(req.tenantId, { cycleId: cycleIdQuery, year: yearQuery, month: monthQuery });
     const nominations = await prisma.peerNomination.findMany({
       where: {
         tenantId: req.tenantId,
@@ -1064,7 +1550,12 @@ export async function getMyNominatedPeers(req, res, next) {
 
 export async function deletePeerNomination(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = nominationIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid nomination ID parameter', details: parsedParams.error.errors });
+    }
+    const { id } = parsedParams.data;
+
     const nomination = await prisma.peerNomination.findFirst({
       where: {
         id,
@@ -1120,7 +1611,11 @@ export async function getPendingNominationsForMe(req, res, next) {
 
 export async function submitPeerFeedback(req, res, next) {
   try {
-    const { id } = req.params; // nominationId
+    const parsedParams = nominationIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid nomination ID parameter', details: parsedParams.error.errors });
+    }
+    const { id } = parsedParams.data; // nominationId
 
     const parsed = peerFeedbackSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -1228,7 +1723,11 @@ export async function getReceivedPeerFeedback(req, res, next) {
 
 export async function getCmdPeerFeedbackForEmployee(req, res, next) {
   try {
-    const { employeeId } = req.params;
+    const parsedParams = employeeIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid employee ID parameter', details: parsedParams.error.errors });
+    }
+    const { employeeId } = parsedParams.data;
     const activeCycle = await ensureActiveCycle(req.tenantId);
     const cycleId = req.query.cycleId || activeCycle.id;
 
@@ -1282,9 +1781,16 @@ export async function getCmdPeerFeedbackForEmployee(req, res, next) {
 
 export async function getHrAuditReview(req, res, next) {
   try {
-    const { employeeId } = req.params;
-    const activeCycle = await ensureActiveCycle(req.tenantId);
-    const cycleId = req.query.cycleId || activeCycle.id;
+    const parsedParams = employeeIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid employee ID parameter', details: parsedParams.error.errors });
+    }
+    const { employeeId } = parsedParams.data;
+    const cycleIdQuery = req.query.cycleId || null;
+    const yearQuery = req.query.year ? parseInt(req.query.year, 10) : null;
+    const monthQuery = req.query.month || null;
+    const activeCycle = await ensureActiveCycle(req.tenantId, { cycleId: cycleIdQuery, year: yearQuery, month: monthQuery });
+    const cycleId = cycleIdQuery || activeCycle.id;
 
     const employee = await prisma.tenantUser.findFirst({
       where: { id: employeeId, tenantId: req.tenantId },
@@ -1345,7 +1851,11 @@ export async function getHrAuditReview(req, res, next) {
 
 export async function updateHrAuditReview(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = reviewIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid review ID parameter', details: parsedParams.error.errors });
+    }
+    const { id } = parsedParams.data;
 
     const parsed = hrAuditSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -1661,6 +2171,8 @@ export async function submitSelfRating(req, res, next) {
 
     const {
       cycleId: passedCycleId,
+      year,
+      month,
       frequency,
       periodName,
       rating,
@@ -1676,6 +2188,9 @@ export async function submitSelfRating(req, res, next) {
       cycleId: passedCycleId,
       frequency: frequency || 'MONTHLY',
       periodName,
+      year,
+      month,
+      createdById: req.user.id,
     });
     const cycleId = activeCycle.id;
 
@@ -1833,7 +2348,11 @@ export async function deleteReview(req, res, next) {
  */
 export async function updateReview(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = reviewIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid review ID parameter', details: parsedParams.error.errors });
+    }
+    const { id } = parsedParams.data;
 
     const parsed = updateReviewSchema.safeParse(req.body);
     if (!parsed.success) {

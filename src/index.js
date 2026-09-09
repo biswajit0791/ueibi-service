@@ -16,6 +16,8 @@ server.listen(env.port, async () => {
   try {
     await prisma.$queryRaw`SELECT 1`;
     console.log(' Database: Connected (PostgreSQL)');
+    const { ensureAppraisalColumns } = await import('./lib/dbInit.js');
+    await ensureAppraisalColumns();
   } catch (err) {
     console.error(' Database: Connection FAILED -', err.message);
   }
