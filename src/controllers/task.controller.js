@@ -461,7 +461,7 @@ export async function updateTask(req, res, next) {
 
     // 4. Dependency parent mapping guard
     if (isDependencyOf !== undefined && isDependencyOf !== existing.isDependencyOf) {
-      if (!isElevated && !isDirectManager) {
+      if (!isElevated && !isDirectManager && existing.employeeId !== req.user.id) {
         return res.status(403).json({ success: false, error: 'Forbidden: Employees cannot modify dependency structure' });
       }
     }
@@ -517,8 +517,8 @@ export async function updateTask(req, res, next) {
         ...(isStandalone !== undefined && (isElevated || isDirectManager) && { isStandalone }),
         ...(weight !== undefined && (isElevated || isDirectManager) && { weight }),
         ...(description !== undefined && { description }),
-        ...(dependency !== undefined && (isElevated || isDirectManager) && { dependency: dependency || null }),
-        ...(isDependencyOf !== undefined && (isElevated || isDirectManager) && { isDependencyOf: isDependencyOf || null }),
+        ...(dependency !== undefined && (isElevated || isDirectManager || existing.employeeId === req.user.id) && { dependency: dependency || null }),
+        ...(isDependencyOf !== undefined && (isElevated || isDirectManager || existing.employeeId === req.user.id) && { isDependencyOf: isDependencyOf || null }),
         ...(employeeId !== undefined && (isElevated || isDirectManager) && { employeeId }),
       },
     });
