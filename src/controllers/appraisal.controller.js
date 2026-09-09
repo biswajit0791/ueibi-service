@@ -969,7 +969,10 @@ export async function getMyGoals(req, res, next) {
 
     const whereClause = {
       tenantId: req.tenantId,
-      employeeId: targetEmpId,
+      OR: [
+        { employeeId: targetEmpId },
+        { assignments: { some: { employeeId: targetEmpId } } },
+      ],
     };
 
     if (status && status !== 'all') {
@@ -994,11 +997,14 @@ export async function getMyGoals(req, res, next) {
     const totalPages = Math.ceil(total / limit) || 1;
 
     // Fetch exact created goals with pagination
-    const goals = await prisma.goal.findMany({
+    const rawGoals = await prisma.goal.findMany({
       where: whereClause,
       include: {
+        assignments: {
+          where: { employeeId: targetEmpId },
+        },
         tasks: {
-          select: { id: true, title: true, status: true, priority: true, dueDate: true },
+          select: { id: true, title: true, status: true, priority: true, dueDate: true, employeeId: true },
         },
         employee: {
           select: { id: true, name: true, email: true, department: true, designation: true },
@@ -1009,27 +1015,56 @@ export async function getMyGoals(req, res, next) {
       take: limit,
     });
 
-    // Rollup Synchronization Metrics across all goals of this employee
-    const allUserGoals = await prisma.goal.findMany({
-      where: { tenantId: req.tenantId, employeeId: targetEmpId },
-      select: { progress: true, status: true, milestones: true, completedMilestones: true },
+    const goals = rawGoals.map((g) => {
+      const a = g.assignments?.[0];
+      return {
+        ...g,
+        progress: a ? a.progress : g.progress,
+        status: a ? a.status : g.status,
+        milestones: a ? a.milestones : g.milestones,
+        completedMilestones: a ? a.completedMilestones : g.completedMilestones,
+      };
     });
 
-    const totalGoals = allUserGoals.length;
-    const completedGoals = allUserGoals.filter(
+    // Rollup Synchronization Metrics across all goals of this employee
+    const allUserGoals = await prisma.goal.findMany({
+      where: {
+        tenantId: req.tenantId,
+        OR: [
+          { employeeId: targetEmpId },
+          { assignments: { some: { employeeId: targetEmpId } } },
+        ],
+      },
+      include: {
+        assignments: { where: { employeeId: targetEmpId } },
+      },
+    });
+
+    const userGoalMetrics = allUserGoals.map(g => {
+      const a = g.assignments?.[0];
+      return {
+        progress: a ? a.progress : g.progress,
+        status: a ? a.status : g.status,
+        milestones: a ? a.milestones : g.milestones,
+        completedMilestones: a ? a.completedMilestones : g.completedMilestones,
+      };
+    });
+
+    const totalGoals = userGoalMetrics.length;
+    const completedGoals = userGoalMetrics.filter(
       g => g.status === 'COMPLETED' || g.status === 'Completed' || g.progress >= 100
     ).length;
-    const inProgressGoals = allUserGoals.filter(
+    const inProgressGoals = userGoalMetrics.filter(
       g => g.status !== 'COMPLETED' && g.status !== 'Completed' && g.progress < 100
     ).length;
-    const totalProgressSum = allUserGoals.reduce((acc, g) => acc + (g.progress || 0), 0);
+    const totalProgressSum = userGoalMetrics.reduce((acc, g) => acc + (g.progress || 0), 0);
     const averageProgress = totalGoals > 0 ? Math.round(totalProgressSum / totalGoals) : 0;
     const alignmentScore = totalGoals > 0
       ? Math.min(5.0, Math.max(1.0, +(averageProgress / 20).toFixed(1)))
       : 5.0;
 
-    const milestonesTotal = allUserGoals.reduce((acc, g) => acc + (g.milestones || 0), 0);
-    const milestonesCompleted = allUserGoals.reduce((acc, g) => acc + (g.completedMilestones || 0), 0);
+    const milestonesTotal = userGoalMetrics.reduce((acc, g) => acc + (g.milestones || 0), 0);
+    const milestonesCompleted = userGoalMetrics.reduce((acc, g) => acc + (g.completedMilestones || 0), 0);
 
     res.json({
       goals,
@@ -1077,12 +1112,29 @@ export async function syncGoalsToAppraisal(req, res, next) {
     const employeeId = req.user.id;
 
     // Fetch employee's goals
-    const goals = await prisma.goal.findMany({
+    const rawGoals = await prisma.goal.findMany({
       where: {
         tenantId: req.tenantId,
-        employeeId,
+        OR: [
+          { employeeId },
+          { assignments: { some: { employeeId } } },
+        ],
+      },
+      include: {
+        assignments: { where: { employeeId } },
       },
       orderBy: [{ progress: 'desc' }, { priority: 'asc' }],
+    });
+
+    const goals = rawGoals.map(g => {
+      const a = g.assignments?.[0];
+      return {
+        ...g,
+        progress: a ? a.progress : g.progress,
+        status: a ? a.status : g.status,
+        milestones: a ? a.milestones : g.milestones,
+        completedMilestones: a ? a.completedMilestones : g.completedMilestones,
+      };
     });
 
     if (goals.length === 0) {

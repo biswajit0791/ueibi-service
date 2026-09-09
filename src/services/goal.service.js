@@ -78,7 +78,9 @@ export class GoalService {
     let current = await prisma.tenantUser.findFirst({
       where: { id: targetId, tenantId },
     });
-    while (current && current.managerId) {
+    const visited = new Set([targetId]);
+    while (current && current.managerId && !visited.has(current.managerId)) {
+      visited.add(current.managerId);
       if (current.managerId === managerId) {
         return true;
       }
@@ -90,36 +92,81 @@ export class GoalService {
   }
 
   /**
-   * Recalculates goal progress from its linked tasks.
+   * Recalculates goal progress from its linked tasks for a specific employee or across all tasks.
+   * Automatically transitions status to READY_FOR_SUBMISSION when all tasks are complete, or IN_PROGRESS when tasks are underway.
    */
-  async recalculateProgress(goalId) {
+  async recalculateProgress(goalId, employeeId = null) {
     if (!goalId) return 0;
 
-    const tasks = await prisma.task.findMany({
-      where: { goalId },
-    });
+    const allGoalTasks = await prisma.task.findMany({ where: { goalId } });
+    const empTasks = employeeId ? allGoalTasks.filter(t => !t.employeeId || t.employeeId === employeeId) : allGoalTasks;
 
-    if (tasks.length === 0) {
-      await prisma.goal.update({
-        where: { id: goalId },
-        data: { progress: 0, milestones: 0, completedMilestones: 0 },
-      });
-      return 0;
+    const totalWeight = empTasks.reduce((sum, t) => sum + Number(t.weight || 1), 0);
+    const earned = empTasks.reduce((sum, t) => sum + (Number(t.progress || 0) * Number(t.weight || 1)), 0);
+    const empProgress = totalWeight > 0 ? Math.min(100, Math.round(earned / totalWeight)) : 0;
+    const empCompletedCount = empTasks.filter(t => t.status === 'done' || t.progress === 100).length;
+
+    // Update specific GoalAssignment if employeeId is specified
+    if (employeeId) {
+      try {
+        const currentAssignment = await prisma.goalAssignment.findFirst({
+          where: { goalId, employeeId },
+        });
+
+        let assignmentStatus = currentAssignment?.status || 'DRAFT';
+        if (['DRAFT', 'IN_PROGRESS', 'READY_FOR_SUBMISSION'].includes(assignmentStatus)) {
+          if (empTasks.length > 0 && (empCompletedCount === empTasks.length || empProgress === 100)) {
+            assignmentStatus = 'READY_FOR_SUBMISSION';
+          } else if (empProgress > 0) {
+            assignmentStatus = 'IN_PROGRESS';
+          } else if (empProgress === 0 && assignmentStatus === 'IN_PROGRESS') {
+            assignmentStatus = 'DRAFT';
+          }
+        }
+
+        await prisma.goalAssignment.updateMany({
+          where: { goalId, employeeId },
+          data: {
+            progress: empProgress,
+            status: assignmentStatus,
+            milestones: empTasks.length,
+            completedMilestones: empCompletedCount,
+          },
+        });
+      } catch (err) {
+        console.warn('[GoalService] Notice updating goal assignment progress:', err.message);
+      }
     }
 
-    const totalWeight = tasks.reduce((sum, t) => sum + Number(t.weight || 1), 0);
-    const earned = tasks.reduce((sum, t) => sum + (Number(t.progress || 0) * Number(t.weight || 1)), 0);
-    const overallProgress = totalWeight > 0 ? Math.min(100, Math.round(earned / totalWeight)) : 0;
-    const completedTasksCount = tasks.filter(t => t.status === 'done' || t.progress === 100).length;
+    // Recalculate overall goal progress across all tasks
+    const totalAllWeight = allGoalTasks.reduce((sum, t) => sum + Number(t.weight || 1), 0);
+    const earnedAll = allGoalTasks.reduce((sum, t) => sum + (Number(t.progress || 0) * Number(t.weight || 1)), 0);
+    const overallProgress = totalAllWeight > 0 ? Math.min(100, Math.round(earnedAll / totalAllWeight)) : 0;
+    const allCompletedCount = allGoalTasks.filter(t => t.status === 'done' || t.progress === 100).length;
 
-    await prisma.goal.update({
-      where: { id: goalId },
-      data: {
-        progress: overallProgress,
-        milestones: tasks.length,
-        completedMilestones: completedTasksCount,
-      },
-    });
+    const goal = await prisma.goal.findUnique({ where: { id: goalId } });
+    if (goal) {
+      let goalStatus = goal.status || 'DRAFT';
+      if (['DRAFT', 'IN_PROGRESS', 'READY_FOR_SUBMISSION'].includes(goalStatus)) {
+        if (allGoalTasks.length > 0 && (allCompletedCount === allGoalTasks.length || overallProgress === 100)) {
+          goalStatus = 'READY_FOR_SUBMISSION';
+        } else if (overallProgress > 0) {
+          goalStatus = 'IN_PROGRESS';
+        } else if (overallProgress === 0 && goalStatus === 'IN_PROGRESS') {
+          goalStatus = 'DRAFT';
+        }
+      }
+
+      await prisma.goal.update({
+        where: { id: goalId },
+        data: {
+          progress: overallProgress,
+          status: goalStatus,
+          milestones: allGoalTasks.length,
+          completedMilestones: allCompletedCount,
+        },
+      });
+    }
 
     return overallProgress;
   }
@@ -134,6 +181,13 @@ export class GoalService {
         employee: {
           select: { id: true, name: true, email: true, managerId: true },
         },
+        assignments: {
+          include: {
+            employee: {
+              select: { id: true, name: true, email: true, managerId: true },
+            },
+          },
+        },
         tasks: true,
       },
     });
@@ -142,25 +196,28 @@ export class GoalService {
       throw { status: 404, message: 'Goal not found' };
     }
 
-    const isAssignee = goal.employeeId === user.id;
-    const isElevated = ['SUPER_ADMIN', 'HR', 'ADMIN'].includes(user.role);
+    const userAssignment = goal.assignments?.find(a => a.employeeId === user.id);
+    const isAssignee = goal.employeeId === user.id || Boolean(userAssignment);
+    const isElevated = ['SUPER_ADMIN', 'HR', 'ADMIN', 'CMD', 'DIRECTOR', 'LEADERSHIP', 'OWNER'].includes(user.role);
 
     if (!isAssignee && !isElevated) {
       throw { status: 403, message: 'Access forbidden: only the goal assignee can submit this goal for review' };
     }
 
-    const allowedStatuses = ['DRAFT', 'READY_FOR_SUBMISSION', 'CHANGES_REQUESTED', 'in_progress', 'draft', 'rejected'];
-    if (!allowedStatuses.includes(goal.status)) {
-      throw { status: 400, message: `Goal cannot be submitted from current status: "${goal.status}"` };
+    const targetEmpId = userAssignment?.employeeId || goal.employeeId || goal.assignments?.[0]?.employeeId || user.id;
+    const currentStatus = (userAssignment ? userAssignment.status : goal.status) || 'DRAFT';
+    const allowedStatuses = ['DRAFT', 'READY_FOR_SUBMISSION', 'CHANGES_REQUESTED', 'IN_PROGRESS', 'REJECTED'];
+    if (!allowedStatuses.includes(String(currentStatus).toUpperCase())) {
+      throw { status: 400, message: `Goal cannot be submitted from current status: "${currentStatus}"` };
     }
 
-    // Validate that tasks exist and are completed
-    const tasks = goal.tasks || [];
-    if (tasks.length === 0) {
+    // Validate that tasks exist for this target employee and are completed
+    const myTasks = (goal.tasks || []).filter(t => !t.employeeId || t.employeeId === targetEmpId || t.employeeId === user.id);
+    if (myTasks.length === 0) {
       throw { status: 400, message: 'Cannot submit goal: at least one task/milestone must be added to this goal.' };
     }
 
-    const incompleteTasks = tasks.filter(t => t.status !== 'done' && (t.progress || 0) < 100);
+    const incompleteTasks = myTasks.filter(t => t.status !== 'done' && (Number(t.progress) || 0) < 100);
     if (incompleteTasks.length > 0) {
       throw {
         status: 400,
@@ -168,8 +225,22 @@ export class GoalService {
       };
     }
 
-    const hasManager = Boolean(goal.employee.managerId);
+    const targetUser = userAssignment?.employee || goal.assignments?.find(a => a.employeeId === targetEmpId)?.employee || goal.employee;
+    const hasManager = Boolean(targetUser?.managerId);
     const newStatus = hasManager ? 'PENDING_MANAGER_REVIEW' : 'PENDING_HR_REVIEW';
+
+    // Update assignment status independently
+    try {
+      await prisma.goalAssignment.updateMany({
+        where: { goalId, employeeId: targetEmpId },
+        data: {
+          status: newStatus,
+          progress: 100,
+        },
+      });
+    } catch (err) {
+      console.warn('[GoalService] Notice updating goal assignment on submit:', err.message);
+    }
 
     const updated = await prisma.goal.update({
       where: { id: goalId },
@@ -179,6 +250,11 @@ export class GoalService {
       },
       include: {
         employee: true,
+        assignments: {
+          include: {
+            employee: { select: { id: true, name: true, email: true, department: true, designation: true } },
+          },
+        },
         tasks: true,
         auditLogs: { orderBy: { createdAt: 'desc' }, include: { performedBy: { select: { id: true, name: true, role: true } } } },
       },
@@ -189,17 +265,17 @@ export class GoalService {
       performedById: user.id,
       action: 'GOAL_SUBMITTED',
       details: `${user.name} submitted goal for review.`,
-      previousValue: { status: goal.status },
+      previousValue: { status: currentStatus },
     });
 
     // Notify Manager or HR
-    if (hasManager) {
+    if (hasManager && targetUser.managerId) {
       await this.notify({
         tenantId,
-        recipientId: goal.employee.managerId,
+        recipientId: targetUser.managerId,
         type: 'goal_update',
         title: `Goal Submitted for Review: "${goal.title}"`,
-        body: `${goal.employee.name} has completed all tasks and submitted "${goal.title}" for your review.`,
+        body: `${user.name} has completed all tasks and submitted "${goal.title}" for your review.`,
         entityType: 'goal',
         entityId: goal.id,
       });
@@ -214,7 +290,7 @@ export class GoalService {
           recipientId: hr.id,
           type: 'goal_update',
           title: `Goal Submitted for HR Review: "${goal.title}"`,
-          body: `${goal.employee.name} submitted "${goal.title}" for final review.`,
+          body: `${user.name} submitted "${goal.title}" for final review.`,
           entityType: 'goal',
           entityId: goal.id,
         });
@@ -233,11 +309,16 @@ export class GoalService {
   /**
    * Manager reviews a goal (Approve or Request Changes).
    */
-  async managerReview({ tenantId, goalId, user, action, comment, rating }) {
+  async managerReview({ tenantId, goalId, user, action, comment, rating, targetEmployeeId = null }) {
     const goal = await prisma.goal.findFirst({
       where: { id: goalId, tenantId },
       include: {
         employee: true,
+        assignments: {
+          include: {
+            employee: true,
+          },
+        },
         tasks: true,
       },
     });
@@ -246,19 +327,30 @@ export class GoalService {
       throw { status: 404, message: 'Goal not found' };
     }
 
-    const isDirectManager = goal.employee.managerId === user.id;
-    const isElevated = ['SUPER_ADMIN', 'HR', 'ADMIN'].includes(user.role);
+    const targetEmpId = targetEmployeeId || goal.employeeId || goal.assignments?.[0]?.employeeId;
+    const targetUser = goal.assignments?.find(a => a.employeeId === targetEmpId)?.employee || goal.employee;
+
+    const isDirectManager = targetUser?.managerId === user.id;
+    const isElevated = ['SUPER_ADMIN', 'ADMIN', 'HR', 'LEADERSHIP', 'OWNER', 'CMD', 'DIRECTOR'].includes(user.role);
 
     if (!isDirectManager && !isElevated) {
       throw { status: 403, message: 'Access forbidden: you are not the reporting manager for this employee' };
     }
 
-    if (goal.status !== 'PENDING_MANAGER_REVIEW' && goal.status !== 'submitted') {
-      throw { status: 400, message: `Goal is not currently awaiting manager review (Status: ${goal.status})` };
-    }
-
     const isApprove = action === 'APPROVE';
     const newStatus = isApprove ? 'PENDING_HR_REVIEW' : 'CHANGES_REQUESTED';
+
+    // Update assignment status independently
+    if (targetEmpId) {
+      try {
+        await prisma.goalAssignment.updateMany({
+          where: { goalId, employeeId: targetEmpId },
+          data: { status: newStatus },
+        });
+      } catch (err) {
+        console.warn('[GoalService] Notice updating goal assignment on manager review:', err.message);
+      }
+    }
 
     const updated = await prisma.goal.update({
       where: { id: goalId },
@@ -268,6 +360,11 @@ export class GoalService {
       },
       include: {
         employee: true,
+        assignments: {
+          include: {
+            employee: { select: { id: true, name: true, email: true, department: true, designation: true } },
+          },
+        },
         tasks: true,
         auditLogs: { orderBy: { createdAt: 'desc' }, include: { performedBy: { select: { id: true, name: true, role: true } } } },
       },
@@ -284,22 +381,24 @@ export class GoalService {
     });
 
     // Notify Employee
-    await this.notify({
-      tenantId,
-      recipientId: goal.employeeId,
-      type: 'goal_update',
-      title: isApprove ? `Manager Approved: "${goal.title}"` : `Revisions Requested: "${goal.title}"`,
-      body: isApprove
-        ? `Manager ${user.name} approved your goal. It is now awaiting final HR sign-off.`
-        : `Manager ${user.name} requested revisions: "${comment || 'Please update tasks'}"`,
-      entityType: 'goal',
-      entityId: goal.id,
-    });
+    if (targetEmpId) {
+      await this.notify({
+        tenantId,
+        recipientId: targetEmpId,
+        type: 'goal_update',
+        title: isApprove ? `Manager Approved: "${goal.title}"` : `Revisions Requested: "${goal.title}"`,
+        body: isApprove
+          ? `Manager ${user.name} approved your goal. It is now awaiting final HR sign-off.`
+          : `Manager ${user.name} requested revisions: "${comment || 'Please update tasks'}"`,
+        entityType: 'goal',
+        entityId: goal.id,
+      });
+    }
 
     // If Manager Approved, notify HR
     if (isApprove) {
       const hrUsers = await prisma.tenantUser.findMany({
-        where: { tenantId, role: { in: ['HR', 'SUPER_ADMIN', 'ADMIN'] } },
+        where: { tenantId, role: { in: ['HR', 'SUPER_ADMIN', 'ADMIN', 'CMD', 'DIRECTOR'] } },
         select: { id: true },
       });
       for (const hr of hrUsers) {
@@ -308,7 +407,7 @@ export class GoalService {
           recipientId: hr.id,
           type: 'goal_update',
           title: `Action Required: HR Final Approval for "${goal.title}"`,
-          body: `Manager ${user.name} approved ${goal.employee.name}'s goal. Please provide final sign-off.`,
+          body: `Manager ${user.name} approved ${targetUser?.name || 'employee'}'s goal. Please provide final sign-off.`,
           entityType: 'goal',
           entityId: goal.id,
         });
@@ -327,11 +426,16 @@ export class GoalService {
   /**
    * HR final review for a goal (Approve -> COMPLETED, or Request Changes).
    */
-  async hrReview({ tenantId, goalId, user, action, comment, rating }) {
+  async hrReview({ tenantId, goalId, user, action, comment, rating, targetEmployeeId = null }) {
     const goal = await prisma.goal.findFirst({
       where: { id: goalId, tenantId },
       include: {
         employee: true,
+        assignments: {
+          include: {
+            employee: true,
+          },
+        },
         tasks: true,
       },
     });
@@ -340,17 +444,29 @@ export class GoalService {
       throw { status: 404, message: 'Goal not found' };
     }
 
-    const isHR = ['HR', 'SUPER_ADMIN', 'ADMIN', 'LEADERSHIP', 'OWNER'].includes(user.role);
+    const isHR = ['HR', 'SUPER_ADMIN', 'ADMIN', 'LEADERSHIP', 'OWNER', 'CMD', 'DIRECTOR'].includes(user.role);
     if (!isHR) {
       throw { status: 403, message: 'Access forbidden: HR authorization required for final sign-off' };
     }
 
-    if (goal.status !== 'PENDING_HR_REVIEW' && goal.status !== 'PENDING_MANAGER_REVIEW' && goal.status !== 'submitted') {
-      throw { status: 400, message: `Goal is not currently in a reviewable state (Status: ${goal.status})` };
-    }
-
+    const targetEmpId = targetEmployeeId || goal.employeeId || goal.assignments?.[0]?.employeeId;
     const isApprove = action === 'APPROVE';
     const newStatus = isApprove ? 'COMPLETED' : 'CHANGES_REQUESTED';
+
+    // Update assignment status independently
+    if (targetEmpId) {
+      try {
+        await prisma.goalAssignment.updateMany({
+          where: { goalId, employeeId: targetEmpId },
+          data: {
+            status: newStatus,
+            progress: isApprove ? 100 : undefined,
+          },
+        });
+      } catch (err) {
+        console.warn('[GoalService] Notice updating goal assignment on HR review:', err.message);
+      }
+    }
 
     const updated = await prisma.goal.update({
       where: { id: goalId },
@@ -361,6 +477,11 @@ export class GoalService {
       },
       include: {
         employee: true,
+        assignments: {
+          include: {
+            employee: { select: { id: true, name: true, email: true, department: true, designation: true } },
+          },
+        },
         tasks: true,
         auditLogs: { orderBy: { createdAt: 'desc' }, include: { performedBy: { select: { id: true, name: true, role: true } } } },
       },
@@ -377,17 +498,19 @@ export class GoalService {
     });
 
     // Notify Employee
-    await this.notify({
-      tenantId,
-      recipientId: goal.employeeId,
-      type: 'goal_update',
-      title: isApprove ? `Goal Completed: "${goal.title}"` : `HR Requested Changes: "${goal.title}"`,
-      body: isApprove
-        ? `Congratulations! HR Partner ${user.name} officially approved and marked your goal "${goal.title}" as COMPLETED.`
-        : `HR Partner ${user.name} requested changes: "${comment}"`,
-      entityType: 'goal',
-      entityId: goal.id,
-    });
+    if (targetEmpId) {
+      await this.notify({
+        tenantId,
+        recipientId: targetEmpId,
+        type: 'goal_update',
+        title: isApprove ? `Goal Completed: "${goal.title}"` : `HR Requested Changes: "${goal.title}"`,
+        body: isApprove
+          ? `Congratulations! HR Partner ${user.name} officially approved and marked your goal "${goal.title}" as COMPLETED.`
+          : `HR Partner ${user.name} requested changes: "${comment}"`,
+        entityType: 'goal',
+        entityId: goal.id,
+      });
+    }
 
     emitToTenant(tenantId, 'goal_updated', {
       action: 'update',
@@ -406,6 +529,11 @@ export class GoalService {
       where: { id: goalId, tenantId },
       include: {
         employee: true,
+        assignments: {
+          include: {
+            employee: true,
+          },
+        },
         tasks: true,
       },
     });
@@ -414,19 +542,27 @@ export class GoalService {
       throw { status: 404, message: 'Goal not found' };
     }
 
-    const isAssignee = goal.employeeId === user.id;
-    const isElevated = ['SUPER_ADMIN', 'HR', 'ADMIN'].includes(user.role);
+    const userAssignment = goal.assignments?.find(a => a.employeeId === user.id);
+    const isAssignee = goal.employeeId === user.id || Boolean(userAssignment);
+    const isElevated = ['SUPER_ADMIN', 'HR', 'ADMIN', 'CMD', 'DIRECTOR', 'LEADERSHIP', 'OWNER'].includes(user.role);
 
     if (!isAssignee && !isElevated) {
       throw { status: 403, message: 'Access forbidden: only the goal assignee can resubmit this goal' };
     }
 
-    if (goal.status !== 'CHANGES_REQUESTED' && goal.status !== 'rejected') {
-      throw { status: 400, message: `Goal is not in a revision state (Status: ${goal.status})` };
-    }
-
-    const hasManager = Boolean(goal.employee.managerId);
+    const targetUser = userAssignment?.employee || goal.employee;
+    const hasManager = Boolean(targetUser?.managerId);
     const newStatus = hasManager ? 'PENDING_MANAGER_REVIEW' : 'PENDING_HR_REVIEW';
+
+    // Update assignment status independently
+    try {
+      await prisma.goalAssignment.updateMany({
+        where: { goalId, employeeId: user.id },
+        data: { status: newStatus },
+      });
+    } catch (err) {
+      console.warn('[GoalService] Notice updating goal assignment on resubmit:', err.message);
+    }
 
     const updated = await prisma.goal.update({
       where: { id: goalId },
@@ -435,6 +571,11 @@ export class GoalService {
       },
       include: {
         employee: true,
+        assignments: {
+          include: {
+            employee: { select: { id: true, name: true, email: true, department: true, designation: true } },
+          },
+        },
         tasks: true,
         auditLogs: { orderBy: { createdAt: 'desc' }, include: { performedBy: { select: { id: true, name: true, role: true } } } },
       },
@@ -449,13 +590,13 @@ export class GoalService {
     });
 
     // Notify Manager or HR
-    if (hasManager) {
+    if (hasManager && targetUser?.managerId) {
       await this.notify({
         tenantId,
-        recipientId: goal.employee.managerId,
+        recipientId: targetUser.managerId,
         type: 'goal_update',
         title: `Goal Resubmitted: "${goal.title}"`,
-        body: `${goal.employee.name} has updated and resubmitted "${goal.title}" for your review.`,
+        body: `${user.name} has updated and resubmitted "${goal.title}" for your review.`,
         entityType: 'goal',
         entityId: goal.id,
       });

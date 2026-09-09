@@ -621,7 +621,23 @@ const options = {
           },
         },
         
-        // ── Goal schemas ──
+        GoalAssignment: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', example: 'ga_clxyz123' },
+            tenantId: { type: 'string', example: 'tenant_abc' },
+            goalId: { type: 'string', example: 'clgoal123' },
+            employeeId: { type: 'string', example: 'emp_456' },
+            assignedById: { type: 'string', nullable: true, example: 'mgr_789' },
+            progress: { type: 'integer', example: 60, description: 'Employee-specific progress percentage (0-100)' },
+            status: { type: 'string', example: 'IN_PROGRESS', description: 'Employee-specific goal status' },
+            milestones: { type: 'integer', example: 3 },
+            completedMilestones: { type: 'integer', example: 1 },
+            createdAt: { type: 'string', format: 'date-time' },
+            updatedAt: { type: 'string', format: 'date-time' },
+            employee: { $ref: '#/components/schemas/Employee' },
+          },
+        },
         Goal: {
           type: 'object',
           properties: {
@@ -631,7 +647,7 @@ const options = {
             description: { type: 'string', example: 'Refactor goals repository module to support direct tenancy.' },
             goalType: { type: 'string', example: 'General' },
             category: { type: 'string', example: 'Project Delivery' },
-            priority: { type: 'string', enum: ['high', 'medium', 'low'], example: 'medium' },
+            priority: { type: 'string', enum: ['high', 'medium', 'low', 'critical'], example: 'medium' },
             progress: { type: 'integer', example: 45 },
             status: { type: 'string', example: 'DRAFT' },
             financialYear: { type: 'string', example: 'FY 2026-27' },
@@ -641,9 +657,14 @@ const options = {
             attachments: { type: 'array', items: { type: 'string' } },
             specialNotes: { type: 'string', example: 'Ensure that the indexes are added to tenantId.' },
             dueDate: { type: 'string', format: 'date' },
-            employeeId: { type: 'string' },
+            employeeId: { type: 'string', nullable: true },
             milestones: { type: 'integer', example: 4 },
             completedMilestones: { type: 'integer', example: 1 },
+            assignments: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/GoalAssignment' },
+              description: 'Independent relational assignments for all employees allocated to this goal',
+            },
             createdAt: { type: 'string', format: 'date-time' },
           },
         },
@@ -660,10 +681,16 @@ const options = {
             quarter: { type: 'string', example: 'Q1' },
             startDate: { type: 'string', format: 'date-time' },
             targetDate: { type: 'string', format: 'date-time' },
+            dueDate: { type: 'string', format: 'date' },
             attachments: { type: 'array', items: { type: 'string' } },
             specialNotes: { type: 'string', example: 'Ensure that the indexes are added to tenantId.' },
-            dueDate: { type: 'string', format: 'date' },
-            employeeId: { type: 'string' },
+            employeeIds: {
+              type: 'array',
+              items: { type: 'string' },
+              example: ['emp_123', 'emp_456'],
+              description: 'Array of employee IDs to assign this goal to. Validated against reporting hierarchy.',
+            },
+            employeeId: { type: 'string', description: 'Legacy single target employee ID (auto-normalized to employeeIds)' },
           },
         },
         GoalUpdateRequest: {
@@ -682,6 +709,36 @@ const options = {
             status: { type: 'string', example: 'DRAFT' },
           },
         },
+        GoalSubmitRequest: {
+          type: 'object',
+          properties: {
+            comment: { type: 'string', maxLength: 1000, example: 'Completed all tasks. Ready for manager review.' },
+            targetEmployeeId: { type: 'string', example: 'emp_123' },
+          },
+        },
+        GoalApproveRequest: {
+          type: 'object',
+          properties: {
+            comment: { type: 'string', maxLength: 1000, example: 'Approved and verified deliverables.' },
+            rating: { type: 'integer', minimum: 1, maximum: 5, example: 5 },
+            targetEmployeeId: { type: 'string', example: 'emp_123', description: 'Target assignee ID when reviewing multi-employee goals' },
+          },
+        },
+        GoalRejectRequest: {
+          type: 'object',
+          required: ['comment'],
+          properties: {
+            comment: { type: 'string', minLength: 1, maxLength: 1000, example: 'Please complete remaining integration tests.' },
+            targetEmployeeId: { type: 'string', example: 'emp_123', description: 'Target assignee ID when requesting revisions' },
+          },
+        },
+        GoalResubmitRequest: {
+          type: 'object',
+          properties: {
+            comment: { type: 'string', maxLength: 1000, example: 'Revised according to review feedback.' },
+            targetEmployeeId: { type: 'string', example: 'emp_123' },
+          },
+        },
         GoalReviewRequest: {
           type: 'object',
           required: ['action'],
@@ -689,6 +746,15 @@ const options = {
             action: { type: 'string', enum: ['APPROVE', 'REJECT'], example: 'APPROVE' },
             comment: { type: 'string', example: 'Goal deliverables successfully verified against SLAs.' },
             rating: { type: 'integer', minimum: 1, maximum: 5, example: 5 },
+            targetEmployeeId: { type: 'string', example: 'emp_123' },
+          },
+        },
+        GoalCommentCreateRequest: {
+          type: 'object',
+          required: ['comment'],
+          properties: {
+            comment: { type: 'string', minLength: 1, maxLength: 2000, example: 'Finished all unit and integration tests.' },
+            attachments: { type: 'array', items: { type: 'string' }, example: ['https://cdn.example.com/test-report.pdf'] },
           },
         },
         GoalComment: {
@@ -2669,23 +2735,29 @@ const options = {
       '/goals': {
         get: {
           tags: ['Goals'],
-          summary: 'List all goals for an employee',
+          summary: 'List authorized goals with RBAC hierarchy scoping',
+          description: 'Returns goals based on caller role: EMPLOYEE sees only own goals; MANAGER sees own goals + goals assigned to reporting downline (including HR/Admin created goals) + created goals; HR/ADMIN sees tenant-wide goals.',
           operationId: 'listGoals',
           security: [{ userCookie: [] }],
           parameters: [
-            { name: 'employeeId', in: 'query', schema: { type: 'string' }, description: 'Employee ID (defaults to current user)' },
+            { name: 'employeeId', in: 'query', schema: { type: 'string' }, description: 'Employee ID filter ("all" for all team/tenant goals, or specific employee ID)' },
+            { name: 'status', in: 'query', schema: { type: 'string' }, description: 'Filter by goal status' },
+            { name: 'financialYear', in: 'query', schema: { type: 'string' }, description: 'Filter by financial year' },
+            { name: 'category', in: 'query', schema: { type: 'string' }, description: 'Filter by category' },
           ],
           responses: {
             200: {
-              description: 'Goals list retrieved',
+              description: 'Goals list retrieved successfully',
               content: { 'application/json': { schema: { type: 'object', properties: { items: { type: 'array', items: { $ref: '#/components/schemas/Goal' } } } } } },
             },
             401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden — not authorized to view target employee goals' },
           },
         },
         post: {
           tags: ['Goals'],
-          summary: 'Create a new goal',
+          summary: 'Create a new goal with atomic multi-employee assignment',
+          description: 'Creates a goal and assigns it transactionally to one or multiple employees. Validates all target employees against the manager reporting downline. If any employee is unauthorized, the entire request is rejected with 403.',
           operationId: 'createGoal',
           security: [{ userCookie: [] }],
           requestBody: {
@@ -2694,11 +2766,12 @@ const options = {
           },
           responses: {
             201: {
-              description: 'Goal created successfully',
+              description: 'Goal created and assigned successfully',
               content: { 'application/json': { schema: { $ref: '#/components/schemas/Goal' } } },
             },
-            400: { description: 'Missing title' },
+            400: { description: 'Validation failed or missing target employees', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
             401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden — one or more target employees are not in reporting hierarchy' },
           },
         },
       },
@@ -3212,9 +3285,12 @@ const options = {
           operationId: 'submitGoal',
           security: [{ userCookie: [] }],
           parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/GoalSubmitRequest' } } },
+          },
           responses: {
             200: { description: 'Goal submitted for manager review', content: { 'application/json': { schema: { $ref: '#/components/schemas/Goal' } } } },
-            400: { description: 'Incomplete tasks or invalid status' },
+            400: { description: 'Incomplete tasks or invalid status', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
             403: { description: 'Only goal assignee can submit' },
           },
         },
@@ -3227,10 +3303,11 @@ const options = {
           security: [{ userCookie: [] }],
           parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
           requestBody: {
-            content: { 'application/json': { schema: { type: 'object', properties: { comment: { type: 'string' }, rating: { type: 'integer' } } } } },
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/GoalApproveRequest' } } },
           },
           responses: {
             200: { description: 'Goal approved by manager', content: { 'application/json': { schema: { $ref: '#/components/schemas/Goal' } } } },
+            400: { description: 'Validation failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
             403: { description: 'Forbidden: not reporting manager' },
           },
         },
@@ -3244,11 +3321,11 @@ const options = {
           parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
           requestBody: {
             required: true,
-            content: { 'application/json': { schema: { type: 'object', required: ['comment'], properties: { comment: { type: 'string' } } } } },
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/GoalRejectRequest' } } },
           },
           responses: {
             200: { description: 'Goal returned for revisions', content: { 'application/json': { schema: { $ref: '#/components/schemas/Goal' } } } },
-            400: { description: 'Rejection reason is required' },
+            400: { description: 'Rejection reason is required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
           },
         },
       },
@@ -3259,8 +3336,12 @@ const options = {
           operationId: 'hrApproveGoal',
           security: [{ userCookie: [] }],
           parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/GoalApproveRequest' } } },
+          },
           responses: {
             200: { description: 'Goal finalized as COMPLETED', content: { 'application/json': { schema: { $ref: '#/components/schemas/Goal' } } } },
+            400: { description: 'Validation failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
             403: { description: 'Forbidden: HR role required' },
           },
         },
@@ -3274,10 +3355,11 @@ const options = {
           parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
           requestBody: {
             required: true,
-            content: { 'application/json': { schema: { type: 'object', required: ['comment'], properties: { comment: { type: 'string' } } } } },
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/GoalRejectRequest' } } },
           },
           responses: {
             200: { description: 'Goal returned for revisions by HR', content: { 'application/json': { schema: { $ref: '#/components/schemas/Goal' } } } },
+            400: { description: 'Rejection reason is required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
           },
         },
       },
@@ -3288,8 +3370,12 @@ const options = {
           operationId: 'resubmitGoal',
           security: [{ userCookie: [] }],
           parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/GoalResubmitRequest' } } },
+          },
           responses: {
             200: { description: 'Goal resubmitted for manager review', content: { 'application/json': { schema: { $ref: '#/components/schemas/Goal' } } } },
+            400: { description: 'Validation failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
           },
         },
       },
@@ -3312,10 +3398,28 @@ const options = {
           parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
           requestBody: {
             required: true,
-            content: { 'application/json': { schema: { type: 'object', required: ['comment'], properties: { comment: { type: 'string' }, attachments: { type: 'array', items: { type: 'string' } } } } } },
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/GoalCommentCreateRequest' } } },
           },
           responses: {
             201: { content: { 'application/json': { schema: { $ref: '#/components/schemas/GoalComment' } } } },
+            400: { description: 'Validation failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+          },
+        },
+      },
+      '/goals/{id}/comments/{cid}': {
+        delete: {
+          tags: ['Goals'],
+          summary: 'Delete a goal comment',
+          operationId: 'deleteGoalComment',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'cid', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          responses: {
+            200: { content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' } } } } } },
+            403: { description: 'Forbidden' },
+            404: { description: 'Comment not found' },
           },
         },
       },

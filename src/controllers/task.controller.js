@@ -2,6 +2,7 @@ import { prisma } from '../lib/prisma.js';
 import { logTaskAudit } from './taskActivity.controller.js';
 import { emitToTenant } from '../lib/socket.js';
 import { createTaskSchema, updateTaskSchema } from '../validations/task.schema.js';
+import { goalService } from '../services/goal.service.js';
 
 // ─── Helper: resolve & authorise target employee ───────────────────────────
 // Returns the TenantUser record that will own the task.
@@ -118,31 +119,9 @@ async function resolveGoal(goalId, tenantId) {
   return goal;
 }
 
-async function recalculateGoalProgress(goalId) {
+async function recalculateGoalProgress(goalId, employeeId = null) {
   if (!goalId) return 0;
-  
-  const tasks = await prisma.task.findMany({
-    where: { goalId },
-  });
-
-  if (tasks.length === 0) {
-    await prisma.goal.update({
-      where: { id: goalId },
-      data: { progress: 0 },
-    });
-    return 0;
-  }
-
-  const totalWeight = tasks.reduce((sum, t) => sum + Number(t.weight || 0), 0);
-  const earned = tasks.reduce((sum, t) => sum + (Number(t.progress || 0) * Number(t.weight || 0)), 0);
-  const overallProgress = totalWeight > 0 ? Math.round(earned / totalWeight) : 0;
-
-  await prisma.goal.update({
-    where: { id: goalId },
-    data: { progress: overallProgress },
-  });
-
-  return overallProgress;
+  return await goalService.recalculateProgress(goalId, employeeId);
 }
 
 // ─── POST /api/tasks ────────────────────────────────────────────────────────
@@ -225,7 +204,7 @@ export async function createTask(req, res, next) {
 
     let goalProgress = 0;
     if (resolvedGoalId) {
-      goalProgress = await recalculateGoalProgress(resolvedGoalId);
+      goalProgress = await recalculateGoalProgress(resolvedGoalId, task.employeeId);
     }
 
     // 7. Audit log
@@ -355,7 +334,7 @@ export async function updateTaskStatus(req, res, next) {
 
     let goalProgress = 0;
     if (updated.goalId) {
-      goalProgress = await recalculateGoalProgress(updated.goalId);
+      goalProgress = await recalculateGoalProgress(updated.goalId, updated.employeeId);
     }
 
     if (updated.status === 'done' && updated.isDependencyOf) {
@@ -378,7 +357,7 @@ export async function updateTaskStatus(req, res, next) {
         
         let parentGoalProgress = 0;
         if (updatedParent.goalId) {
-          parentGoalProgress = await recalculateGoalProgress(updatedParent.goalId);
+          parentGoalProgress = await recalculateGoalProgress(updatedParent.goalId, updatedParent.employeeId);
         }
         
         emitToTenant(tenantId, 'task_updated', {
@@ -546,7 +525,7 @@ export async function updateTask(req, res, next) {
 
     let goalProgress = 0;
     if (updated.goalId) {
-      goalProgress = await recalculateGoalProgress(updated.goalId);
+      goalProgress = await recalculateGoalProgress(updated.goalId, updated.employeeId);
     }
 
     // If dependency was updated and has a companion task - keep it synchronized
@@ -597,7 +576,7 @@ export async function updateTask(req, res, next) {
         
         let parentGoalProgress = 0;
         if (updatedParent.goalId) {
-          parentGoalProgress = await recalculateGoalProgress(updatedParent.goalId);
+          parentGoalProgress = await recalculateGoalProgress(updatedParent.goalId, updatedParent.employeeId);
         }
         
         emitToTenant(tenantId, 'task_updated', {
@@ -671,7 +650,7 @@ export async function deleteTask(req, res, next) {
 
     let goalProgress = 0;
     if (existing.goalId) {
-      goalProgress = await recalculateGoalProgress(existing.goalId);
+      goalProgress = await recalculateGoalProgress(existing.goalId, existing.employeeId);
     }
 
     emitToTenant(tenantId, 'task_updated', {

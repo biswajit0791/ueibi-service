@@ -40,6 +40,7 @@ model Tenant {
   nonJoinerRecords  NonJoinerRecord[]
   notifications     Notification[]
   goals             Goal[]
+  goalAssignments   GoalAssignment[]
   tasks             Task[]
   policies          Policy[]
   policyAssignments PolicyAssignment[]
@@ -102,6 +103,8 @@ model TenantUser {
   workHistory    WorkHistory[]
   exitDetails    ExitDetails?
   goals          Goal[]
+  goalAssignments GoalAssignment[] @relation("UserGoalAssignments")
+  assignedGoalRecords GoalAssignment[] @relation("AssignedGoals")
   tasks          Task[]
   leaveRequests  LeaveRequest[]      @relation("EmployeeLeaves")
   approvedLeaves LeaveRequest[]      @relation("ApprovedLeaves")
@@ -351,19 +354,45 @@ model Goal {
   attachments         String[]
   specialNotes        String?        @db.Text
   dueDate             DateTime?
-  employeeId          String
-  employee            TenantUser     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  employeeId          String?
+  employee            TenantUser?    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   milestones          Int            @default(0)
   completedMilestones Int            @default(0)
   tasks               Task[]
   comments            GoalComment[]
   auditLogs           GoalAuditLog[]
+  assignments         GoalAssignment[]
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt
 
   @@index([tenantId])
   @@index([employeeId])
   @@map("goals")
+}
+
+model GoalAssignment {
+  id                  String     @id @default(cuid())
+  tenantId            String
+  tenant              Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  goalId              String
+  goal                Goal       @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  employeeId          String
+  employee            TenantUser @relation("UserGoalAssignments", fields: [employeeId], references: [id], onDelete: Cascade)
+  assignedById        String?
+  assignedBy          TenantUser? @relation("AssignedGoals", fields: [assignedById], references: [id], onDelete: SetNull)
+  progress            Int        @default(0)
+  status              String     @default("DRAFT") // DRAFT | ASSIGNED | ACKNOWLEDGED | IN_PROGRESS | UNDER_REVIEW | COMPLETED
+  milestones          Int        @default(0)
+  completedMilestones Int        @default(0)
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+
+  @@unique([goalId, employeeId])
+  @@index([tenantId])
+  @@index([goalId])
+  @@index([employeeId])
+  @@index([assignedById])
+  @@map("goal_assignments")
 }
 
 model Task {
