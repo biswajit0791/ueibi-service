@@ -226,8 +226,9 @@ export class GoalService {
     }
 
     const targetUser = userAssignment?.employee || goal.assignments?.find(a => a.employeeId === targetEmpId)?.employee || goal.employee;
+    const isEmployeeRole = user.role === 'EMPLOYEE' || targetUser?.role === 'EMPLOYEE';
     const hasManager = Boolean(targetUser?.managerId);
-    const newStatus = hasManager ? 'PENDING_MANAGER_REVIEW' : 'PENDING_HR_REVIEW';
+    const newStatus = (isEmployeeRole || hasManager) ? 'PENDING_MANAGER_REVIEW' : 'PENDING_HR_REVIEW';
 
     // Update assignment status independently
     try {
@@ -252,7 +253,7 @@ export class GoalService {
         employee: true,
         assignments: {
           include: {
-            employee: { select: { id: true, name: true, email: true, department: true, designation: true } },
+            employee: { select: { id: true, name: true, email: true, department: true, designation: true, role: true, managerId: true } },
           },
         },
         tasks: true,
@@ -332,8 +333,17 @@ export class GoalService {
 
     const isDirectManager = targetUser?.managerId === user.id;
     const isElevated = ['SUPER_ADMIN', 'ADMIN', 'HR', 'LEADERSHIP', 'OWNER', 'CMD', 'DIRECTOR'].includes(user.role);
+    const isAssignedByManager = goal.assignments?.some(a => a.assignedById === user.id) || goal.createdBy === user.name;
+    const isManagerRole = user.role === 'MANAGER';
+    let isAuthorizedManager = isDirectManager || isElevated;
 
-    if (!isDirectManager && !isElevated) {
+    if (!isAuthorizedManager && isManagerRole) {
+      if (isAssignedByManager || !targetUser?.managerId) {
+        isAuthorizedManager = true;
+      }
+    }
+
+    if (!isAuthorizedManager) {
       throw { status: 403, message: 'Access forbidden: you are not the reporting manager for this employee' };
     }
 
@@ -362,7 +372,7 @@ export class GoalService {
         employee: true,
         assignments: {
           include: {
-            employee: { select: { id: true, name: true, email: true, department: true, designation: true } },
+            employee: { select: { id: true, name: true, email: true, department: true, designation: true, role: true, managerId: true } },
           },
         },
         tasks: true,
@@ -479,7 +489,7 @@ export class GoalService {
         employee: true,
         assignments: {
           include: {
-            employee: { select: { id: true, name: true, email: true, department: true, designation: true } },
+            employee: { select: { id: true, name: true, email: true, department: true, designation: true, role: true, managerId: true } },
           },
         },
         tasks: true,
@@ -573,7 +583,7 @@ export class GoalService {
         employee: true,
         assignments: {
           include: {
-            employee: { select: { id: true, name: true, email: true, department: true, designation: true } },
+            employee: { select: { id: true, name: true, email: true, department: true, designation: true, role: true, managerId: true } },
           },
         },
         tasks: true,
