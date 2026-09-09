@@ -159,6 +159,7 @@ export const peerNominationSchema = z.object({
   cycleId:    z.string().optional(),
   year:       z.coerce.number().int().min(2000).max(2100).optional(),
   month:      z.string().optional(),
+  reNotify:   z.boolean().optional(),
 });
 
 // ── Peer Feedback Submission ──────────────────────────────────────────────────
@@ -292,6 +293,8 @@ export const peerNominationsQuerySchema = z.object({
   cycleId: z.string().max(100).optional(),
   year: z.coerce.number().int().min(2000).max(2100).optional(),
   month: z.string().max(50).optional(),
+  employeeId: z.string().max(100).optional(),
+  revieweeId: z.string().max(100).optional(),
 });
 
 export const peerFeedbackQuerySchema = z.object({

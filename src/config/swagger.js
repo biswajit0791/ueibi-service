@@ -1090,10 +1090,11 @@ const options = {
           required: ['reviewerId'],
           properties: {
             reviewerId: { type: 'string', example: 'cluser56789', description: 'The ID of the colleague you are nominating to give you feedback' },
-            revieweeId: { type: 'string', example: 'cluser12345', description: 'Optional — defaults to the requesting user' },
+            revieweeId: { type: 'string', example: 'cluser12345', description: 'Optional — defaults to the requesting user (HR/Manager can specify for direct report)' },
             cycleId:    { type: 'string', example: 'clcycle12345', description: 'Optional target cycle ID' },
             year:       { type: 'integer', minimum: 2000, maximum: 2100, example: 2026, description: 'Optional cycle year' },
             month:      { type: 'string', example: 'September', description: 'Optional cycle month' },
+            reNotify:   { type: 'boolean', example: false, description: 'Optional — if true, resends notification reminder to an existing pending reviewer' },
           },
         },
         PeerFeedbackRequest: {
@@ -4983,22 +4984,27 @@ const options = {
             },
           },
           responses: {
-            201: { description: 'Nomination created', content: { 'application/json': { schema: { $ref: '#/components/schemas/PeerNomination' } } } },
-            400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
-            409: { description: 'Nomination already exists for this cycle' },
+            201: { description: 'Nomination created successfully', content: { 'application/json': { schema: { $ref: '#/components/schemas/PeerNomination' } } } },
+            200: { description: 'Nomination reactivated or reminder notification resent', content: { 'application/json': { schema: { $ref: '#/components/schemas/PeerNomination' } } } },
+            400: { description: 'Validation error or self-nomination not allowed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+            404: { description: 'Reviewer not found in organization' },
+            409: { description: 'Nomination already exists or feedback already submitted for this cycle' },
           },
         },
       },
       '/peer-nominations/mine': {
         get: {
           tags: ['Appraisals'],
-          summary: 'List my nominated peers for 360 feedback for the active or specified cycle',
+          summary: 'List nominated peers for 360 feedback for the active or specified cycle',
+          description: 'Fetches peer nominations for the current user, or for a specified revieweeId/employeeId if requested by an HR/Manager/CMD user.',
           operationId: 'getMyNominatedPeers',
           security: [{ userCookie: [] }],
           parameters: [
             { name: 'cycleId', in: 'query', schema: { type: 'string' }, description: 'Target cycle ID (optional)' },
             { name: 'year', in: 'query', schema: { type: 'integer', minimum: 2000, maximum: 2100 }, description: 'Appraisal year' },
             { name: 'month', in: 'query', schema: { type: 'string' }, description: 'Appraisal month' },
+            { name: 'employeeId', in: 'query', schema: { type: 'string' }, description: 'Target reviewee employee ID (for HR, Manager, CMD)' },
+            { name: 'revieweeId', in: 'query', schema: { type: 'string' }, description: 'Alias for employeeId' },
           ],
           responses: {
             200: {
