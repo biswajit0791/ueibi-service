@@ -1553,11 +1553,13 @@ export async function createPeerNomination(req, res, next) {
       return res.status(400).json({ error: 'Validation failed', details: nomParsed.error.errors });
     }
 
-    const { revieweeId, reviewerId, cycleId: passedCycleId, year, month } = req.body || {};
+    const { revieweeId, reviewerId, cycleId: passedCycleId, year, month, reNotify } = req.body || {};
     const activeCycle = await ensureActiveCycle(req.tenantId, { cycleId: passedCycleId, year, month });
     const cycleId = passedCycleId || activeCycle.id;
 
-    const actualRevieweeId = revieweeId || req.user.id;
+    const userRole = (req.user.role || '').toUpperCase();
+    const isElevated = ['HR', 'SUPER_ADMIN', 'CMD', 'ADMIN', 'OWNER', 'LEADERSHIP', 'MANAGER'].includes(userRole);
+    const actualRevieweeId = (isElevated && revieweeId) ? revieweeId : req.user.id;
 
     if (!reviewerId) {
       return res.status(400).json({ error: 'Reviewer is required' });
@@ -1570,7 +1572,7 @@ export async function createPeerNomination(req, res, next) {
         tenantId: req.tenantId,
         isDeleted: false,
       },
-      select: { id: true, name: true, email: true },
+      select: { id: true, name: true, email: true, designation: true, department: true },
     });
 
     if (!reviewer) {
@@ -1583,7 +1585,7 @@ export async function createPeerNomination(req, res, next) {
             { name: { equals: reviewerId, mode: 'insensitive' } },
           ],
         },
-        select: { id: true, name: true, email: true },
+        select: { id: true, name: true, email: true, designation: true, department: true },
       });
     }
 
@@ -1608,10 +1610,66 @@ export async function createPeerNomination(req, res, next) {
           reviewerId: actualReviewerId,
         },
       },
+      include: {
+        reviewee: { select: { name: true } },
+        reviewer: { select: { id: true, name: true, email: true, designation: true, department: true } },
+      },
     });
 
     if (existing) {
-      return res.status(409).json({ error: 'A nomination for this peer already exists for this cycle' });
+      // 1. If previously rejected, reactivate the nomination back to PENDING and notify reviewer
+      if (existing.status === 'REJECTED') {
+        const reactivated = await prisma.peerNomination.update({
+          where: { id: existing.id },
+          data: { status: 'PENDING', updatedAt: new Date() },
+          include: {
+            reviewee: { select: { name: true } },
+            reviewer: { select: { id: true, name: true, email: true, designation: true, department: true } },
+          },
+        });
+        await AppraisalNotificationService.notifyPeerNominated({
+          tenantId: req.tenantId,
+          reviewerId: actualReviewerId,
+          revieweeName: reactivated.reviewee?.name || req.user.name || 'Colleague',
+          nominationId: reactivated.id,
+        });
+        return res.status(200).json({
+          ...reactivated,
+          message: `Nomination for ${reviewer.name} has been reactivated.`,
+        });
+      }
+
+      // 2. If client explicitly requested reNotify or reminder for pending nomination
+      if (reNotify && existing.status === 'PENDING') {
+        await AppraisalNotificationService.notifyPeerNominated({
+          tenantId: req.tenantId,
+          reviewerId: actualReviewerId,
+          revieweeName: existing.reviewee?.name || req.user.name || 'Colleague',
+          nominationId: existing.id,
+        });
+        return res.status(200).json({
+          ...existing,
+          message: `Reminder notification resent to ${reviewer.name}.`,
+        });
+      }
+
+      // 3. If already COMPLETED
+      if (existing.status === 'COMPLETED') {
+        return res.status(409).json({
+          error: `${reviewer.name || 'This colleague'} has already completed peer feedback for this appraisal cycle.`,
+          status: 'COMPLETED',
+          existingNominationId: existing.id,
+          reviewer: { id: reviewer.id, name: reviewer.name, email: reviewer.email },
+        });
+      }
+
+      // 4. Default: existing pending nomination
+      return res.status(409).json({
+        error: `A nomination for ${reviewer.name || 'this peer'} already exists for this cycle`,
+        status: existing.status,
+        existingNominationId: existing.id,
+        reviewer: { id: reviewer.id, name: reviewer.name, email: reviewer.email },
+      });
     }
 
     const nomination = await prisma.peerNomination.create({
@@ -1625,6 +1683,9 @@ export async function createPeerNomination(req, res, next) {
       include: {
         reviewee: {
           select: { name: true },
+        },
+        reviewer: {
+          select: { id: true, name: true, email: true, designation: true, department: true },
         },
       },
     });
@@ -1654,12 +1715,19 @@ export async function getMyNominatedPeers(req, res, next) {
     if (!parsedQuery.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
     }
-    const { cycleId: cycleIdQuery, year: yearQuery, month: monthQuery } = parsedQuery.data;
+    const { cycleId: cycleIdQuery, year: yearQuery, month: monthQuery, employeeId, revieweeId } = parsedQuery.data;
     const activeCycle = await ensureActiveCycle(req.tenantId, { cycleId: cycleIdQuery, year: yearQuery, month: monthQuery });
+
+    const userRole = (req.user.role || '').toUpperCase();
+    const isElevated = ['HR', 'SUPER_ADMIN', 'CMD', 'ADMIN', 'OWNER', 'LEADERSHIP', 'MANAGER'].includes(userRole);
+    const targetRevieweeId = (isElevated && (employeeId || revieweeId))
+      ? (employeeId || revieweeId)
+      : req.user.id;
+
     const nominations = await prisma.peerNomination.findMany({
       where: {
         tenantId: req.tenantId,
-        revieweeId: req.user.id,
+        revieweeId: targetRevieweeId,
         cycleId: activeCycle.id,
       },
       include: {
@@ -1677,12 +1745,15 @@ export async function getMyNominatedPeers(req, res, next) {
     });
 
     res.json({
+      revieweeId: targetRevieweeId,
+      cycleId: activeCycle.id,
       nominations: nominations.map((n) => ({
         id: n.id,
         reviewerId: n.reviewerId,
         name: n.reviewer?.name || 'Colleague',
         email: n.reviewer?.email,
         designation: n.reviewer?.designation,
+        department: n.reviewer?.department,
         status: n.status,
         createdAt: n.createdAt,
       })),
