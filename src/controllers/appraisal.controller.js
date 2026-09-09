@@ -25,6 +25,11 @@ import {
   parameterIdParamSchema,
   employeeIdParamSchema,
   nominationIdParamSchema,
+  directReportsQuerySchema,
+  peerNominationsQuerySchema,
+  peerFeedbackQuerySchema,
+  cmdPeerFeedbackQuerySchema,
+  hrAuditQuerySchema,
 } from '../validations/appraisal.schema.js';
 
 const DEFAULT_PARAMETERS = [
@@ -949,7 +954,7 @@ export async function getMyGoals(req, res, next) {
     // Verify target employee belongs to tenant
     const targetUser = await prisma.tenantUser.findFirst({
       where: { id: targetEmpId, tenantId: req.tenantId },
-      select: { id: true, name: true, email: true, department: true, designation: true, role: true },
+      select: { id: true, name: true, email: true, department: true, designation: true, role: true, managerId: true },
     });
 
     if (!targetUser) {
@@ -958,9 +963,12 @@ export async function getMyGoals(req, res, next) {
 
     // RBAC & Multi-tenant downline verification:
     // If accessing another employee's goals, caller must be HR / Admin / Super Admin or direct/downline manager
-    if (targetEmpId !== req.user.id && !['SUPER_ADMIN', 'ADMIN', 'HR', 'LEADERSHIP', 'OWNER'].includes(req.user.role)) {
+    const callerRole = (req.user.role || '').toUpperCase();
+    const isElevatedRole = ['SUPER_ADMIN', 'ADMIN', 'HR', 'LEADERSHIP', 'OWNER', 'CMD', 'DIRECTOR'].includes(callerRole);
+    if (targetEmpId !== req.user.id && !isElevatedRole) {
       const isSubordinate = await goalService.isSubordinate(req.user.id, targetEmpId, req.tenantId);
-      if (!isSubordinate) {
+      const isFallbackSubordinate = (!targetUser.managerId || targetUser.managerId === req.user.id) && ['MANAGER', 'HR', 'ADMIN'].includes(callerRole);
+      if (!isSubordinate && !isFallbackSubordinate) {
         return res.status(403).json({ error: 'Access forbidden: employee is not in your reporting downline' });
       }
     }
@@ -1221,11 +1229,89 @@ export async function syncGoalsToAppraisal(req, res, next) {
 
 export async function getDirectReports(req, res, next) {
   try {
-    const isHrOrAdmin = ['HR', 'SUPER_ADMIN', 'CMD', 'ADMIN'].includes(req.user.role);
+    const parsedQuery = directReportsQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
+    }
+    const { search, department } = parsedQuery.data;
 
-    const where = isHrOrAdmin
-      ? { tenantId: req.tenantId, status: 'ACTIVE' }
-      : { tenantId: req.tenantId, managerId: req.user.id, status: 'ACTIVE' };
+    const userRole = (req.user.role || '').toUpperCase();
+    const isHrOrAdmin = ['HR', 'SUPER_ADMIN', 'CMD', 'ADMIN', 'DIRECTOR', 'OWNER', 'LEADERSHIP'].includes(userRole);
+
+    let where;
+    if (isHrOrAdmin) {
+      where = {
+        tenantId: req.tenantId,
+        isDeleted: false,
+        status: { in: ['ACTIVE', 'INVITED'] },
+        id: { not: req.user.id },
+      };
+    } else {
+      // First check if manager has direct reports explicitly assigned with managerId
+      const explicitReports = await prisma.tenantUser.findMany({
+        where: {
+          tenantId: req.tenantId,
+          managerId: req.user.id,
+          isDeleted: false,
+          status: { in: ['ACTIVE', 'INVITED'] },
+          id: { not: req.user.id },
+          ...(department ? { department: { equals: department, mode: 'insensitive' } } : {}),
+          ...(search && search.trim() ? {
+            OR: [
+              { name: { contains: search.trim(), mode: 'insensitive' } },
+              { email: { contains: search.trim(), mode: 'insensitive' } },
+              { designation: { contains: search.trim(), mode: 'insensitive' } },
+            ],
+          } : {}),
+        },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          designation: true,
+          department: true,
+          empType: true,
+          role: true,
+          managerId: true,
+        },
+        orderBy: { name: 'asc' },
+      });
+
+      if (explicitReports.length > 0) {
+        return res.json({ directReports: explicitReports });
+      }
+
+      // Fallback: If no explicit direct reports assigned, include employees in tenant without a manager or in department
+      where = {
+        tenantId: req.tenantId,
+        isDeleted: false,
+        status: { in: ['ACTIVE', 'INVITED'] },
+        id: { not: req.user.id },
+        OR: [
+          { managerId: req.user.id },
+          { managerId: null },
+          { role: { in: ['EMPLOYEE', 'STUDENT', 'MENTOR'] } },
+          ...(req.user.department ? [{ department: req.user.department }] : []),
+        ],
+      };
+    }
+
+    if (department) {
+      where.department = { equals: department, mode: 'insensitive' };
+    }
+    if (search && search.trim()) {
+      const s = search.trim();
+      where.AND = [
+        ...(where.AND || []),
+        {
+          OR: [
+            { name: { contains: s, mode: 'insensitive' } },
+            { email: { contains: s, mode: 'insensitive' } },
+            { designation: { contains: s, mode: 'insensitive' } },
+          ],
+        },
+      ];
+    }
 
     const directReports = await prisma.tenantUser.findMany({
       where,
@@ -1285,10 +1371,12 @@ export async function getEmployeeReviewForManager(req, res, next) {
       return res.status(404).json({ error: 'Employee not found' });
     }
 
-    const isHrOrAdmin = ['HR', 'SUPER_ADMIN', 'CMD', 'ADMIN', 'OWNER'].includes(req.user.role?.toUpperCase());
-    const isManager = employee.managerId === req.user.id;
+    const userRole = (req.user.role || '').toUpperCase();
+    const isHrOrAdmin = ['HR', 'SUPER_ADMIN', 'CMD', 'ADMIN', 'OWNER', 'DIRECTOR', 'LEADERSHIP'].includes(userRole);
+    const isExplicitManager = employee.managerId === req.user.id;
+    const isFallbackManager = (!employee.managerId || employee.managerId === req.user.id) && ['MANAGER', 'HR', 'ADMIN', 'SUPER_ADMIN', 'CMD', 'OWNER', 'DIRECTOR', 'LEADERSHIP'].includes(userRole);
 
-    if (!isManager && !isHrOrAdmin) {
+    if (!isExplicitManager && !isFallbackManager && !isHrOrAdmin) {
       return res.status(403).json({ error: 'Access forbidden: you are not the manager of this employee' });
     }
 
@@ -1383,10 +1471,12 @@ export async function updateManagerReview(req, res, next) {
       return res.status(404).json({ error: 'Performance review not found' });
     }
 
-    const isHrOrAdmin = ['HR', 'SUPER_ADMIN', 'CMD'].includes(req.user.role);
-    const isManager = review.employee.managerId === req.user.id;
+    const userRole = (req.user.role || '').toUpperCase();
+    const isHrOrAdmin = ['HR', 'SUPER_ADMIN', 'CMD', 'ADMIN', 'OWNER', 'DIRECTOR', 'LEADERSHIP'].includes(userRole);
+    const isExplicitManager = review.employee.managerId === req.user.id;
+    const isFallbackManager = (!review.employee.managerId || review.employee.managerId === req.user.id) && ['MANAGER', 'HR', 'ADMIN', 'SUPER_ADMIN', 'CMD', 'OWNER', 'DIRECTOR', 'LEADERSHIP'].includes(userRole);
 
-    if (!isManager && !isHrOrAdmin) {
+    if (!isExplicitManager && !isFallbackManager && !isHrOrAdmin) {
       return res.status(403).json({ error: 'Access forbidden: you are not authorized to evaluate this employee' });
     }
 
@@ -1560,9 +1650,11 @@ export async function createPeerNomination(req, res, next) {
 
 export async function getMyNominatedPeers(req, res, next) {
   try {
-    const cycleIdQuery = req.query.cycleId || null;
-    const yearQuery = req.query.year ? parseInt(req.query.year, 10) : null;
-    const monthQuery = req.query.month || null;
+    const parsedQuery = peerNominationsQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
+    }
+    const { cycleId: cycleIdQuery, year: yearQuery, month: monthQuery } = parsedQuery.data;
     const activeCycle = await ensureActiveCycle(req.tenantId, { cycleId: cycleIdQuery, year: yearQuery, month: monthQuery });
     const nominations = await prisma.peerNomination.findMany({
       where: {
@@ -1608,11 +1700,14 @@ export async function deletePeerNomination(req, res, next) {
     }
     const { id } = parsedParams.data;
 
+    const userRole = (req.user.role || '').toUpperCase();
+    const isElevated = ['HR', 'SUPER_ADMIN', 'CMD', 'ADMIN', 'OWNER', 'LEADERSHIP'].includes(userRole);
+
     const nomination = await prisma.peerNomination.findFirst({
       where: {
         id,
         tenantId: req.tenantId,
-        revieweeId: req.user.id,
+        ...(isElevated ? {} : { revieweeId: req.user.id }),
       },
     });
 
@@ -1620,11 +1715,20 @@ export async function deletePeerNomination(req, res, next) {
       return res.status(404).json({ error: 'Nomination not found or not owned by you' });
     }
 
+    if (nomination.status === 'COMPLETED' && !isElevated) {
+      return res.status(400).json({ error: 'Cannot cancel nomination: peer feedback has already been submitted' });
+    }
+
+    // Delete associated feedback if any exists
+    await prisma.peerFeedback.deleteMany({
+      where: { nominationId: id },
+    });
+
     await prisma.peerNomination.delete({
       where: { id },
     });
 
-    res.json({ message: 'Nomination cancelled successfully' });
+    res.json({ success: true, message: 'Nomination cancelled successfully' });
   } catch (err) {
     next(err);
   }
@@ -1723,8 +1827,12 @@ export async function submitPeerFeedback(req, res, next) {
 
 export async function getReceivedPeerFeedback(req, res, next) {
   try {
+    const parsedQuery = peerFeedbackQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
+    }
     const activeCycle = await ensureActiveCycle(req.tenantId);
-    const cycleId = req.query.cycleId || activeCycle.id;
+    const cycleId = parsedQuery.data.cycleId || activeCycle.id;
 
     const nominations = await prisma.peerNomination.findMany({
       where: {
@@ -1780,8 +1888,13 @@ export async function getCmdPeerFeedbackForEmployee(req, res, next) {
       return res.status(400).json({ error: 'Invalid employee ID parameter', details: parsedParams.error.errors });
     }
     const { employeeId } = parsedParams.data;
+
+    const parsedQuery = cmdPeerFeedbackQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
+    }
     const activeCycle = await ensureActiveCycle(req.tenantId);
-    const cycleId = req.query.cycleId || activeCycle.id;
+    const cycleId = parsedQuery.data.cycleId || activeCycle.id;
 
     const nominations = await prisma.peerNomination.findMany({
       where: {
@@ -1838,9 +1951,12 @@ export async function getHrAuditReview(req, res, next) {
       return res.status(400).json({ error: 'Invalid employee ID parameter', details: parsedParams.error.errors });
     }
     const { employeeId } = parsedParams.data;
-    const cycleIdQuery = req.query.cycleId || null;
-    const yearQuery = req.query.year ? parseInt(req.query.year, 10) : null;
-    const monthQuery = req.query.month || null;
+
+    const parsedQuery = hrAuditQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
+    }
+    const { cycleId: cycleIdQuery, year: yearQuery, month: monthQuery } = parsedQuery.data;
     const activeCycle = await ensureActiveCycle(req.tenantId, { cycleId: cycleIdQuery, year: yearQuery, month: monthQuery });
     const cycleId = cycleIdQuery || activeCycle.id;
 

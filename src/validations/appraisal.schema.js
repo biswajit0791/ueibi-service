@@ -108,11 +108,13 @@ export const managerReviewSchema = z.object({
     .min(1, 'Rating must be at least 1')
     .max(5, 'Rating cannot exceed 5')
     .optional(),
+  submit: z.boolean().optional(),
   scores: z
     .array(
       z.object({
         parameterId:  z.string().min(1, 'Parameter ID is required'),
-        managerScore: z.number().int().min(1).max(5),
+        managerScore: z.number().int().min(1).max(5).optional(),
+        score:        z.number().int().min(1).max(5).optional(),
       })
     )
     .optional(),
@@ -281,5 +283,27 @@ export const nominationIdParamSchema = z.object({
   id: z.string().min(1, 'Nomination ID is required').max(100),
 });
 
+export const directReportsQuerySchema = z.object({
+  search: z.string().max(100).optional(),
+  department: z.string().max(100).optional(),
+});
 
+export const peerNominationsQuerySchema = z.object({
+  cycleId: z.string().max(100).optional(),
+  year: z.coerce.number().int().min(2000).max(2100).optional(),
+  month: z.string().max(50).optional(),
+});
 
+export const peerFeedbackQuerySchema = z.object({
+  cycleId: z.string().max(100).optional(),
+});
+
+export const cmdPeerFeedbackQuerySchema = z.object({
+  cycleId: z.string().max(100).optional(),
+});
+
+export const hrAuditQuerySchema = z.object({
+  cycleId: z.string().max(100).optional(),
+  year: z.coerce.number().int().min(2000).max(2100).optional(),
+  month: z.string().max(50).optional(),
+});

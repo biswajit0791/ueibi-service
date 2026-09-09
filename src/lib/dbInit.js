@@ -246,6 +246,34 @@ export async function ensureGoalAssignmentsTable() {
   } catch (err) {
     console.warn('[dbInit] Notice on goal_assignments table init:', err?.message || err);
   }
+
+  // 6. Reset any legacy auto-approved leave requests in the database
+  try {
+    const pendingLeaves = await prisma.leaveRequest.findMany({
+      where: {
+        status: 'PENDING',
+        reason: { contains: 'Auto-approved' },
+      },
+    });
+
+    for (const lr of pendingLeaves) {
+      try {
+        const parsed = JSON.parse(lr.reason);
+        parsed.managerStatus = 'Pending';
+        parsed.managerComment = null;
+        parsed.managerActedAt = null;
+        await prisma.leaveRequest.update({
+          where: { id: lr.id },
+          data: { reason: JSON.stringify(parsed) },
+        });
+        console.log(`[dbInit] Reset auto-approved status for pending leave ${lr.id}`);
+      } catch {
+        // ignore parse error
+      }
+    }
+  } catch (leaveInitErr) {
+    console.warn('[dbInit] Notice resetting auto-approved leaves:', leaveInitErr?.message || leaveInitErr);
+  }
 }
 
 

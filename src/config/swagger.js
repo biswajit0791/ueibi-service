@@ -1048,16 +1048,19 @@ const options = {
         ManagerReviewRequest: {
           type: 'object',
           properties: {
-            managerRemarks: { type: 'string', maxLength: 5000, example: 'Consistent high-quality output throughout the cycle.' },
-            managerRating:  { type: 'number', minimum: 1, maximum: 5, example: 4.5 },
+            managerRemarks:  { type: 'string', maxLength: 5000, example: 'Consistent high-quality output throughout the cycle.' },
+            managerComments: { type: 'string', maxLength: 5000, example: 'Consistent high-quality output throughout the cycle.' },
+            managerRating:   { type: 'number', minimum: 1, maximum: 5, example: 4.5 },
+            submit:          { type: 'boolean', example: true, description: 'True to finalize and mark status as MANAGER_REVIEWED' },
             scores: {
               type: 'array',
               items: {
                 type: 'object',
-                required: ['parameterId', 'managerScore'],
+                required: ['parameterId'],
                 properties: {
                   parameterId:  { type: 'string', example: 'clparam12345' },
                   managerScore: { type: 'integer', minimum: 1, maximum: 5, example: 5 },
+                  score:        { type: 'integer', minimum: 1, maximum: 5, example: 5 },
                 },
               },
             },
@@ -1088,6 +1091,9 @@ const options = {
           properties: {
             reviewerId: { type: 'string', example: 'cluser56789', description: 'The ID of the colleague you are nominating to give you feedback' },
             revieweeId: { type: 'string', example: 'cluser12345', description: 'Optional — defaults to the requesting user' },
+            cycleId:    { type: 'string', example: 'clcycle12345', description: 'Optional target cycle ID' },
+            year:       { type: 'integer', minimum: 2000, maximum: 2100, example: 2026, description: 'Optional cycle year' },
+            month:      { type: 'string', example: 'September', description: 'Optional cycle month' },
           },
         },
         PeerFeedbackRequest: {
@@ -4855,11 +4861,16 @@ const options = {
           operationId: 'getEmployeeReviewForManager',
           security: [{ userCookie: [] }],
           parameters: [
-            { name: 'employeeId', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'employeeId', in: 'path', required: true, schema: { type: 'string' }, description: 'Target direct report employee ID' },
             { name: 'cycleId', in: 'query', schema: { type: 'string' }, description: 'Defaults to the active cycle' },
+            { name: 'frequency', in: 'query', schema: { type: 'string', enum: ['MONTHLY', 'QUARTERLY', 'ANNUAL'], default: 'MONTHLY' }, description: 'Appraisal cadence' },
+            { name: 'period', in: 'query', schema: { type: 'string' }, description: 'Period name string' },
+            { name: 'year', in: 'query', schema: { type: 'integer', minimum: 2000, maximum: 2100 }, description: 'Appraisal year' },
+            { name: 'month', in: 'query', schema: { type: 'string' }, description: 'Month name or number' },
           ],
           responses: {
             200: { description: 'Review and parameters', content: { 'application/json': { schema: { type: 'object', properties: { review: { $ref: '#/components/schemas/PerformanceReview' }, activeParameters: { type: 'array', items: { $ref: '#/components/schemas/AppraisalParameter' } } } } } } },
+            400: { description: 'Validation error' },
             403: { description: 'Forbidden — not the manager of this employee' },
             404: { description: 'Employee not found' },
           },
@@ -4880,6 +4891,7 @@ const options = {
                 schema: { $ref: '#/components/schemas/ManagerReviewRequest' },
                 example: {
                   managerRemarks: 'Consistent high-quality delivery throughout the cycle. Showed strong initiative during the platform migration. Needs to improve cross-team communication.',
+                  submit: true,
                   scores: [
                     { parameterId: '<activeParameters[0].id>', managerScore: 5 },
                     { parameterId: '<activeParameters[1].id>', managerScore: 4 },
@@ -4977,6 +4989,81 @@ const options = {
           },
         },
       },
+      '/peer-nominations/mine': {
+        get: {
+          tags: ['Appraisals'],
+          summary: 'List my nominated peers for 360 feedback for the active or specified cycle',
+          operationId: 'getMyNominatedPeers',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'cycleId', in: 'query', schema: { type: 'string' }, description: 'Target cycle ID (optional)' },
+            { name: 'year', in: 'query', schema: { type: 'integer', minimum: 2000, maximum: 2100 }, description: 'Appraisal year' },
+            { name: 'month', in: 'query', schema: { type: 'string' }, description: 'Appraisal month' },
+          ],
+          responses: {
+            200: {
+              description: 'List of peer nominations created by current user',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      nominations: {
+                        type: 'array',
+                        items: {
+                          type: 'object',
+                          properties: {
+                            id: { type: 'string' },
+                            reviewerId: { type: 'string' },
+                            name: { type: 'string', example: 'Arjun Sharma' },
+                            email: { type: 'string', example: 'arjun@acmecorp.com' },
+                            designation: { type: 'string', example: 'Senior Engineer' },
+                            status: { type: 'string', enum: ['PENDING', 'COMPLETED', 'REJECTED'] },
+                            createdAt: { type: 'string', format: 'date-time' },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: 'Validation failed' },
+            401: { description: 'Unauthorized' },
+          },
+        },
+      },
+      '/peer-nominations/{id}': {
+        delete: {
+          tags: ['Appraisals'],
+          summary: 'Cancel or delete a peer feedback nomination',
+          operationId: 'deletePeerNomination',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Nomination ID to cancel' },
+          ],
+          responses: {
+            200: {
+              description: 'Nomination cancelled successfully',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      success: { type: 'boolean', example: true },
+                      message: { type: 'string', example: 'Nomination cancelled successfully' },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: 'Invalid nomination ID or cannot cancel completed nomination' },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden — not nomination owner' },
+            404: { description: 'Nomination not found' },
+          },
+        },
+      },
       '/peer-nominations/pending-for-me': {
         get: {
           tags: ['Appraisals'],
@@ -5065,9 +5152,14 @@ const options = {
       '/team/direct-reports': {
         get: {
           tags: ['Appraisals'],
-          summary: 'List direct reports (Manager sees own team; HR/CMD sees all active employees)',
+          summary: 'List direct reports (Manager sees own team / downline; HR/CMD sees all active employees)',
+          description: 'Fetches direct reports with fallback to unassigned employees or department colleagues. Supports search and department filtering.',
           operationId: 'getDirectReports',
           security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'search', in: 'query', required: false, schema: { type: 'string' }, description: 'Filter by employee name, email, or designation' },
+            { name: 'department', in: 'query', required: false, schema: { type: 'string' }, description: 'Filter by employee department' },
+          ],
           responses: {
             200: {
               description: 'List of direct reports',
@@ -5082,6 +5174,8 @@ const options = {
                 },
               },
             },
+            400: { description: 'Validation failed' },
+            401: { description: 'Unauthorized' },
           },
         },
       },
