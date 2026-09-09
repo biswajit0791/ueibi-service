@@ -31,6 +31,7 @@ export const env = {
   otpTtlMinutes: parseInt(process.env.OTP_TTL_MINUTES || '10', 10),
   otpMaxAttempts: parseInt(process.env.OTP_MAX_ATTEMPTS || '5', 10),
   actionTokenTtlDays: parseInt(process.env.ACTION_TOKEN_TTL_DAYS || '14', 10),
+  passwordResetTokenExpiresMinutes: parseInt(process.env.PASSWORD_RESET_TOKEN_EXPIRES_MINUTES || '30', 10),
 
   appPassword: process.env.APP_PASSWORD,
   adminSessionCookieName: process.env.ADMIN_SESSION_COOKIE_NAME || 'admin_session',

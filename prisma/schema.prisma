@@ -110,6 +110,7 @@ model TenantUser {
   exReviews      ExEmployerReview[]  @relation("EmployeeExReviews")
   nominatedReviewsAsReviewee PeerNomination[] @relation("NominationReviewee")
   nominatedReviewsAsReviewer PeerNomination[] @relation("NominationReviewer")
+  createdAppraisalCycles     AppraisalCycle[] @relation("CycleCreator")
   // Policies & Compliance Relations
   createdPolicies   Policy[]           @relation("PolicyAuthor")
   publishedPolicies Policy[]           @relation("PolicyPublisher")
@@ -125,6 +126,7 @@ model TenantUser {
   goalAuditLogs  GoalAuditLog[]      @relation("GoalAuditPerformer")
   notifications  Notification[]      @relation("UserNotifications")
   createdEvents  HubEvent[]          @relation("EventCreator")
+  passwordResetTokens PasswordResetToken[]
 
   remarks   String?
   docs      Json?
@@ -533,6 +535,11 @@ model AppraisalCycle {
   tenant      Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name        String
   frequency   AppraisalFrequency   @default(ANNUAL)
+  year        Int?
+  month       String?
+  monthNumber Int?
+  createdById String?
+  createdBy   TenantUser?          @relation("CycleCreator", fields: [createdById], references: [id], onDelete: SetNull)
   startDate   DateTime
   endDate     DateTime
   status      AppraisalCycleStatus @default(ACTIVE)
@@ -543,6 +550,7 @@ model AppraisalCycle {
   updatedAt   DateTime             @updatedAt
 
   @@index([tenantId])
+  @@index([tenantId, year, month])
   @@map("appraisal_cycles")
 }
 
@@ -869,5 +877,20 @@ model HubEvent {
   @@index([tenantId])
   @@index([createdById])
   @@map("hub_events")
+}
+
+model PasswordResetToken {
+  id        String     @id @default(cuid())
+  userId    String
+  user      TenantUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String     @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime   @default(now())
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
 }
 

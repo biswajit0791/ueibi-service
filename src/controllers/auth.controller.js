@@ -1,6 +1,12 @@
+import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { prisma } from '../lib/prisma.js';
 import { signToken } from '../lib/jwt.js';
+import { env } from '../config/env.js';
+import { generateRawToken, hashToken } from '../lib/tokens.js';
+import { sendMail } from '../lib/mailer.js';
+import { renderPasswordResetEmail } from '../lib/emailTemplates.js';
+import { forgotPasswordSchema, resetPasswordSchema } from '../validations/auth.schema.js';
 
 export async function login(req, res, next) {
   try {
@@ -151,3 +157,190 @@ export function logout(req, res) {
   res.clearCookie('ueibi_session', { path: '/' });
   res.json({ ok: true });
 }
+
+/**
+ * Initiates the Forgot Password recovery flow.
+ * Validates email, searches user, creates secure one-time reset token, sends email,
+ * and always returns a generic response to prevent account enumeration.
+ */
+export async function forgotPassword(req, res, next) {
+  try {
+    const { email } = forgotPasswordSchema.parse(req.body);
+    const normalizedEmail = email.trim().toLowerCase();
+
+    const genericMessage =
+      'If an account exists for this email address, a password reset link has been sent.';
+
+    // Look up user by normalized email
+    const user = await prisma.tenantUser.findUnique({
+      where: { email: normalizedEmail },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        status: true,
+        isDeleted: true,
+      },
+    });
+
+    // If account does not exist or is inactive/exited, respond with generic message (anti-enumeration)
+    if (!user || user.isDeleted || user.status === 'EXITED') {
+      return res.status(200).json({ message: genericMessage });
+    }
+
+    // Generate high-entropy 32-byte raw token and SHA-256 hash
+    const rawToken = generateRawToken();
+    const tokenHash = hashToken(rawToken);
+
+    const expiresMinutes = env.passwordResetTokenExpiresMinutes || 30;
+    const expiresAt = new Date(Date.now() + expiresMinutes * 60 * 1000);
+    const tokenId = `prt_${crypto.randomBytes(12).toString('hex')}`;
+
+    // Atomically invalidate old tokens for this user and store new token hash
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(
+        `UPDATE "password_reset_tokens"
+         SET "usedAt" = CURRENT_TIMESTAMP
+         WHERE "userId" = $1 AND "usedAt" IS NULL`,
+        user.id
+      );
+
+      await tx.$executeRawUnsafe(
+        `INSERT INTO "password_reset_tokens" ("id", "userId", "tokenHash", "expiresAt", "usedAt", "createdAt")
+         VALUES ($1, $2, $3, $4, NULL, CURRENT_TIMESTAMP)`,
+        tokenId,
+        user.id,
+        tokenHash,
+        expiresAt
+      );
+    });
+
+    // Build reset URL using environment frontend origin
+    const resetUrl = `${env.frontendOrigin}/reset-password?token=${rawToken}`;
+
+    // Prepare and dispatch password reset email
+    const { html, text } = renderPasswordResetEmail({
+      resetUrl,
+      expiresMinutes,
+      name: user.name,
+    });
+
+    await sendMail({
+      to: user.email,
+      subject: 'Reset your UEIBI password',
+      html,
+      text,
+      event: 'AUTH_PASSWORD_RESET',
+    });
+
+    return res.status(200).json({ message: genericMessage });
+  } catch (err) {
+    if (err?.name === 'ZodError') {
+      return res.status(400).json({
+        error: err.issues?.[0]?.message || 'Validation failed',
+        details: err.issues || [],
+      });
+    }
+    next(err);
+  }
+}
+
+/**
+ * Validates one-time reset token, updates user password, marks token as used,
+ * and invalidates any concurrent/alternate reset tokens within an atomic transaction.
+ */
+export async function resetPassword(req, res, next) {
+  try {
+    const { token: rawToken, newPassword } = resetPasswordSchema.parse(req.body);
+    const tokenHash = hashToken(rawToken);
+    const now = new Date();
+
+    const genericError = 'This password reset link is invalid or has expired.';
+
+    const resetResult = await prisma.$transaction(async (tx) => {
+      // Find token record with row lock to prevent race conditions
+      const rows = await tx.$queryRawUnsafe(
+        `SELECT prt."id", prt."userId", prt."expiresAt", prt."usedAt",
+                u."id" AS "userExists", u."status", u."isDeleted"
+         FROM "password_reset_tokens" prt
+         JOIN "tenant_users" u ON prt."userId" = u."id"
+         WHERE prt."tokenHash" = $1
+         LIMIT 1
+         FOR UPDATE`,
+        tokenHash
+      );
+
+      const tokenRecord = rows?.[0];
+      if (!tokenRecord) {
+        return { ok: false, error: genericError };
+      }
+
+      if (tokenRecord.usedAt !== null) {
+        return { ok: false, error: genericError };
+      }
+
+      if (new Date(tokenRecord.expiresAt) <= now) {
+        return { ok: false, error: genericError };
+      }
+
+      if (tokenRecord.isDeleted || tokenRecord.status === 'EXITED') {
+        return { ok: false, error: 'Account is inactive or not found.' };
+      }
+
+      // Atomic conditional update to mark token as used
+      const updateResult = await tx.$executeRawUnsafe(
+        `UPDATE "password_reset_tokens"
+         SET "usedAt" = CURRENT_TIMESTAMP
+         WHERE "id" = $1 AND "usedAt" IS NULL`,
+        tokenRecord.id
+      );
+
+      if (updateResult === 0) {
+        return { ok: false, error: genericError };
+      }
+
+      // Hash new password with existing bcrypt implementation (10 rounds)
+      const newHash = await bcrypt.hash(newPassword, 10);
+
+      // Update user password and clear mustChangePassword
+      await tx.$executeRawUnsafe(
+        `UPDATE "tenant_users"
+         SET "passwordHash" = $1, "mustChangePassword" = false, "updatedAt" = CURRENT_TIMESTAMP
+         WHERE "id" = $2`,
+        newHash,
+        tokenRecord.userId
+      );
+
+      // Invalidate any other active reset tokens for this user
+      await tx.$executeRawUnsafe(
+        `UPDATE "password_reset_tokens"
+         SET "usedAt" = CURRENT_TIMESTAMP
+         WHERE "userId" = $1 AND "id" != $2 AND "usedAt" IS NULL`,
+        tokenRecord.userId,
+        tokenRecord.id
+      );
+
+      return { ok: true };
+    });
+
+    if (!resetResult.ok) {
+      return res.status(400).json({ error: resetResult.error });
+    }
+
+    // Clear session cookie if any
+    res.clearCookie('ueibi_session', { path: '/' });
+
+    return res.status(200).json({
+      message: 'Password reset successfully.',
+    });
+  } catch (err) {
+    if (err?.name === 'ZodError') {
+      return res.status(400).json({
+        error: err.issues?.[0]?.message || 'Validation failed',
+        details: err.issues || [],
+      });
+    }
+    next(err);
+  }
+}
+

@@ -411,6 +411,33 @@ const options = {
             user: { $ref: '#/components/schemas/Employee' },
           },
         },
+        ForgotPasswordRequest: {
+          type: 'object',
+          required: ['email'],
+          properties: {
+            email: { type: 'string', format: 'email', example: 'arjun@acmecorp.com' },
+          },
+        },
+        ForgotPasswordResponse: {
+          type: 'object',
+          properties: {
+            message: { type: 'string', example: 'If an account exists for this email address, a password reset link has been sent.' },
+          },
+        },
+        ResetPasswordRequest: {
+          type: 'object',
+          required: ['token', 'newPassword'],
+          properties: {
+            token: { type: 'string', example: '4a6b2c8d1e3f...' },
+            newPassword: { type: 'string', minLength: 8, maxLength: 128, example: 'NewStr0ngP@ss123' },
+          },
+        },
+        ResetPasswordResponse: {
+          type: 'object',
+          properties: {
+            message: { type: 'string', example: 'Password reset successfully.' },
+          },
+        },
 
         // ── Employee schemas ──
         Employee: {
@@ -789,26 +816,78 @@ const options = {
         AppraisalCycle: {
           type: 'object',
           properties: {
-            id:         { type: 'string', example: 'clcycle12345' },
-            tenantId:   { type: 'string', example: 'cltenant123' },
-            name:       { type: 'string', example: 'FY 2024-2025' },
-            frequency:  { type: 'string', enum: ['ANNUAL', 'QUARTERLY', 'MONTHLY'], example: 'ANNUAL' },
-            startDate:  { type: 'string', format: 'date-time' },
-            endDate:    { type: 'string', format: 'date-time' },
-            status:     { type: 'string', enum: ['ACTIVE', 'CLOSED'], example: 'ACTIVE' },
-            parameters: { type: 'array', items: { $ref: '#/components/schemas/AppraisalParameter' } },
-            createdAt:  { type: 'string', format: 'date-time' },
-            updatedAt:  { type: 'string', format: 'date-time' },
+            id:              { type: 'string', example: 'clcycle12345' },
+            tenantId:        { type: 'string', example: 'cltenant123' },
+            name:            { type: 'string', example: 'September 2026' },
+            frequency:       { type: 'string', enum: ['ANNUAL', 'QUARTERLY', 'MONTHLY'], example: 'MONTHLY' },
+            year:            { type: 'integer', example: 2026 },
+            month:           { type: 'string', example: 'September' },
+            monthNumber:     { type: 'integer', example: 9 },
+            startDate:       { type: 'string', format: 'date-time' },
+            endDate:         { type: 'string', format: 'date-time' },
+            status:          { type: 'string', enum: ['ACTIVE', 'CLOSED'], example: 'ACTIVE' },
+            createdById:     { type: 'string', nullable: true, example: 'cluser12345' },
+            createdBy:       { type: 'object', nullable: true },
+            reviewCount:     { type: 'integer', example: 5 },
+            nominationCount: { type: 'integer', example: 2 },
+            parameters:      { type: 'array', items: { $ref: '#/components/schemas/AppraisalParameter' } },
+            createdAt:       { type: 'string', format: 'date-time' },
+            updatedAt:       { type: 'string', format: 'date-time' },
+          },
+        },
+        CreateCycleRequest: {
+          type: 'object',
+          required: ['year'],
+          properties: {
+            year:        { type: 'integer', minimum: 2000, maximum: 2100, example: 2026 },
+            month:       { type: 'string', example: 'September' },
+            monthNumber: { type: 'integer', minimum: 1, maximum: 12, example: 9 },
+            frequency:   { type: 'string', enum: ['ANNUAL', 'QUARTERLY', 'MONTHLY'], default: 'MONTHLY', example: 'MONTHLY' },
+            name:        { type: 'string', example: 'September 2026' },
+            startDate:   { type: 'string', format: 'date-time' },
+            endDate:     { type: 'string', format: 'date-time' },
+            dueDate:     { type: 'string', format: 'date-time' },
+            status:      { type: 'string', enum: ['ACTIVE', 'CLOSED'], default: 'ACTIVE', example: 'ACTIVE' },
+          },
+        },
+        AppraisalCycleListResponse: {
+          type: 'object',
+          properties: {
+            success:       { type: 'boolean', example: true },
+            count:         { type: 'integer', example: 3 },
+            distinctYears: { type: 'array', items: { type: 'integer' }, example: [2026, 2025] },
+            cycles:        { type: 'array', items: { $ref: '#/components/schemas/AppraisalCycle' } },
           },
         },
         AppraisalParameter: {
           type: 'object',
           properties: {
-            id:       { type: 'string', example: 'clparam12345' },
-            cycleId:  { type: 'string', example: 'clcycle12345' },
-            name:     { type: 'string', example: 'Technical Skills' },
-            order:    { type: 'integer', example: 1 },
-            isActive: { type: 'boolean', example: true },
+            id:        { type: 'string', example: 'clparam12345' },
+            tenantId:  { type: 'string', example: 'cltenant123' },
+            cycleId:   { type: 'string', example: 'clcycle12345' },
+            name:      { type: 'string', example: 'Technical Skills' },
+            order:     { type: 'integer', example: 1 },
+            isActive:  { type: 'boolean', example: true },
+            createdAt: { type: 'string', format: 'date-time' },
+            updatedAt: { type: 'string', format: 'date-time' },
+          },
+        },
+        CreateParameterRequest: {
+          type: 'object',
+          required: ['name'],
+          properties: {
+            name:     { type: 'string', minLength: 1, maxLength: 100, example: 'Cloud Infrastructure & DevOps' },
+            cycleId:  { type: 'string', example: 'clcycle12345', description: 'Target cycle ID. Defaults to active cycle if omitted' },
+            order:    { type: 'integer', minimum: 1, maximum: 100, example: 6 },
+            isActive: { type: 'boolean', default: true, example: true },
+          },
+        },
+        ParameterListResponse: {
+          type: 'object',
+          properties: {
+            success:    { type: 'boolean', example: true },
+            count:      { type: 'integer', example: 5 },
+            parameters: { type: 'array', items: { $ref: '#/components/schemas/AppraisalParameter' } },
           },
         },
         PerformanceReview: {
@@ -853,16 +932,20 @@ const options = {
           properties: {
             name:      { type: 'string', example: 'FY 2025-2026' },
             frequency: { type: 'string', enum: ['ANNUAL', 'QUARTERLY', 'MONTHLY'], example: 'QUARTERLY' },
+            year:      { type: 'integer', minimum: 2000, maximum: 2100, example: 2026 },
+            month:     { type: 'string', example: 'September' },
             startDate: { type: 'string', format: 'date-time', example: '2025-04-01T00:00:00Z' },
             endDate:   { type: 'string', format: 'date-time', example: '2026-03-31T00:00:00Z' },
+            dueDate:   { type: 'string', format: 'date-time', example: '2026-03-31T00:00:00Z' },
             status:    { type: 'string', enum: ['ACTIVE', 'CLOSED'], example: 'ACTIVE' },
           },
         },
         UpdateParameterRequest: {
           type: 'object',
+          description: 'At least one field must be provided to update',
           properties: {
-            name:     { type: 'string', example: 'Leadership & Initiative' },
-            order:    { type: 'integer', minimum: 1, maximum: 20, example: 3 },
+            name:     { type: 'string', minLength: 1, maxLength: 100, example: 'Leadership & Initiative' },
+            order:    { type: 'integer', minimum: 1, maximum: 100, example: 3 },
             isActive: { type: 'boolean', example: false },
           },
         },
@@ -1380,6 +1463,60 @@ const options = {
             200: {
               description: 'Logged out successfully',
             },
+          },
+        },
+      },
+      '/auth/forgot-password': {
+        post: {
+          tags: ['Auth'],
+          summary: 'Request a password reset link via registered email',
+          description: 'Generates a secure, cryptographically random one-time password reset token and emails it to the user. Always returns a generic 200 response to prevent user enumeration.',
+          operationId: 'forgotPassword',
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/ForgotPasswordRequest' } } },
+          },
+          responses: {
+            200: {
+              description: 'Generic success response',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/ForgotPasswordResponse' } } },
+            },
+            400: {
+              description: 'Validation error (e.g. invalid email format)',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+            },
+            429: {
+              description: 'Rate limit exceeded',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+            },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
+      '/auth/reset-password': {
+        post: {
+          tags: ['Auth'],
+          summary: 'Reset password using a valid one-time reset token',
+          description: 'Validates the high-entropy reset token, checks that it is unexpired and unused, hashes the new password with bcrypt, marks the token as used atomically, and clears previous tokens.',
+          operationId: 'resetPassword',
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/ResetPasswordRequest' } } },
+          },
+          responses: {
+            200: {
+              description: 'Password reset successfully',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/ResetPasswordResponse' } } },
+            },
+            400: {
+              description: 'Invalid or expired token, or invalid password',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+            },
+            429: {
+              description: 'Rate limit exceeded',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+            },
+            500: { description: 'Internal server error' },
           },
         },
       },
@@ -3963,106 +4100,6 @@ const options = {
       '/appraisals/submit': {
         post: {
           tags: ['Appraisals'],
-          summary: 'Submit employee self-rating for an active appraisal cycle',
-          description: 'Submit or save employee self-assessment and ratings for the active appraisal cycle. Auto-creates review if not present.',
-          operationId: 'submitSelfRating',
-          security: [{ userCookie: [] }],
-          requestBody: {
-            required: true,
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/SubmitSelfRatingRequest' },
-                example: {
-                  rating: 4.5,
-                  comments: 'Achieved quarterly sprint targets and led microservices migration.',
-                  selfAccomplishments: 'Delivered database migration on time with zero downtime.',
-                  selfWeaknesses: 'Need to improve async documentation habits.',
-                  submit: true,
-                  scores: [
-                    { parameterId: 'clparam12345', selfScore: 4 },
-                    { parameterId: 'clparam67890', selfScore: 5 },
-                  ],
-                },
-              },
-            },
-          },
-          responses: {
-            200: {
-              description: 'Self-rating submitted successfully',
-              content: { 'application/json': { schema: { $ref: '#/components/schemas/PerformanceReview' } } },
-            },
-            400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
-            401: { description: 'Unauthorized' },
-          },
-        },
-      },
-      '/appraisals/{id}/manager-review': {
-        patch: {
-          tags: ['Appraisals'],
-          summary: 'Submit manager review and evaluation for employee appraisal',
-          description: 'Submit manager remarks and parameter scores for an employee performance review.',
-          operationId: 'submitManagerRating',
-          security: [{ userCookie: [] }],
-          parameters: [
-            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Performance Review ID' },
-          ],
-          requestBody: {
-            required: true,
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/SubmitManagerRatingRequest' },
-                example: {
-                  managerRating: 4.8,
-                  managerRemarks: 'Exceptional leadership and execution throughout the cycle. Exceeded SLA targets.',
-                  scores: [
-                    { parameterId: 'clparam12345', managerScore: 5 },
-                    { parameterId: 'clparam67890', managerScore: 4 },
-                  ],
-                },
-              },
-            },
-          },
-          responses: {
-            200: {
-              description: 'Manager review saved successfully',
-              content: { 'application/json': { schema: { $ref: '#/components/schemas/PerformanceReview' } } },
-            },
-            400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
-            403: { description: 'Access forbidden: not assigned manager' },
-            404: { description: 'Review not found' },
-          },
-        },
-      },
-      '/appraisals': {
-        get: {
-          tags: ['Appraisals'],
-          summary: 'List appraisal reviews for employee or manager direct reports',
-          description: 'Retrieve all appraisal reviews across cycles for the authenticated user.',
-          operationId: 'listAppraisals',
-          security: [{ userCookie: [] }],
-          responses: {
-            200: {
-              description: 'Appraisal reviews retrieved',
-              content: {
-                'application/json': {
-                  schema: {
-                    type: 'object',
-                    properties: {
-                      reviews: { type: 'array', items: { $ref: '#/components/schemas/PerformanceReview' } },
-                    },
-                  },
-                },
-              },
-            },
-            401: { description: 'Unauthorized' },
-          },
-        },
-      },
-
-      // ───── Appraisals & Performance Reviews ─────
-      '/appraisals/submit': {
-        post: {
-          tags: ['Appraisals'],
           summary: 'Submit employee self-rating, accomplishments, and parameter scores',
           description: 'Submits or saves draft for employee self-assessment. Links automatically to the active monthly, quarterly, or annual cycle.',
           operationId: 'submitSelfRating',
@@ -4269,16 +4306,87 @@ const options = {
         },
       },
 
+      '/appraisal-cycles': {
+        post: {
+          tags: ['Appraisals'],
+          summary: 'Create a new appraisal cycle for any year & month (HR / Admin / CMD)',
+          description: 'Creates an appraisal cycle for a designated year, month, or quarter. Automatically clones tenant evaluation parameters or seeds default skills.',
+          operationId: 'createCycle',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/CreateCycleRequest' },
+                example: {
+                  year: 2026,
+                  month: 'September',
+                  monthNumber: 9,
+                  frequency: 'MONTHLY',
+                  name: 'September 2026',
+                  status: 'ACTIVE',
+                },
+              },
+            },
+          },
+          responses: {
+            201: {
+              description: 'Cycle created successfully',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      success: { type: 'boolean', example: true },
+                      message: { type: 'string', example: 'Appraisal cycle for September 2026 created successfully.' },
+                      cycle: { $ref: '#/components/schemas/AppraisalCycle' },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+            403: { description: 'Forbidden — requires HR, Admin, Super Admin, or CMD role' },
+            409: { description: 'Cycle for this cadence/month/year already exists' },
+          },
+        },
+        get: {
+          tags: ['Appraisals'],
+          summary: 'List all appraisal cycles with year, cadence, and status filters',
+          description: 'Retrieve all appraisal cycles for the tenant with distinct years list and cycle counts.',
+          operationId: 'listCycles',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'year', in: 'query', schema: { type: 'integer', minimum: 2000, maximum: 2100 }, description: 'Filter by appraisal cycle year' },
+            { name: 'frequency', in: 'query', schema: { type: 'string', enum: ['ANNUAL', 'QUARTERLY', 'MONTHLY'] }, description: 'Filter by cycle cadence' },
+            { name: 'status', in: 'query', schema: { type: 'string', enum: ['ACTIVE', 'CLOSED'] }, description: 'Filter by cycle status' },
+          ],
+          responses: {
+            200: {
+              description: 'List of cycles and distinct years',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/AppraisalCycleListResponse' },
+                },
+              },
+            },
+            400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+            401: { description: 'Unauthorized' },
+          },
+        },
+      },
       '/appraisal-cycles/active': {
         get: {
           tags: ['Appraisals'],
-          summary: 'Get active appraisal cycle with parameters (supports dynamic cadence & month)',
+          summary: 'Get active appraisal cycle with parameters (supports dynamic cadence, year & month)',
           operationId: 'getActiveCycle',
           security: [{ userCookie: [] }],
           parameters: [
             { name: 'frequency', in: 'query', schema: { type: 'string', enum: ['MONTHLY', 'QUARTERLY', 'ANNUAL'], default: 'MONTHLY' }, description: 'Appraisal cadence' },
             { name: 'period', in: 'query', schema: { type: 'string' }, description: 'Specific month/quarter period name, e.g. "September 2026"' },
             { name: 'cycleId', in: 'query', schema: { type: 'string' }, description: 'Target cycle ID' },
+            { name: 'year', in: 'query', schema: { type: 'integer', minimum: 2000, maximum: 2100 }, description: 'Target appraisal year' },
+            { name: 'month', in: 'query', schema: { type: 'string' }, description: 'Target month name or number (e.g. "September" or "9")' },
           ],
           responses: {
             200: {
@@ -4304,6 +4412,7 @@ const options = {
                 },
               },
             },
+            400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
             401: { description: 'Unauthorized' },
           },
         },
@@ -4311,7 +4420,7 @@ const options = {
       '/appraisal-cycles/{id}': {
         patch: {
           tags: ['Appraisals'],
-          summary: 'Update cycle settings (HR / SUPER_ADMIN / CMD only)',
+          summary: 'Update cycle settings (HR / SUPER_ADMIN / CMD / ADMIN)',
           operationId: 'updateCycle',
           security: [{ userCookie: [] }],
           parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
@@ -4321,10 +4430,10 @@ const options = {
               'application/json': {
                 schema: { $ref: '#/components/schemas/UpdateCycleRequest' },
                 example: {
-                  name: 'FY 2025-2026',
-                  frequency: 'ANNUAL',
-                  startDate: '2025-04-01T00:00:00.000Z',
-                  endDate: '2026-03-31T00:00:00.000Z',
+                  name: 'September 2026',
+                  frequency: 'MONTHLY',
+                  year: 2026,
+                  month: 'September',
                   status: 'ACTIVE',
                 },
               },
@@ -4338,13 +4447,77 @@ const options = {
           },
         },
       },
+      '/appraisal-parameters': {
+        get: {
+          tags: ['Appraisals'],
+          summary: 'List evaluation skill parameters for active or specified cycle',
+          description: 'Fetches the ordered list of appraisal rating parameters (Technical Skills, Communication, etc.) for a cycle.',
+          operationId: 'listParameters',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'cycleId', in: 'query', schema: { type: 'string' }, description: 'Appraisal Cycle ID (defaults to active cycle if omitted)' },
+          ],
+          responses: {
+            200: {
+              description: 'List of evaluation parameters',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/ParameterListResponse' },
+                },
+              },
+            },
+            400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+            401: { description: 'Unauthorized' },
+          },
+        },
+        post: {
+          tags: ['Appraisals'],
+          summary: 'Create a new evaluation skill parameter (HR / Admin / CMD)',
+          description: 'Adds a custom dynamic appraisal parameter skill to the cycle with designated display order.',
+          operationId: 'createParameter',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/CreateParameterRequest' },
+                example: {
+                  name: 'Cloud Infrastructure & DevOps',
+                  order: 6,
+                  isActive: true,
+                },
+              },
+            },
+          },
+          responses: {
+            201: {
+              description: 'Parameter created successfully',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      success: { type: 'boolean', example: true },
+                      message: { type: 'string', example: 'Skill parameter "Cloud Infrastructure & DevOps" added successfully.' },
+                      parameter: { $ref: '#/components/schemas/AppraisalParameter' },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+            403: { description: 'Forbidden — requires HR, Admin, Super Admin, or CMD role' },
+            404: { description: 'Appraisal cycle not found' },
+          },
+        },
+      },
       '/appraisal-parameters/{id}': {
         patch: {
           tags: ['Appraisals'],
-          summary: 'Enable / disable or rename a rating parameter (HR / SUPER_ADMIN / CMD only)',
+          summary: 'Enable / disable, rename, or reorder a rating parameter (HR / Admin / CMD)',
           operationId: 'updateParameter',
           security: [{ userCookie: [] }],
-          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Parameter ID' }],
           requestBody: {
             required: true,
             content: {
@@ -4361,6 +4534,35 @@ const options = {
           responses: {
             200: { description: 'Updated parameter', content: { 'application/json': { schema: { $ref: '#/components/schemas/AppraisalParameter' } } } },
             400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+            403: { description: 'Forbidden' },
+            404: { description: 'Parameter not found' },
+          },
+        },
+        delete: {
+          tags: ['Appraisals'],
+          summary: 'Delete or safely soft-deactivate an evaluation parameter (HR / Admin / CMD)',
+          description: 'Hard deletes the parameter if no review scores reference it. If review scores already exist, automatically deactivates it (isActive: false) to preserve historical review data integrity.',
+          operationId: 'deleteParameter',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Parameter ID' }],
+          responses: {
+            200: {
+              description: 'Parameter deleted or deactivated',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      success: { type: 'boolean', example: true },
+                      deactivated: { type: 'boolean', example: false },
+                      message: { type: 'string', example: 'Parameter deleted successfully.' },
+                      parameter: { $ref: '#/components/schemas/AppraisalParameter' },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: 'Invalid parameter ID parameter', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
             403: { description: 'Forbidden' },
             404: { description: 'Parameter not found' },
           },
