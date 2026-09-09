@@ -118,10 +118,16 @@ export class LeaveService {
       totalDays: parsed.totalDays || calculatedDays,
       reason: parsed.text || rawRequest.reason || 'No reason provided',
       status: rawRequest.status,
-      managerStatus: parsed.managerStatus || (rawRequest.status === 'APPROVED' ? 'Approved' : rawRequest.status === 'REJECTED' ? 'Rejected' : 'Pending'),
+      managerStatus: (parsed.managerComment && parsed.managerComment.includes('Auto-approved') && rawRequest.status === 'PENDING')
+        ? 'Pending'
+        : (parsed.managerStatus || (rawRequest.status === 'APPROVED' ? 'Approved' : rawRequest.status === 'REJECTED' ? 'Rejected' : 'Pending')),
       managerId: parsed.managerId || null,
-      managerComment: parsed.managerComment || null,
-      managerActedAt: parsed.managerActedAt || null,
+      managerComment: (parsed.managerComment && parsed.managerComment.includes('Auto-approved') && rawRequest.status === 'PENDING')
+        ? null
+        : (parsed.managerComment || null),
+      managerActedAt: (parsed.managerComment && parsed.managerComment.includes('Auto-approved') && rawRequest.status === 'PENDING')
+        ? null
+        : (parsed.managerActedAt || null),
       hrStatus: parsed.hrStatus || (rawRequest.status === 'APPROVED' ? 'Approved' : rawRequest.status === 'REJECTED' ? 'Rejected' : 'Pending'),
       hrId: parsed.hrId || null,
       hrComment: parsed.hrComment || null,
@@ -234,8 +240,8 @@ export class LeaveService {
     }
 
     // 3. Resolve Manager & Approval Flow
-    const hasManager = Boolean(employee.managerId);
-    const initialManagerStatus = hasManager ? 'Pending' : 'Approved';
+    // Leave requests must ALWAYS start with Manager Status as 'Pending' (never auto-approved).
+    const initialManagerStatus = 'Pending';
     const initialHrStatus = 'Pending';
 
     const meta = {
@@ -244,8 +250,8 @@ export class LeaveService {
       totalDays,
       managerStatus: initialManagerStatus,
       managerId: employee.managerId || null,
-      managerComment: hasManager ? null : 'Auto-approved (No direct reporting manager)',
-      managerActedAt: hasManager ? null : new Date().toISOString(),
+      managerComment: null,
+      managerActedAt: null,
       hrStatus: initialHrStatus,
       hrId: null,
       hrComment: null,
@@ -317,9 +323,10 @@ export class LeaveService {
     }
 
     const isDirectManager = raw.employee.managerId === managerUser.id;
-    const isElevated = ['SUPER_ADMIN', 'HR', 'ADMIN'].includes(managerUser.role);
+    const isElevated = ['SUPER_ADMIN', 'HR', 'ADMIN', 'LEADERSHIP', 'OWNER', 'CMD', 'DIRECTOR'].includes(managerUser.role);
+    const isFallbackManager = !raw.employee.managerId && managerUser.role === 'MANAGER';
 
-    if (!isDirectManager && !isElevated) {
+    if (!isDirectManager && !isElevated && !isFallbackManager) {
       throw { status: 403, message: 'Access forbidden: you are not the assigned manager for this employee' };
     }
 
@@ -535,8 +542,11 @@ export class LeaveService {
     if (scope === 'my') {
       where.employeeId = user.id;
     } else if (scope === 'team') {
-      // Direct reports for Manager
-      where.employee = { tenantId, managerId: user.id };
+      // Direct reports for Manager or employees without an assigned manager
+      where.OR = [
+        { employee: { tenantId, managerId: user.id } },
+        { employee: { tenantId, managerId: null, role: 'EMPLOYEE' } },
+      ];
     } else if (scope === 'company') {
       // HR or Super Admin
       const isHR = ['HR', 'SUPER_ADMIN', 'ADMIN', 'LEADERSHIP', 'OWNER'].includes(user.role);
