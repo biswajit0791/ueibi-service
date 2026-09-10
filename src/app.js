@@ -22,6 +22,7 @@ import uploadRoutes from './routes/upload.routes.js';
 import activityRoutes from './routes/activity.routes.js';
 import policyRoutes from './routes/policy.routes.js';
 import hubRoutes from './routes/hub.routes.js';
+import galleryRoutes from './routes/gallery.routes.js';
 import { notFound } from './middleware/notFound.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
@@ -130,6 +131,7 @@ apiRouter.use(uploadRoutes);
 apiRouter.use(activityRoutes);
 apiRouter.use(policyRoutes);
 apiRouter.use(hubRoutes);
+apiRouter.use(galleryRoutes);
 if (env.nodeEnv !== 'production') {
   apiRouter.use(devRoutes);
 }

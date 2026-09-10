@@ -57,6 +57,7 @@ model Tenant {
   leaveRequests     LeaveRequest[]
   leaveAuditLogs    LeaveAuditLog[]
   leaveAdjustments  LeaveBalanceAdjustment[]
+  galleryPosts      GalleryPost[]
 
   @@map("tenants")
 }
@@ -144,6 +145,9 @@ model TenantUser {
   notifications  Notification[]      @relation("UserNotifications")
   createdEvents  HubEvent[]          @relation("EventCreator")
   passwordResetTokens PasswordResetToken[]
+  galleryPosts   GalleryPost[]       @relation("GalleryPostUploader")
+  galleryLikes   GalleryLike[]       @relation("GalleryLikeUser")
+  galleryComments GalleryComment[]   @relation("GalleryCommentAuthor")
 
   remarks   String?
   docs      Json?
@@ -1102,5 +1106,60 @@ model PasswordResetToken {
   @@index([tokenHash])
   @@index([expiresAt])
   @@map("password_reset_tokens")
+}
+
+// ── Corporate Gallery ───────────────────────────────────────────────────────
+
+model GalleryPost {
+  id           String           @id @default(cuid())
+  tenantId     String
+  tenant       Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  uploadedById String
+  uploadedBy   TenantUser       @relation("GalleryPostUploader", fields: [uploadedById], references: [id], onDelete: Cascade)
+  title        String
+  category     String           @default("Socials") // Socials | Hackathon | Retreat | Awards | Townhall | Onboarding | Other
+  imageUrl     String
+  likeCount    Int              @default(0)
+  commentCount Int              @default(0)
+  isActive     Boolean          @default(true)
+  likes        GalleryLike[]
+  comments     GalleryComment[]
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  @@index([tenantId])
+  @@index([uploadedById])
+  @@index([tenantId, category])
+  @@map("gallery_posts")
+}
+
+model GalleryLike {
+  id        String      @id @default(cuid())
+  tenantId  String
+  postId    String
+  post      GalleryPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  userId    String
+  user      TenantUser  @relation("GalleryLikeUser", fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime    @default(now())
+
+  @@unique([postId, userId])
+  @@index([postId])
+  @@index([userId])
+  @@map("gallery_likes")
+}
+
+model GalleryComment {
+  id        String      @id @default(cuid())
+  tenantId  String
+  postId    String
+  post      GalleryPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    TenantUser  @relation("GalleryCommentAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+  text      String      @db.Text
+  createdAt DateTime    @default(now())
+
+  @@index([postId])
+  @@index([authorId])
+  @@map("gallery_comments")
 }
 
