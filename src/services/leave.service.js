@@ -127,6 +127,19 @@ export class LeaveService {
     const leaveTypeName = raw.requestType === 'WFH' ? 'Work From Home' : (raw.leaveType?.name || raw.type || 'Leave');
     const leaveTypeCode = raw.requestType === 'WFH' ? 'WFH' : (raw.leaveType?.code || 'LEAVE');
 
+    let cleanReason = raw.reason || 'No reason provided';
+    let extraMgrComment = null;
+    let extraHrComment = null;
+
+    if (typeof cleanReason === 'string' && cleanReason.trim().startsWith('{') && cleanReason.trim().endsWith('}')) {
+      try {
+        const parsed = JSON.parse(cleanReason);
+        cleanReason = parsed.text || parsed.reason || parsed.description || cleanReason;
+        if (!raw.managerComment && parsed.managerComment) extraMgrComment = parsed.managerComment;
+        if (!raw.hrComment && parsed.hrComment) extraHrComment = parsed.hrComment;
+      } catch {}
+    }
+
     return {
       id: raw.id,
       tenantId: raw.tenantId,
@@ -148,17 +161,17 @@ export class LeaveService {
       endDate: raw.endDate ? raw.endDate.toISOString().split('T')[0] : null,
       totalDays: raw.totalDays || 1,
       dayType: raw.dayType || 'FULL',
-      reason: raw.reason || 'No reason provided',
+      reason: cleanReason,
       attachmentUrl: raw.attachmentUrl || null,
       attachmentOriginalName: raw.attachmentOriginalName || null,
       status: raw.status,
       managerStatus: raw.managerStatus || 'Pending',
       managerId: raw.managerId || null,
-      managerComment: raw.managerComment || null,
+      managerComment: raw.managerComment || extraMgrComment,
       managerActedAt: raw.managerActedAt || null,
       hrStatus: raw.hrStatus || 'Pending',
       hrId: raw.hrId || null,
-      hrComment: raw.hrComment || null,
+      hrComment: raw.hrComment || extraHrComment,
       hrActedAt: raw.hrActedAt || null,
       rejectionReason: raw.rejectionReason || null,
       rejectedById: raw.rejectedById || null,
