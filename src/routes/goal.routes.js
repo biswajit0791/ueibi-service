@@ -20,12 +20,6 @@ import {
   getMyGoals,
   syncGoalsToAppraisal,
 } from '../controllers/appraisal.controller.js';
-import {
-  addGoalComment,
-  listGoalComments,
-  listGoalAudit,
-  deleteGoalComment,
-} from '../controllers/goalActivity.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
 
@@ -55,9 +49,7 @@ router.post('/goals/:id/hr-reject', requireAuth, requireTenant, hrRejectGoal);
 router.post('/goals/:id/resubmit', requireAuth, requireTenant, resubmitGoal);
 
 // ── Goal Activity & Audit ──────────────────────────────────────────────────
-router.post('/goals/:id/comments', requireAuth, requireTenant, addGoalComment);
-router.get('/goals/:id/comments', requireAuth, requireTenant, listGoalComments);
-router.delete('/goals/:id/comments/:cid', requireAuth, requireTenant, deleteGoalComment);
-router.get('/goals/:id/audit', requireAuth, requireTenant, listGoalAudit);
+// (comments + audit routes live in activity.routes.js — they used to be
+//  duplicated here pointing at the same handlers.)
 
 export default router;

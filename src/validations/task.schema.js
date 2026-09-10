@@ -1,4 +1,19 @@
 import { z } from 'zod';
+import { TASK_STATUSES } from '../lib/workflowStatus.js';
+
+const taskStatusSchema = z.enum(TASK_STATUSES);
+const weightSchema = z.preprocess(
+  (v) => (v !== undefined && v !== null && v !== '' ? Number(v) : v),
+  z.number().int().min(1, 'Weight must be at least 1').max(100, 'Weight cannot exceed 100').nullable().optional()
+);
+const progressSchema = z.preprocess(
+  (v) => {
+    if (v === undefined || v === null || v === '') return v;
+    const n = Number(v);
+    return Number.isNaN(n) ? n : Math.min(100, Math.max(0, n));
+  },
+  z.number().min(0).max(100).nullable().optional()
+);
 
 export const dependencySchema = z.preprocess(
   (val) => {
@@ -45,13 +60,13 @@ export const createTaskSchema = z.object({
   goalId: z.string().nullable().optional(),
   isPrivate: z.boolean().optional(),
   isStandalone: z.boolean().optional(),
-  weight: z.preprocess((v) => (v !== undefined && v !== null && v !== '' ? Number(v) : v), z.number().nullable().optional()),
+  weight: weightSchema,
   description: z.string().nullable().optional(),
   employeeId: z.string().nullable().optional(),
   dependency: dependencySchema.nullable().optional(),
   isDependencyOf: z.string().nullable().optional(),
-  status: z.string().optional(),
-  progress: z.preprocess((v) => (v !== undefined && v !== null && v !== '' ? Number(v) : v), z.number().nullable().optional()),
+  status: taskStatusSchema.optional(),
+  progress: progressSchema,
 }).passthrough();
 
 export const updateTaskSchema = z.object({
@@ -64,13 +79,13 @@ export const updateTaskSchema = z.object({
   goalId: z.string().nullable().optional(),
   isPrivate: z.boolean().optional(),
   isStandalone: z.boolean().optional(),
-  weight: z.preprocess((v) => (v !== undefined && v !== null && v !== '' ? Number(v) : v), z.number().nullable().optional()),
+  weight: weightSchema,
   description: z.string().nullable().optional(),
   employeeId: z.string().nullable().optional(),
   dependency: dependencySchema.nullable().optional(),
   isDependencyOf: z.string().nullable().optional(),
-  status: z.string().optional(),
-  progress: z.preprocess((v) => (v !== undefined && v !== null && v !== '' ? Number(v) : v), z.number().nullable().optional()),
+  status: taskStatusSchema.optional(),
+  progress: progressSchema,
 }).passthrough();
 
 export const createTaskCommentSchema = z.object({

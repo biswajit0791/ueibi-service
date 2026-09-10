@@ -5,19 +5,25 @@ import { prisma } from '../lib/prisma.js';
 import { sendMail } from '../lib/mailer.js';
 import { emitToTenant } from '../lib/socket.js';
 import {
-  updateActiveEmployeeSchema,
   updateExEmployeeSchema,
-  updateNonJoinerSchema
+  updateNonJoinerSchema,
+  inviteEmployeeSchema,
+  onboardEmployeeSchema,
+  updateEmployeeSchema,
+  createExEmployeeSchema,
+  createNonJoinerSchema,
 } from '../validations/employee.schema.js';
 import { env } from '../config/env.js';
 import { canCreateRole, getAllowedRoles } from '../lib/roleHierarchy.js';
+import { validatePasswordStrength } from '../lib/passwordPolicy.js';
 
 export async function inviteEmployee(req, res, next) {
   try {
-    const { email, name, role, designation, department, joinDate, phone, pan, dob, feedbackRemarks } = req.body || {};
-    if (!email || !name) {
-      return res.status(400).json({ error: 'Name and email are required' });
+    const parsed = inviteEmployeeSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
+    const { email, name, role, designation, department, band, managerId, joinDate, phone, pan, dob, feedbackRemarks } = parsed.data;
 
     const tenantId = req.tenantId;
 
@@ -63,6 +69,7 @@ export async function inviteEmployee(req, res, next) {
     const activeCount = await prisma.tenantUser.count({
       where: {
         tenantId,
+        isDeleted: false,
         status: { in: ['ACTIVE', 'INVITED'] },
       },
     });
@@ -73,8 +80,21 @@ export async function inviteEmployee(req, res, next) {
       });
     }
 
-    // Generate temp password
-    const tempPassword = 'UEIBI-' + crypto.randomBytes(3).toString('hex').toUpperCase();
+    // Validate the reporting manager (if supplied) belongs to this tenant.
+    let resolvedManagerId = null;
+    if (managerId) {
+      const mgr = await prisma.tenantUser.findFirst({
+        where: { id: managerId, tenantId, isDeleted: false },
+        select: { id: true },
+      });
+      if (!mgr) {
+        return res.status(400).json({ error: 'Selected reporting manager was not found in this organization' });
+      }
+      resolvedManagerId = mgr.id;
+    }
+
+    // Generate temp password — 12 hex chars (~48 bits) plus a prefix.
+    const tempPassword = 'UEIBI-' + crypto.randomBytes(6).toString('hex').toUpperCase();
     const passwordHash = await bcrypt.hash(tempPassword, 10);
 
     const user = await prisma.tenantUser.create({
@@ -88,6 +108,8 @@ export async function inviteEmployee(req, res, next) {
         mustChangePassword: true,
         designation,
         department,
+        band: band || undefined,
+        managerId: resolvedManagerId,
         joinDate: joinDate ? new Date(joinDate) : null,
         phone,
         pan,
@@ -139,6 +161,10 @@ export async function inviteEmployee(req, res, next) {
 }
 export async function onboardEmployee(req, res, next) {
   try {
+    const parsed = onboardEmployeeSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    }
     const {
       newPassword,
       phone,
@@ -155,10 +181,11 @@ export async function onboardEmployee(req, res, next) {
       bankDetails,
       workHistory,
       docs,
-    } = req.body || {};
+    } = parsed.data;
 
-    if (!newPassword) {
-      return res.status(400).json({ error: 'New password is required to complete onboarding' });
+    const pwCheck = validatePasswordStrength(newPassword);
+    if (!pwCheck.ok) {
+      return res.status(400).json({ error: pwCheck.message });
     }
 
     const userId = req.user.id;
@@ -169,6 +196,13 @@ export async function onboardEmployee(req, res, next) {
 
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Onboarding is a one-time flow: only an INVITED user (or one still flagged
+    // to change their password) may run it. An already-onboarded ACTIVE user
+    // must use the normal profile / change-password endpoints instead.
+    if (user.status !== 'INVITED' && !user.mustChangePassword) {
+      return res.status(409).json({ error: 'Onboarding has already been completed for this account' });
     }
 
     const newHash = await bcrypt.hash(newPassword, 10);
@@ -220,18 +254,22 @@ export async function onboardEmployee(req, res, next) {
       if (workHistory && Array.isArray(workHistory) && workHistory.length > 0) {
         await tx.workHistory.deleteMany({ where: { userId } });
         await Promise.all(
-          workHistory.map((history) =>
-            tx.workHistory.create({
+          workHistory.map((history) => {
+            const start = new Date(history.startDate);
+            // A "current" job (isCurrent, or no end date given) is stored with a
+            // null endDate rather than crashing on `new Date(undefined)`.
+            const end = (history.isCurrent || !history.endDate) ? null : new Date(history.endDate);
+            return tx.workHistory.create({
               data: {
                 userId,
                 companyName: history.companyName,
                 designation: history.designation,
-                startDate: new Date(history.startDate),
-                endDate: new Date(history.endDate),
-                reasonForExit: history.reasonForExit,
+                startDate: start,
+                endDate: end,
+                reasonForExit: history.reasonForExit || null,
               },
-            })
-          )
+            });
+          })
         );
       }
 
@@ -405,6 +443,10 @@ export async function listExEmployees(req, res, next) {
 export async function addExEmployee(req, res, next) {
   try {
     const tenantId = req.tenantId;
+    const parsed = createExEmployeeSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    }
     const {
       firstName,
       lastName,
@@ -422,11 +464,7 @@ export async function addExEmployee(req, res, next) {
       conductValue,
       feedback,
       docs,
-    } = req.body || {};
-
-    if (!firstName || !lastName || !email || !phone || !pan || !designation || !department || !serviceStart || !serviceEnd) {
-      return res.status(400).json({ error: 'Required fields are missing' });
-    }
+    } = parsed.data;
 
     const record = await prisma.exEmployeeRecord.create({
       data: {
@@ -442,8 +480,8 @@ export async function addExEmployee(req, res, next) {
         serviceStart: new Date(serviceStart),
         serviceEnd: new Date(serviceEnd),
         exitReason: exitReason || 'Resigned',
-        techRating: parseInt(techRating, 10) || 8,
-        attitudeRating: parseInt(attitudeRating, 10) || 8,
+        techRating: techRating ?? 8,
+        attitudeRating: attitudeRating ?? 8,
         conductValue: conductValue || 'Good',
         feedback: feedback || '',
         submittedBy: req.user.name || 'Direct',
@@ -490,40 +528,54 @@ export async function bulkAddExEmployees(req, res, next) {
       return res.status(400).json({ error: 'Items array is required' });
     }
 
+    const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const panRe = /^[A-Z]{5}[0-9]{4}[A-Z]$/i;
+    const skipped = [];
+    const validRows = [];
+
+    items.forEach((item, index) => {
+      const nameParts = (item.name || '').trim().split(/\s+/);
+      const firstName = nameParts[0] || '';
+      const lastName = nameParts.slice(1).join(' ') || '';
+      const email = (item.email || '').trim().toLowerCase();
+      const pan = (item.pan || '').trim().toUpperCase();
+
+      if (!firstName || !email || !emailRe.test(email) || !panRe.test(pan)) {
+        skipped.push({ row: index + 1, reason: 'Missing or invalid name / email / PAN' });
+        return;
+      }
+
+      const tr = parseInt(item.techRating ?? item.technical_rating, 10);
+      const ar = parseInt(item.attitudeRating ?? item.professional_rating, 10);
+
+      validRows.push({
+        tenantId,
+        firstName,
+        lastName: lastName || firstName,
+        email,
+        pan,
+        phone: item.phone || 'N/A',
+        dob: item.dob ? String(item.dob) : null,
+        designation: item.designation || item.employee_designation || 'Staff',
+        department: item.department || 'General',
+        serviceStart: new Date(item.serviceStart || item.service_start || new Date()),
+        serviceEnd: new Date(item.serviceEnd || item.service_end || new Date()),
+        exitReason: item.exitReason || 'Resigned',
+        techRating: Number.isFinite(tr) && tr >= 1 && tr <= 10 ? tr : 8,
+        attitudeRating: Number.isFinite(ar) && ar >= 1 && ar <= 10 ? ar : 8,
+        conductValue: item.conductValue || item.conduct_value || 'Good',
+        feedback: item.feedback || '',
+        submittedBy: req.user.name || 'Direct',
+        status: 'Published',
+      });
+    });
+
+    if (validRows.length === 0) {
+      return res.status(400).json({ error: 'No valid rows to import', skipped });
+    }
+
     const createdItems = await prisma.$transaction(
-      items.map((item) => {
-        // Parse name into first and last name
-        const nameParts = (item.name || '').trim().split(/\s+/);
-        const firstName = nameParts[0] || 'Unknown';
-        const lastName = nameParts.slice(1).join(' ') || 'Unknown';
-
-        // Extract rating if present or calculate from tech/attitude
-        const tr = parseInt(item.techRating || item.technical_rating, 10) || 8;
-        const ar = parseInt(item.attitudeRating || item.professional_rating, 10) || 8;
-
-        return prisma.exEmployeeRecord.create({
-          data: {
-            tenantId,
-            firstName,
-            lastName,
-            email: (item.email || '').trim().toLowerCase(),
-            phone: item.phone || '0000000000',
-            pan: (item.pan || 'PANPLACEHR').trim().toUpperCase(),
-            dob: item.dob ? String(item.dob) : '1990',
-            designation: item.designation || item.employee_designation || 'Staff',
-            department: item.department || 'General',
-            serviceStart: new Date(item.serviceStart || item.service_start || new Date()),
-            serviceEnd: new Date(item.serviceEnd || item.service_end || new Date()),
-            exitReason: item.exitReason || 'Resigned',
-            techRating: tr,
-            attitudeRating: ar,
-            conductValue: item.conductValue || item.conduct_value || 'Good',
-            feedback: item.feedback || '',
-            submittedBy: req.user.name || 'Direct',
-            status: 'Published',
-          },
-        });
-      })
+      validRows.map((data) => prisma.exEmployeeRecord.create({ data }))
     );
 
     const formatted = createdItems.map(r => ({
@@ -548,7 +600,7 @@ export async function bulkAddExEmployees(req, res, next) {
       feedback: r.feedback,
     }));
 
-    res.status(201).json({ items: formatted });
+    res.status(201).json({ items: formatted, skipped });
   } catch (err) {
     next(err);
   }
@@ -591,6 +643,10 @@ export async function listNonJoiners(req, res, next) {
 export async function addNonJoiner(req, res, next) {
   try {
     const tenantId = req.tenantId;
+    const parsed = createNonJoinerSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    }
     const {
       firstName,
       lastName,
@@ -606,11 +662,7 @@ export async function addNonJoiner(req, res, next) {
       offerAccepted,
       feedback,
       docs,
-    } = req.body || {};
-
-    if (!firstName || !lastName || !email || !phone || !pan || !designation || !department || !offerReleaseDate || !dateOfJoining) {
-      return res.status(400).json({ error: 'Required fields are missing' });
-    }
+    } = parsed.data;
 
     const record = await prisma.nonJoinerRecord.create({
       data: {
@@ -625,7 +677,7 @@ export async function addNonJoiner(req, res, next) {
         department,
         offerReleaseDate: new Date(offerReleaseDate),
         dateOfJoining: new Date(dateOfJoining),
-        salary: String(salary),
+        salary: salary != null ? String(salary) : '0',
         offerAccepted: offerAccepted || 'Yes',
         feedback: feedback || '',
         submittedBy: req.user.name || 'Direct',
@@ -669,33 +721,49 @@ export async function bulkAddNonJoiners(req, res, next) {
       return res.status(400).json({ error: 'Items array is required' });
     }
 
-    const createdItems = await prisma.$transaction(
-      items.map((item) => {
-        const nameParts = (item.name || '').trim().split(/\s+/);
-        const firstName = nameParts[0] || 'Unknown';
-        const lastName = nameParts.slice(1).join(' ') || 'Unknown';
+    const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const panRe = /^[A-Z]{5}[0-9]{4}[A-Z]$/i;
+    const skipped = [];
+    const validRows = [];
 
-        return prisma.nonJoinerRecord.create({
-          data: {
-            tenantId,
-            firstName,
-            lastName,
-            email: (item.email || '').trim().toLowerCase(),
-            phone: item.phone || '0000000000',
-            pan: (item.pan || 'PANPLACEHR').trim().toUpperCase(),
-            dob: item.dob ? String(item.dob) : '1990',
-            designation: item.designation || 'Staff',
-            department: item.department || 'General',
-            offerReleaseDate: new Date(item.offerReleaseDate || item.offer_release_date || new Date()),
-            dateOfJoining: new Date(item.dateOfJoining || item.date_of_joining || new Date()),
-            salary: String(item.salary || '0'),
-            offerAccepted: item.offerAccepted || 'Yes',
-            feedback: item.feedback || '',
-            submittedBy: req.user.name || 'Direct',
-            status: 'Published',
-          },
-        });
-      })
+    items.forEach((item, index) => {
+      const nameParts = (item.name || '').trim().split(/\s+/);
+      const firstName = nameParts[0] || '';
+      const lastName = nameParts.slice(1).join(' ') || '';
+      const email = (item.email || '').trim().toLowerCase();
+      const pan = (item.pan || '').trim().toUpperCase();
+
+      if (!firstName || !email || !emailRe.test(email) || !panRe.test(pan)) {
+        skipped.push({ row: index + 1, reason: 'Missing or invalid name / email / PAN' });
+        return;
+      }
+
+      validRows.push({
+        tenantId,
+        firstName,
+        lastName: lastName || firstName,
+        email,
+        pan,
+        phone: item.phone || 'N/A',
+        dob: item.dob ? String(item.dob) : null,
+        designation: item.designation || 'Staff',
+        department: item.department || 'General',
+        offerReleaseDate: new Date(item.offerReleaseDate || item.offer_release_date || new Date()),
+        dateOfJoining: new Date(item.dateOfJoining || item.date_of_joining || new Date()),
+        salary: String(item.salary || '0'),
+        offerAccepted: item.offerAccepted || 'Yes',
+        feedback: item.feedback || '',
+        submittedBy: req.user.name || 'Direct',
+        status: 'Published',
+      });
+    });
+
+    if (validRows.length === 0) {
+      return res.status(400).json({ error: 'No valid rows to import', skipped });
+    }
+
+    const createdItems = await prisma.$transaction(
+      validRows.map((data) => prisma.nonJoinerRecord.create({ data }))
     );
 
     const formatted = createdItems.map(r => ({
@@ -717,7 +785,7 @@ export async function bulkAddNonJoiners(req, res, next) {
       feedback: r.feedback,
     }));
 
-    res.status(201).json({ items: formatted });
+    res.status(201).json({ items: formatted, skipped });
   } catch (err) {
     next(err);
   }
@@ -730,11 +798,13 @@ export async function updateEmployee(req, res, next) {
     const tenantId = req.tenantId;
     const { id } = req.params;
     
-    const parsed = updateActiveEmployeeSchema.safeParse(req.body);
+    // updateEmployeeSchema is a strict allow-list — unknown keys (passwordHash,
+    // status, role, isDeleted, tenantId, mustChangePassword, …) are dropped.
+    const parsed = updateEmployeeSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
-    const updates = parsed.data;
+    const updates = { ...parsed.data };
 
     const existing = await prisma.tenantUser.findFirst({
       where: { id, tenantId },
@@ -744,31 +814,39 @@ export async function updateEmployee(req, res, next) {
       return res.status(404).json({ error: 'Employee not found' });
     }
 
-    // Filter out fields that shouldn't be updated via this route
-    delete updates.id;
-    delete updates.tenantId;
-    delete updates.passwordHash;
-    delete updates.createdAt;
-    delete updates.updatedAt;
-    delete updates.role; // Role updates should have a separate mechanism if needed
-    delete updates.status;
-    delete updates.type;
-    delete updates.submittedBy;
-    delete updates.createdDate;
-    delete updates.email; // Email is read-only for active employees in Edit Modal
+    // Validate a re-assigned reporting manager stays within the tenant.
+    if (updates.managerId !== undefined) {
+      if (updates.managerId === null || updates.managerId === '') {
+        updates.managerId = null;
+      } else if (updates.managerId === id) {
+        return res.status(400).json({ error: 'An employee cannot be their own manager' });
+      } else {
+        const mgr = await prisma.tenantUser.findFirst({
+          where: { id: updates.managerId, tenantId, isDeleted: false },
+          select: { id: true },
+        });
+        if (!mgr) {
+          return res.status(400).json({ error: 'Selected reporting manager was not found in this organization' });
+        }
+      }
+    }
 
     if (updates.joinDate) updates.joinDate = new Date(updates.joinDate);
+    else if (updates.joinDate === null || updates.joinDate === '') delete updates.joinDate;
+    if (updates.confirmationDate) updates.confirmationDate = new Date(updates.confirmationDate);
+    else if (updates.confirmationDate === null || updates.confirmationDate === '') delete updates.confirmationDate;
     if (updates.dob) {
       // If it's a full date (YYYY-MM-DD), use directly; if year-only (YYYY), append -01-01
-      updates.dob = updates.dob.length === 4 ? new Date(`${updates.dob}-01-01`) : new Date(updates.dob);
+      updates.dob = String(updates.dob).length === 4 ? new Date(`${updates.dob}-01-01`) : new Date(updates.dob);
       if (isNaN(updates.dob.getTime())) delete updates.dob; // Drop if still invalid
     } else {
       delete updates.dob; // Don't send null/empty to Prisma
     }
 
     // Clean up empty optional strings so Prisma gets null instead of ''
-    if (updates.band === '') updates.band = null;
-    if (updates.aadhaar === '') updates.aadhaar = null;
+    for (const k of ['band', 'aadhaar', 'officeLocation', 'uan', 'esic', 'gender', 'bloodGroup', 'phone', 'personalEmail', 'emergencyContact']) {
+      if (updates[k] === '') updates[k] = null;
+    }
 
     const updated = await prisma.tenantUser.update({
       where: { id },
@@ -934,10 +1012,22 @@ export async function deleteEmployee(req, res, next) {
       return res.status(404).json({ error: 'Employee not found' });
     }
 
-    await prisma.tenantUser.update({
-      where: { id },
-      data: { isDeleted: true },
-    });
+    if (id === req.user.id) {
+      return res.status(400).json({ error: 'You cannot delete your own account' });
+    }
+
+    await prisma.$transaction([
+      // Soft-delete + mark exited so any live JWT session is rejected on next request.
+      prisma.tenantUser.update({
+        where: { id },
+        data: { isDeleted: true, status: 'EXITED' },
+      }),
+      // Detach direct reports so the reporting chain doesn't dangle on a deleted node.
+      prisma.tenantUser.updateMany({
+        where: { managerId: id, tenantId },
+        data: { managerId: userRecord.managerId ?? null },
+      }),
+    ]);
 
     res.json({ success: true, message: 'Employee soft-deleted successfully' });
   } catch (err) {

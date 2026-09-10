@@ -3,11 +3,14 @@ import { logTaskAudit } from './taskActivity.controller.js';
 import { emitToTenant } from '../lib/socket.js';
 import { createTaskSchema, updateTaskSchema } from '../validations/task.schema.js';
 import { goalService } from '../services/goal.service.js';
+import { loadTaskForUser, getCompanionTaskId } from '../services/taskAccess.service.js';
+import { ELEVATED_ROLES, hasRole } from '../lib/roles.js';
+import { TASK_STATUSES } from '../lib/workflowStatus.js';
 
 // ─── Helper: resolve & authorise target employee ───────────────────────────
 // Returns the TenantUser record that will own the task.
 // Verifies the employee belongs to the SAME tenant as the requesting user.
-async function resolveTargetEmployee(requestingUser, tenantId, employeeId, isDependency = false, goalId = null) {
+async function resolveTargetEmployee(requestingUser, tenantId, employeeId, parentTask = null) {
   // If no employeeId supplied → default to the requesting user themselves
   if (!employeeId) {
     return { id: requestingUser.id };
@@ -20,7 +23,7 @@ async function resolveTargetEmployee(requestingUser, tenantId, employeeId, isDep
 
   // Verify the target employee exists AND belongs to the authenticated tenant
   const targetUser = await prisma.tenantUser.findFirst({
-    where: { id: employeeId, tenantId },
+    where: { id: employeeId, tenantId, isDeleted: false },
   });
 
   if (!targetUser) {
@@ -28,84 +31,36 @@ async function resolveTargetEmployee(requestingUser, tenantId, employeeId, isDep
   }
 
   // Elevated roles can assign across the org freely
-  const allowedRoles = ['SUPER_ADMIN', 'ADMIN', 'HR', 'LEADERSHIP', 'OWNER', 'CMD', 'DIRECTOR'];
-  if (allowedRoles.includes(requestingUser.role?.toUpperCase())) {
+  if (hasRole(requestingUser.role, ELEVATED_ROLES)) {
     return targetUser;
   }
 
-  // If this is a peer dependency task, allow creating dependency request on colleague within the same organization
-  if (isDependency) {
+  // Peer dependency: you may spin off a companion task on a colleague ONLY when
+  // it hangs off a real parent task that YOU own (or manage). The parent task is
+  // resolved & authorised by the caller and passed in here.
+  if (parentTask) {
+    const ownsParent = parentTask.employeeId === requestingUser.id
+      || await goalService.isSubordinate(requestingUser.id, parentTask.employeeId, tenantId);
+    if (ownsParent) {
+      return targetUser;
+    }
+    throw { status: 403, message: 'Access forbidden: you can only raise a dependency from a task you own' };
+  }
+
+  // Assigning a task to another employee (goal-linked or not) requires being a
+  // manager somewhere up that employee's reporting chain. Adding a task for
+  // *yourself* on a shared goal is already handled by the self fast-path above.
+  if (await goalService.isSubordinate(requestingUser.id, employeeId, tenantId)) {
     return targetUser;
-  }
-
-  // If adding a task to a goal the requesting user owns or manages
-  if (goalId) {
-    const goal = await prisma.goal.findFirst({
-      where: { id: goalId, tenantId },
-    });
-    if (goal && (goal.employeeId === requestingUser.id || goal.employeeId === employeeId)) {
-      return targetUser;
-    }
-  }
-
-  // Managers can assign to their subordinates
-  if (requestingUser.role === 'MANAGER') {
-    const subordinate = await prisma.tenantUser.findFirst({
-      where: { id: employeeId, managerId: requestingUser.id, tenantId },
-    });
-    if (subordinate) {
-      return targetUser;
-    }
   }
 
   throw { status: 403, message: 'Access forbidden: you are not authorised to assign tasks to this employee' };
 }
 
 // ─── Helper: assert task exists & requester owns/manages it ────────────────
-async function assertTaskOwner(id, requestingUser, tenantId) {
-  const task = await prisma.task.findFirst({ where: { id, tenantId } });
-  if (!task) throw { status: 404, message: 'Task not found' };
-
-  const allowedRoles = ['SUPER_ADMIN', 'ADMIN', 'HR', 'LEADERSHIP', 'OWNER', 'CMD', 'DIRECTOR'];
-  if (allowedRoles.includes(requestingUser.role?.toUpperCase())) {
-    return task;
-  }
-
-  // Assigned employee owns the execution of the task
-  if (task.employeeId === requestingUser.id) {
-    return task;
-  }
-
-  // Managers can edit/delete their direct report's tasks
-  if (requestingUser.role === 'MANAGER') {
-    const subordinate = await prisma.tenantUser.findFirst({
-      where: { id: task.employeeId, managerId: requestingUser.id, tenantId },
-    });
-    if (subordinate) {
-      return task;
-    }
-
-    // If this is a companion dependency task, check if the manager manages the parent task owner
-    if (task.isDependencyOf) {
-      const parentTask = await prisma.task.findFirst({
-        where: { id: task.isDependencyOf, tenantId },
-      });
-      if (parentTask) {
-        if (parentTask.employeeId === requestingUser.id) {
-          return task;
-        }
-        const parentSubordinate = await prisma.tenantUser.findFirst({
-          where: { id: parentTask.employeeId, managerId: requestingUser.id, tenantId },
-        });
-        if (parentSubordinate) {
-          return task;
-        }
-      }
-    }
-  }
-
-  throw { status: 403, message: "Access forbidden: cannot edit another employee's task" };
-}
+// Thin wrapper around the shared taskAccess service so task.controller and
+// taskActivity.controller enforce exactly the same rule.
+const assertTaskOwner = (id, requestingUser, tenantId) => loadTaskForUser(id, requestingUser, tenantId);
 
 // ─── Helper: validate goal belongs to same tenant ─────────────────────────
 async function resolveGoal(goalId, tenantId) {
@@ -159,19 +114,42 @@ export async function createTask(req, res, next) {
       }
     }
 
-    // 4. Resolve and authorise the target employee (cross-tenant guard inside)
+    // 4a. If this task is a companion of a parent ("dependency") task, that parent
+    //     must be a real task in this tenant that the caller is allowed to act on.
+    let parentTask = null;
+    if (isDependencyOf) {
+      try {
+        parentTask = await loadTaskForUser(isDependencyOf, req.user, tenantId);
+      } catch (e) {
+        return res.status(e.status || 500).json({ success: false, message: e.message || 'Invalid parent task' });
+      }
+    }
+
+    // 4b. Resolve and authorise the target employee (cross-tenant guard inside)
     let target;
     try {
-      target = await resolveTargetEmployee(req.user, tenantId, employeeId, !!isDependencyOf, goalId);
+      target = await resolveTargetEmployee(req.user, tenantId, employeeId, parentTask);
     } catch (e) {
       return res.status(e.status || 500).json({ success: false, message: e.message });
     }
 
-    // 5. Validate goal tenant scope (if goalId provided)
+    // 5. Validate goal tenant scope (if goalId provided). A plain employee adding
+    //    a task *for themselves* may only attach it to a goal they participate in
+    //    — otherwise they could skew an unrelated goal's progress rollup.
     let resolvedGoalId = null;
     if (!isStandalone && goalId) {
       try {
         const goal = await resolveGoal(goalId, tenantId);
+        if (goal && target.id === req.user.id && !hasRole(req.user.role, ELEVATED_ROLES)) {
+          const onGoal = goal.employeeId === req.user.id
+            || goal.createdById === req.user.id
+            || (await prisma.goalAssignment.findFirst({
+                where: { goalId: goal.id, employeeId: req.user.id }, select: { id: true },
+              })) !== null;
+          if (!onGoal) {
+            return res.status(403).json({ success: false, message: 'You are not assigned to this goal' });
+          }
+        }
         resolvedGoalId = goal?.id || null;
       } catch (e) {
         return res.status(e.status || 500).json({ success: false, message: e.message });
@@ -240,17 +218,36 @@ export async function listTasks(req, res, next) {
 
     if (targetEmployeeId === 'all') {
       let whereClause = { tenantId };
-      const allowedRoles = ['SUPER_ADMIN', 'ADMIN', 'HR', 'LEADERSHIP', 'OWNER'];
-      if (!allowedRoles.includes(req.user.role)) {
-        if (req.user.role === 'MANAGER') {
-          whereClause.OR = [
-            { employeeId: req.user.id },
-            { employee: { managerId: req.user.id } },
-            { isDependencyOf: { not: null } },
-          ];
-        } else {
-          whereClause.employeeId = req.user.id;
+      if (!hasRole(req.user.role, ELEVATED_ROLES)) {
+        // Non-elevated: own tasks, tasks of anyone in the reporting downline, plus
+        // companion dependency tasks that hang off one of those tasks.
+        const downline = await prisma.tenantUser.findMany({
+          where: { tenantId, isDeleted: false },
+          select: { id: true, managerId: true },
+        });
+        const childrenOf = {};
+        downline.forEach((u) => {
+          if (u.managerId) (childrenOf[u.managerId] ||= []).push(u.id);
+        });
+        const allowedIds = new Set([req.user.id]);
+        const queue = [req.user.id];
+        while (queue.length) {
+          const cur = queue.shift();
+          for (const child of childrenOf[cur] || []) {
+            if (!allowedIds.has(child)) { allowedIds.add(child); queue.push(child); }
+          }
         }
+        const allowedIdList = [...allowedIds];
+        // Companion ("dependency") tasks are visible when their parent task is
+        // owned by someone in the downline — NOT tenant-wide as before.
+        const visibleParents = await prisma.task.findMany({
+          where: { tenantId, employeeId: { in: allowedIdList } },
+          select: { id: true },
+        });
+        whereClause.OR = [
+          { employeeId: { in: allowedIdList } },
+          { isDependencyOf: { in: visibleParents.map((t) => t.id) } },
+        ];
       }
       const items = await prisma.task.findMany({
         where: whereClause,
@@ -259,14 +256,11 @@ export async function listTasks(req, res, next) {
       return res.json({ items });
     }
 
-    // Auth: only self, direct manager, HR, Admin, or super-admin may fetch
+    // Auth: only self, a manager anywhere up the chain, HR, Admin, or super-admin may fetch
     if (targetEmployeeId !== req.user.id) {
-      const allowedRoles = ['SUPER_ADMIN', 'ADMIN', 'HR'];
-      if (!allowedRoles.includes(req.user.role)) {
-        const subordinate = await prisma.tenantUser.findFirst({
-          where: { id: targetEmployeeId, managerId: req.user.id, tenantId },
-        });
-        if (!subordinate) {
+      if (!hasRole(req.user.role, ELEVATED_ROLES)) {
+        const isManager = await goalService.isSubordinate(req.user.id, targetEmployeeId, tenantId);
+        if (!isManager) {
           return res.status(403).json({ error: 'Access forbidden' });
         }
       }
@@ -304,9 +298,8 @@ export async function updateTaskStatus(req, res, next) {
       return res.status(400).json({ error: 'Task status is required' });
     }
 
-    const validStatuses = ['todo', 'in_progress', 'pending_on_others', 'in_review', 'done', 'pending_approval', 'rejected'];
-    if (!validStatuses.includes(status)) {
-      return res.status(400).json({ error: 'Invalid task status' });
+    if (!TASK_STATUSES.includes(status)) {
+      return res.status(400).json({ error: `Invalid task status. Allowed: ${TASK_STATUSES.join(', ')}` });
     }
 
     const existing = await assertTaskOwner(id, req.user, tenantId).catch(e => {
@@ -422,15 +415,11 @@ export async function updateTask(req, res, next) {
     });
     if (!existing) return;
 
-    const allowedRoles = ['SUPER_ADMIN', 'ADMIN', 'HR', 'LEADERSHIP', 'OWNER', 'CMD', 'DIRECTOR'];
-    const isElevated = allowedRoles.includes(req.user.role?.toUpperCase());
-    let isDirectManager = false;
-    if (req.user.role?.toUpperCase() === 'MANAGER') {
-      const subordinate = await prisma.tenantUser.findFirst({
-        where: { id: existing.employeeId, managerId: req.user.id, tenantId },
-      });
-      isDirectManager = !!subordinate;
-    }
+    const isElevated = hasRole(req.user.role, ELEVATED_ROLES);
+    // "Manager" here means anywhere up the reporting chain of the task owner.
+    const isDirectManager = !isElevated && existing.employeeId && existing.employeeId !== req.user.id
+      ? await goalService.isSubordinate(req.user.id, existing.employeeId, tenantId)
+      : false;
 
     // ── Field-level authorization checks ─────────────────────────────────
     // 1. Reassignment guard: employees cannot reassign tasks
@@ -439,7 +428,11 @@ export async function updateTask(req, res, next) {
         return res.status(403).json({ success: false, error: 'Forbidden: Employees cannot reassign tasks' });
       }
       try {
-        await resolveTargetEmployee(req.user, tenantId, employeeId, !existing.isDependencyOf, existing.goalId);
+        let existingParent = null;
+        if (existing.isDependencyOf) {
+          existingParent = await prisma.task.findFirst({ where: { id: existing.isDependencyOf, tenantId } });
+        }
+        await resolveTargetEmployee(req.user, tenantId, employeeId, existingParent);
       } catch (e) {
         return res.status(e.status || 500).json({ success: false, message: e.message });
       }
@@ -530,10 +523,10 @@ export async function updateTask(req, res, next) {
 
     // If dependency was updated and has a companion task - keep it synchronized
     if (dependency !== undefined && dependency !== null) {
-      const companionTaskId = dependency.createdTaskId;
+      const companionTaskId = getCompanionTaskId(dependency);
       if (companionTaskId) {
-        const companionTask = await prisma.task.findUnique({
-          where: { id: companionTaskId }
+        const companionTask = await prisma.task.findFirst({
+          where: { id: companionTaskId, tenantId }
         });
         if (companionTask) {
           const updatedCompanion = await prisma.task.update({
@@ -634,15 +627,16 @@ export async function deleteTask(req, res, next) {
     // If this task IS a dependency companion — clear the parent's dependency field
     if (existing.isDependencyOf) {
       await prisma.task.updateMany({
-        where: { id: existing.isDependencyOf },
+        where: { id: existing.isDependencyOf, tenantId },
         data: { dependency: null, isDependencyOf: null },
       }).catch(() => {}); // best-effort; parent may already be deleted
     }
 
     // If this task HAS a dependency companion — also delete the companion
-    if (existing.dependency?.depTaskId) {
+    const companionId = getCompanionTaskId(existing.dependency);
+    if (companionId) {
       await prisma.task.deleteMany({
-        where: { id: existing.dependency.depTaskId },
+        where: { id: companionId, tenantId },
       }).catch(() => {});
     }
 
