@@ -586,9 +586,12 @@ export async function ensureDynamicLeaveSystem() {
           let mgrComment = null;
           let hrComment = null;
 
+          let cleanText = null;
           if (lr.reason && lr.reason.startsWith('{') && lr.reason.endsWith('}')) {
             try {
               const meta = JSON.parse(lr.reason);
+              if (meta.text) cleanText = meta.text;
+              else if (meta.reason) cleanText = meta.reason;
               if (meta.totalDays) parsedDays = Number(meta.totalDays);
               if (meta.managerStatus) managerStatus = meta.managerStatus;
               if (meta.hrStatus) hrStatus = meta.hrStatus;
@@ -608,7 +611,8 @@ export async function ensureDynamicLeaveSystem() {
                 "managerStatus" = '${managerStatus}',
                 "hrStatus" = '${hrStatus}',
                 "managerComment" = ${mgrComment ? `'${mgrComment.replace(/'/g, "''")}'` : 'NULL'},
-                "hrComment" = ${hrComment ? `'${hrComment.replace(/'/g, "''")}'` : 'NULL'}
+                "hrComment" = ${hrComment ? `'${hrComment.replace(/'/g, "''")}'` : 'NULL'},
+                "reason" = ${cleanText ? `'${cleanText.replace(/'/g, "''")}'` : '"reason"'}
             WHERE id = '${lr.id}';
           `);
         }
