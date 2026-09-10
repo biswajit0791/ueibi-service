@@ -274,6 +274,402 @@ export async function ensureGoalAssignmentsTable() {
   } catch (leaveInitErr) {
     console.warn('[dbInit] Notice resetting auto-approved leaves:', leaveInitErr?.message || leaveInitErr);
   }
+
+  // 7. Dynamic Leave & WFH System Initialization
+  await ensureDynamicLeaveSystem();
+}
+
+/**
+ * Ensures tables, columns, indexes, default leave types, WFH policies, and balances exist.
+ */
+export async function ensureDynamicLeaveSystem() {
+  try {
+    console.log('[dbInit] Verifying dynamic Leave & WFH tables and columns...');
+
+    // A. Columns on leave_requests
+    await prisma.$executeRawUnsafe(`
+      DO $$ BEGIN
+        ALTER TABLE "leave_requests" ADD COLUMN IF NOT EXISTS "tenantId" TEXT;
+        ALTER TABLE "leave_requests" ADD COLUMN IF NOT EXISTS "leaveTypeId" TEXT;
+        ALTER TABLE "leave_requests" ADD COLUMN IF NOT EXISTS "requestType" TEXT NOT NULL DEFAULT 'LEAVE';
+        ALTER TABLE "leave_requests" ADD COLUMN IF NOT EXISTS "totalDays" DOUBLE PRECISION NOT NULL DEFAULT 1;
+        ALTER TABLE "leave_requests" ADD COLUMN IF NOT EXISTS "dayType" TEXT NOT NULL DEFAULT 'FULL';
+        ALTER TABLE "leave_requests" ADD COLUMN IF NOT EXISTS "attachmentUrl" TEXT;
+        ALTER TABLE "leave_requests" ADD COLUMN IF NOT EXISTS "attachmentOriginalName" TEXT;
+        ALTER TABLE "leave_requests" ADD COLUMN IF NOT EXISTS "managerStatus" TEXT NOT NULL DEFAULT 'Pending';
+        ALTER TABLE "leave_requests" ADD COLUMN IF NOT EXISTS "managerId" TEXT;
+        ALTER TABLE "leave_requests" ADD COLUMN IF NOT EXISTS "managerComment" TEXT;
+        ALTER TABLE "leave_requests" ADD COLUMN IF NOT EXISTS "managerActedAt" TIMESTAMP(3);
+        ALTER TABLE "leave_requests" ADD COLUMN IF NOT EXISTS "hrStatus" TEXT NOT NULL DEFAULT 'Pending';
+        ALTER TABLE "leave_requests" ADD COLUMN IF NOT EXISTS "hrId" TEXT;
+        ALTER TABLE "leave_requests" ADD COLUMN IF NOT EXISTS "hrComment" TEXT;
+        ALTER TABLE "leave_requests" ADD COLUMN IF NOT EXISTS "hrActedAt" TIMESTAMP(3);
+        ALTER TABLE "leave_requests" ADD COLUMN IF NOT EXISTS "rejectedById" TEXT;
+        ALTER TABLE "leave_requests" ADD COLUMN IF NOT EXISTS "rejectedAt" TIMESTAMP(3);
+        ALTER TABLE "leave_requests" ADD COLUMN IF NOT EXISTS "rejectionReason" TEXT;
+        ALTER TABLE "leave_requests" ADD COLUMN IF NOT EXISTS "cancelledById" TEXT;
+        ALTER TABLE "leave_requests" ADD COLUMN IF NOT EXISTS "cancelledAt" TIMESTAMP(3);
+      END $$;
+    `);
+
+    // B. Create Tables
+    const tables = [
+      `CREATE TABLE IF NOT EXISTS "leave_types" (
+        "id" TEXT NOT NULL,
+        "tenantId" TEXT NOT NULL,
+        "name" TEXT NOT NULL,
+        "code" TEXT NOT NULL,
+        "description" TEXT,
+        "color" TEXT,
+        "defaultDays" DOUBLE PRECISION NOT NULL DEFAULT 0,
+        "allocationType" TEXT NOT NULL DEFAULT 'ANNUAL',
+        "year" INTEGER,
+        "isPaid" BOOLEAN NOT NULL DEFAULT true,
+        "requiresApproval" BOOLEAN NOT NULL DEFAULT true,
+        "allowHalfDay" BOOLEAN NOT NULL DEFAULT true,
+        "allowNegativeBalance" BOOLEAN NOT NULL DEFAULT false,
+        "maxConsecutiveDays" INTEGER,
+        "minNoticeDays" INTEGER NOT NULL DEFAULT 0,
+        "carryForwardAllowed" BOOLEAN NOT NULL DEFAULT false,
+        "maxCarryForwardDays" INTEGER NOT NULL DEFAULT 0,
+        "encashmentAllowed" BOOLEAN NOT NULL DEFAULT false,
+        "requiresDocument" BOOLEAN NOT NULL DEFAULT false,
+        "documentRequiredAfterDays" INTEGER NOT NULL DEFAULT 2,
+        "isActive" BOOLEAN NOT NULL DEFAULT true,
+        "createdById" TEXT,
+        "updatedById" TEXT,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT "leave_types_pkey" PRIMARY KEY ("id")
+      )`,
+      `CREATE TABLE IF NOT EXISTS "leave_balances" (
+        "id" TEXT NOT NULL,
+        "tenantId" TEXT NOT NULL,
+        "employeeId" TEXT NOT NULL,
+        "leaveTypeId" TEXT NOT NULL,
+        "year" INTEGER NOT NULL,
+        "allocated" DOUBLE PRECISION NOT NULL DEFAULT 0,
+        "carriedForward" DOUBLE PRECISION NOT NULL DEFAULT 0,
+        "adjusted" DOUBLE PRECISION NOT NULL DEFAULT 0,
+        "used" DOUBLE PRECISION NOT NULL DEFAULT 0,
+        "pending" DOUBLE PRECISION NOT NULL DEFAULT 0,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT "leave_balances_pkey" PRIMARY KEY ("id")
+      )`,
+      `CREATE TABLE IF NOT EXISTS "wfh_policies" (
+        "id" TEXT NOT NULL,
+        "tenantId" TEXT NOT NULL,
+        "isEnabled" BOOLEAN NOT NULL DEFAULT true,
+        "annualDays" DOUBLE PRECISION NOT NULL DEFAULT 15,
+        "requiresApproval" BOOLEAN NOT NULL DEFAULT true,
+        "maxConsecutiveDays" INTEGER DEFAULT 5,
+        "minNoticeDays" INTEGER NOT NULL DEFAULT 0,
+        "monthlyLimit" INTEGER,
+        "isActive" BOOLEAN NOT NULL DEFAULT true,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT "wfh_policies_pkey" PRIMARY KEY ("id")
+      )`,
+      `CREATE TABLE IF NOT EXISTS "wfh_balances" (
+        "id" TEXT NOT NULL,
+        "tenantId" TEXT NOT NULL,
+        "employeeId" TEXT NOT NULL,
+        "year" INTEGER NOT NULL,
+        "allocated" DOUBLE PRECISION NOT NULL DEFAULT 15,
+        "adjusted" DOUBLE PRECISION NOT NULL DEFAULT 0,
+        "used" DOUBLE PRECISION NOT NULL DEFAULT 0,
+        "pending" DOUBLE PRECISION NOT NULL DEFAULT 0,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT "wfh_balances_pkey" PRIMARY KEY ("id")
+      )`,
+      `CREATE TABLE IF NOT EXISTS "leave_audit_logs" (
+        "id" TEXT NOT NULL,
+        "tenantId" TEXT NOT NULL,
+        "leaveTypeId" TEXT,
+        "leaveRequestId" TEXT,
+        "actorUserId" TEXT NOT NULL,
+        "action" TEXT NOT NULL,
+        "details" TEXT,
+        "ipAddress" TEXT,
+        "userAgent" TEXT,
+        "metadata" JSONB,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT "leave_audit_logs_pkey" PRIMARY KEY ("id")
+      )`,
+      `CREATE TABLE IF NOT EXISTS "leave_balance_adjustments" (
+        "id" TEXT NOT NULL,
+        "tenantId" TEXT NOT NULL,
+        "employeeId" TEXT NOT NULL,
+        "leaveTypeId" TEXT,
+        "isWfh" BOOLEAN NOT NULL DEFAULT false,
+        "year" INTEGER NOT NULL,
+        "previousBalance" DOUBLE PRECISION NOT NULL,
+        "newBalance" DOUBLE PRECISION NOT NULL,
+        "adjustmentAmount" DOUBLE PRECISION NOT NULL,
+        "reason" TEXT NOT NULL,
+        "adjustedById" TEXT NOT NULL,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT "leave_balance_adjustments_pkey" PRIMARY KEY ("id")
+      )`
+    ];
+
+    for (const tableSql of tables) {
+      await prisma.$executeRawUnsafe(tableSql);
+    }
+
+    // C. Indexes & Constraints
+    const indexes = [
+      `CREATE UNIQUE INDEX IF NOT EXISTS "leave_types_tenantId_code_key" ON "leave_types"("tenantId", "code")`,
+      `CREATE INDEX IF NOT EXISTS "leave_types_tenantId_isActive_idx" ON "leave_types"("tenantId", "isActive")`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS "leave_balances_tenantId_employeeId_leaveTypeId_year_key" ON "leave_balances"("tenantId", "employeeId", "leaveTypeId", "year")`,
+      `CREATE INDEX IF NOT EXISTS "leave_balances_tenantId_employeeId_year_idx" ON "leave_balances"("tenantId", "employeeId", "year")`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS "wfh_policies_tenantId_key" ON "wfh_policies"("tenantId")`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS "wfh_balances_tenantId_employeeId_year_key" ON "wfh_balances"("tenantId", "employeeId", "year")`,
+      `CREATE INDEX IF NOT EXISTS "wfh_balances_tenantId_employeeId_year_idx" ON "wfh_balances"("tenantId", "employeeId", "year")`,
+      `CREATE INDEX IF NOT EXISTS "leave_requests_tenantId_idx" ON "leave_requests"("tenantId")`,
+      `CREATE INDEX IF NOT EXISTS "leave_requests_employeeId_status_idx" ON "leave_requests"("employeeId", "status")`,
+      `CREATE INDEX IF NOT EXISTS "leave_requests_leaveTypeId_idx" ON "leave_requests"("leaveTypeId")`,
+      `CREATE INDEX IF NOT EXISTS "leave_requests_startDate_endDate_idx" ON "leave_requests"("startDate", "endDate")`,
+      `CREATE INDEX IF NOT EXISTS "leave_audit_logs_tenantId_idx" ON "leave_audit_logs"("tenantId")`,
+      `CREATE INDEX IF NOT EXISTS "leave_audit_logs_action_idx" ON "leave_audit_logs"("action")`,
+      `CREATE INDEX IF NOT EXISTS "leave_balance_adjustments_tenantId_idx" ON "leave_balance_adjustments"("tenantId")`,
+      `CREATE INDEX IF NOT EXISTS "leave_balance_adjustments_employeeId_idx" ON "leave_balance_adjustments"("employeeId")`
+    ];
+
+    for (const idxSql of indexes) {
+      await prisma.$executeRawUnsafe(idxSql);
+    }
+
+    // D. Foreign Keys
+    await prisma.$executeRawUnsafe(`
+      DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'leave_requests_tenantId_fkey') THEN
+          ALTER TABLE "leave_requests" ADD CONSTRAINT "leave_requests_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "tenants"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'leave_requests_leaveTypeId_fkey') THEN
+          ALTER TABLE "leave_requests" ADD CONSTRAINT "leave_requests_leaveTypeId_fkey" FOREIGN KEY ("leaveTypeId") REFERENCES "leave_types"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'leave_types_tenantId_fkey') THEN
+          ALTER TABLE "leave_types" ADD CONSTRAINT "leave_types_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "tenants"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'leave_balances_tenantId_fkey') THEN
+          ALTER TABLE "leave_balances" ADD CONSTRAINT "leave_balances_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "tenants"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'leave_balances_leaveTypeId_fkey') THEN
+          ALTER TABLE "leave_balances" ADD CONSTRAINT "leave_balances_leaveTypeId_fkey" FOREIGN KEY ("leaveTypeId") REFERENCES "leave_types"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'wfh_policies_tenantId_fkey') THEN
+          ALTER TABLE "wfh_policies" ADD CONSTRAINT "wfh_policies_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "tenants"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'wfh_balances_tenantId_fkey') THEN
+          ALTER TABLE "wfh_balances" ADD CONSTRAINT "wfh_balances_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "tenants"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+        END IF;
+      END $$;
+    `);
+
+    // E. Backfill tenantId in leave_requests
+    await prisma.$executeRawUnsafe(`
+      UPDATE "leave_requests" lr
+      SET "tenantId" = tu."tenantId"
+      FROM "tenant_users" tu
+      WHERE lr."employeeId" = tu.id AND lr."tenantId" IS NULL;
+    `);
+
+    // F. Seed default Leave Types & WFH Policies for each tenant
+    const tenants = await prisma.tenant.findMany({ select: { id: true } });
+    const currentYear = new Date().getFullYear();
+
+    for (const t of tenants) {
+      // 1. WFH Policy
+      await prisma.$executeRawUnsafe(`
+        INSERT INTO "wfh_policies" ("id", "tenantId", "isEnabled", "annualDays", "requiresApproval", "maxConsecutiveDays", "minNoticeDays", "isActive", "createdAt", "updatedAt")
+        VALUES ('wfh_' || substr(md5(random()::text || '${t.id}'), 1, 20), '${t.id}', true, 15, true, 5, 0, true, NOW(), NOW())
+        ON CONFLICT ("tenantId") DO NOTHING;
+      `);
+
+      // 2. Default Leave Types: Annual, Sick, Casual
+      const defaultTypes = [
+        {
+          code: 'ANNUAL',
+          name: 'Annual Leave',
+          desc: 'Paid time off for rest, recreation, and personal pursuits.',
+          days: 18,
+          halfDay: true,
+          carryForward: true,
+          maxCarry: 5,
+        },
+        {
+          code: 'SICK',
+          name: 'Sick Leave',
+          desc: 'Time off for medical recovery, illnesses, and healthcare visits.',
+          days: 10,
+          halfDay: true,
+          docReq: true,
+          docAfter: 2,
+        },
+        {
+          code: 'CASUAL',
+          name: 'Casual Leave',
+          desc: 'Short leaves for urgent personal affairs and unforeseen contingencies.',
+          days: 8,
+          halfDay: true,
+          maxConsecutive: 3,
+        },
+      ];
+
+      for (const lt of defaultTypes) {
+        await prisma.$executeRawUnsafe(`
+          INSERT INTO "leave_types" (
+            "id", "tenantId", "name", "code", "description", "defaultDays", "allocationType", "year",
+            "isPaid", "requiresApproval", "allowHalfDay", "allowNegativeBalance", "maxConsecutiveDays",
+            "minNoticeDays", "carryForwardAllowed", "maxCarryForwardDays", "encashmentAllowed",
+            "requiresDocument", "documentRequiredAfterDays", "isActive", "createdAt", "updatedAt"
+          ) VALUES (
+            'lt_' || substr(md5(random()::text || '${t.id}' || '${lt.code}'), 1, 20),
+            '${t.id}',
+            '${lt.name}',
+            '${lt.code}',
+            '${lt.desc}',
+            ${lt.days},
+            'ANNUAL',
+            ${currentYear},
+            true,
+            true,
+            ${lt.halfDay ? 'true' : 'false'},
+            false,
+            ${lt.maxConsecutive || 'NULL'},
+            0,
+            ${lt.carryForward ? 'true' : 'false'},
+            ${lt.maxCarry || 0},
+            false,
+            ${lt.docReq ? 'true' : 'false'},
+            ${lt.docAfter || 2},
+            true,
+            NOW(),
+            NOW()
+          ) ON CONFLICT ("tenantId", "code") DO NOTHING;
+        `);
+      }
+
+      // 3. Link legacy leave_requests to leaveTypeId and parse metadata
+      const rawLeaves = await prisma.$queryRawUnsafe(`
+        SELECT lr.id, lr."employeeId", lr.type, lr.reason, lr."startDate", lr."endDate", lr.status
+        FROM "leave_requests" lr
+        WHERE lr."tenantId" = '${t.id}' AND lr."leaveTypeId" IS NULL
+      `);
+
+      if (Array.isArray(rawLeaves) && rawLeaves.length > 0) {
+        const tenantTypes = await prisma.$queryRawUnsafe(`
+          SELECT id, code, name FROM "leave_types" WHERE "tenantId" = '${t.id}'
+        `);
+
+        for (const lr of rawLeaves) {
+          let matchedTypeId = null;
+          let reqType = 'LEAVE';
+          const typeLower = (lr.type || '').toLowerCase();
+
+          if (typeLower.includes('wfh') || typeLower.includes('work from home')) {
+            reqType = 'WFH';
+          } else if (typeLower.includes('sick')) {
+            matchedTypeId = tenantTypes.find(x => x.code === 'SICK')?.id;
+          } else if (typeLower.includes('casual')) {
+            matchedTypeId = tenantTypes.find(x => x.code === 'CASUAL')?.id;
+          } else {
+            matchedTypeId = tenantTypes.find(x => x.code === 'ANNUAL')?.id;
+          }
+
+          let parsedDays = 1;
+          let managerStatus = lr.status === 'APPROVED' ? 'Approved' : lr.status === 'REJECTED' ? 'Rejected' : 'Pending';
+          let hrStatus = lr.status === 'APPROVED' ? 'Approved' : lr.status === 'REJECTED' ? 'Rejected' : 'Pending';
+          let mgrComment = null;
+          let hrComment = null;
+
+          if (lr.reason && lr.reason.startsWith('{') && lr.reason.endsWith('}')) {
+            try {
+              const meta = JSON.parse(lr.reason);
+              if (meta.totalDays) parsedDays = Number(meta.totalDays);
+              if (meta.managerStatus) managerStatus = meta.managerStatus;
+              if (meta.hrStatus) hrStatus = meta.hrStatus;
+              if (meta.managerComment) mgrComment = meta.managerComment;
+              if (meta.hrComment) hrComment = meta.hrComment;
+              if (meta.requestType) reqType = meta.requestType;
+            } catch {
+              // ignore
+            }
+          }
+
+          await prisma.$executeRawUnsafe(`
+            UPDATE "leave_requests"
+            SET "leaveTypeId" = ${matchedTypeId ? `'${matchedTypeId}'` : 'NULL'},
+                "requestType" = '${reqType}',
+                "totalDays" = ${parsedDays},
+                "managerStatus" = '${managerStatus}',
+                "hrStatus" = '${hrStatus}',
+                "managerComment" = ${mgrComment ? `'${mgrComment.replace(/'/g, "''")}'` : 'NULL'},
+                "hrComment" = ${hrComment ? `'${hrComment.replace(/'/g, "''")}'` : 'NULL'}
+            WHERE id = '${lr.id}';
+          `);
+        }
+      }
+
+      // 4. Seed LeaveBalance and WfhBalance for active employees
+      const employees = await prisma.$queryRawUnsafe(`
+        SELECT id FROM "tenant_users" WHERE "tenantId" = '${t.id}' AND "isDeleted" = false
+      `);
+
+      const activeTypes = await prisma.$queryRawUnsafe(`
+        SELECT id, "defaultDays" FROM "leave_types" WHERE "tenantId" = '${t.id}' AND "isActive" = true
+      `);
+
+      for (const emp of employees) {
+        // Leave Balances
+        for (const at of activeTypes) {
+          await prisma.$executeRawUnsafe(`
+            INSERT INTO "leave_balances" (
+              "id", "tenantId", "employeeId", "leaveTypeId", "year", "allocated", "carriedForward", "adjusted", "used", "pending", "createdAt", "updatedAt"
+            ) VALUES (
+              'lb_' || substr(md5(random()::text || '${t.id}' || '${emp.id}' || '${at.id}' || '${currentYear}'), 1, 20),
+              '${t.id}',
+              '${emp.id}',
+              '${at.id}',
+              ${currentYear},
+              ${at.defaultDays || 0},
+              0,
+              0,
+              0,
+              0,
+              NOW(),
+              NOW()
+            ) ON CONFLICT ("tenantId", "employeeId", "leaveTypeId", "year") DO NOTHING;
+          `);
+        }
+
+        // WFH Balances
+        await prisma.$executeRawUnsafe(`
+          INSERT INTO "wfh_balances" (
+            "id", "tenantId", "employeeId", "year", "allocated", "adjusted", "used", "pending", "createdAt", "updatedAt"
+          ) VALUES (
+            'wb_' || substr(md5(random()::text || '${t.id}' || '${emp.id}' || '${currentYear}'), 1, 20),
+            '${t.id}',
+            '${emp.id}',
+            ${currentYear},
+            15,
+            0,
+            0,
+            0,
+            NOW(),
+            NOW()
+          ) ON CONFLICT ("tenantId", "employeeId", "year") DO NOTHING;
+        `);
+      }
+    }
+
+    console.log('[dbInit] Dynamic Leave & WFH system initialized and verified successfully.');
+  } catch (err) {
+    console.warn('[dbInit] Notice on dynamic leave system init:', err?.message || err);
+  }
 }
 
 

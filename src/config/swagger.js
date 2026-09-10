@@ -871,10 +871,76 @@ const options = {
           required: ['startDate', 'endDate', 'reason'],
           properties: {
             requestType: { type: 'string', enum: ['LEAVE', 'WFH'], default: 'LEAVE' },
+            leaveTypeId: { type: 'string', nullable: true, example: 'cltype12345' },
             leaveType: { type: 'string', example: 'Casual Leave' },
             startDate: { type: 'string', format: 'date', example: '2026-09-02' },
             endDate: { type: 'string', format: 'date', example: '2026-09-03' },
-            reason: { type: 'string', example: 'Family wedding out of town.' },
+            dayType: { type: 'string', enum: ['FULL', 'FIRST_HALF', 'SECOND_HALF'], default: 'FULL' },
+            reason: { type: 'string', example: 'Personal urgent affairs.' },
+            attachmentUrl: { type: 'string', nullable: true, example: '/uploads/medical-cert.pdf' },
+          },
+        },
+        LeaveType: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', example: 'cltype12345' },
+            tenantId: { type: 'string', example: 'cltenant123' },
+            name: { type: 'string', example: 'Study Leave' },
+            code: { type: 'string', example: 'STUDY' },
+            description: { type: 'string', nullable: true, example: 'Time off for certification exams' },
+            defaultDays: { type: 'number', example: 5 },
+            allocationType: { type: 'string', enum: ['ANNUAL', 'MONTHLY', 'ACCRUAL', 'LUMP_SUM'], example: 'ANNUAL' },
+            year: { type: 'integer', example: 2026 },
+            isPaid: { type: 'boolean', example: true },
+            requiresApproval: { type: 'boolean', example: true },
+            allowHalfDay: { type: 'boolean', example: true },
+            allowNegativeBalance: { type: 'boolean', example: false },
+            maxConsecutiveDays: { type: 'integer', nullable: true, example: 5 },
+            minNoticeDays: { type: 'integer', example: 2 },
+            carryForwardAllowed: { type: 'boolean', example: false },
+            maxCarryForwardDays: { type: 'integer', example: 0 },
+            encashmentAllowed: { type: 'boolean', example: false },
+            requiresDocument: { type: 'boolean', example: true },
+            documentRequiredAfterDays: { type: 'integer', example: 2 },
+            isActive: { type: 'boolean', example: true },
+            createdAt: { type: 'string', format: 'date-time' },
+            updatedAt: { type: 'string', format: 'date-time' },
+          },
+        },
+        CreateLeaveType: {
+          type: 'object',
+          required: ['name', 'code'],
+          properties: {
+            name: { type: 'string', example: 'Study Leave' },
+            code: { type: 'string', example: 'STUDY' },
+            description: { type: 'string', nullable: true },
+            defaultDays: { type: 'number', default: 0, example: 5 },
+            allocationType: { type: 'string', enum: ['ANNUAL', 'MONTHLY', 'ACCRUAL', 'LUMP_SUM'], default: 'ANNUAL' },
+            isPaid: { type: 'boolean', default: true },
+            requiresApproval: { type: 'boolean', default: true },
+            allowHalfDay: { type: 'boolean', default: true },
+            allowNegativeBalance: { type: 'boolean', default: false },
+            maxConsecutiveDays: { type: 'integer', nullable: true },
+            minNoticeDays: { type: 'integer', default: 0 },
+            carryForwardAllowed: { type: 'boolean', default: false },
+            maxCarryForwardDays: { type: 'integer', default: 0 },
+            requiresDocument: { type: 'boolean', default: false },
+            documentRequiredAfterDays: { type: 'integer', default: 2 },
+            isActive: { type: 'boolean', default: true },
+          },
+        },
+        WfhPolicy: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', example: 'clwfh12345' },
+            tenantId: { type: 'string', example: 'cltenant123' },
+            isEnabled: { type: 'boolean', example: true },
+            annualDays: { type: 'number', example: 15 },
+            requiresApproval: { type: 'boolean', example: true },
+            maxConsecutiveDays: { type: 'integer', example: 5 },
+            minNoticeDays: { type: 'integer', example: 0 },
+            monthlyLimit: { type: 'integer', nullable: true },
+            isActive: { type: 'boolean', example: true },
           },
         },
 
@@ -1468,6 +1534,247 @@ const options = {
             status: { type: 'string', example: 'PENDING' },
             reminderCount: { type: 'integer', example: 0 },
             reminderSentAt: { type: 'string', format: 'date-time', nullable: true },
+          },
+        },
+
+        // ── Leaves & WFH Schemas ──
+        LeaveType: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', example: 'lt_annual123' },
+            tenantId: { type: 'string', example: 'tenant_abc' },
+            name: { type: 'string', example: 'Annual Leave' },
+            code: { type: 'string', example: 'ANNUAL' },
+            description: { type: 'string', nullable: true, example: 'Standard paid annual leave allowance' },
+            color: { type: 'string', nullable: true, example: '#6366f1' },
+            defaultDays: { type: 'number', example: 18 },
+            allocationType: { type: 'string', enum: ['ANNUAL', 'MONTHLY_ACCRUAL'], example: 'ANNUAL' },
+            year: { type: 'integer', example: 2026 },
+            isPaid: { type: 'boolean', example: true },
+            requiresApproval: { type: 'boolean', example: true },
+            allowHalfDay: { type: 'boolean', example: true },
+            allowNegativeBalance: { type: 'boolean', example: false },
+            maxConsecutiveDays: { type: 'integer', nullable: true, example: 14 },
+            minNoticeDays: { type: 'integer', example: 2 },
+            carryForwardAllowed: { type: 'boolean', example: true },
+            maxCarryForwardDays: { type: 'integer', example: 5 },
+            encashmentAllowed: { type: 'boolean', example: false },
+            requiresDocument: { type: 'boolean', example: false },
+            documentRequiredAfterDays: { type: 'integer', nullable: true, example: 2 },
+            isActive: { type: 'boolean', example: true },
+            createdAt: { type: 'string', format: 'date-time' },
+            updatedAt: { type: 'string', format: 'date-time' },
+          },
+        },
+        CreateLeaveTypeRequest: {
+          type: 'object',
+          required: ['name', 'code', 'defaultDays'],
+          properties: {
+            name: { type: 'string', example: 'Maternity Leave', minLength: 2, maxLength: 80 },
+            code: { type: 'string', example: 'MATERNITY', pattern: '^[A-Z0-9_]+$', minLength: 2, maxLength: 30 },
+            description: { type: 'string', nullable: true, example: 'Paid maternal leave for expecting mothers' },
+            color: { type: 'string', nullable: true, example: '#ec4899' },
+            defaultDays: { type: 'number', minimum: 0, example: 90 },
+            allocationType: { type: 'string', enum: ['ANNUAL', 'MONTHLY_ACCRUAL'], default: 'ANNUAL' },
+            isPaid: { type: 'boolean', default: true },
+            requiresApproval: { type: 'boolean', default: true },
+            allowHalfDay: { type: 'boolean', default: false },
+            allowNegativeBalance: { type: 'boolean', default: false },
+            maxConsecutiveDays: { type: 'integer', nullable: true, minimum: 1, example: 90 },
+            minNoticeDays: { type: 'integer', default: 15, minimum: 0 },
+            carryForwardAllowed: { type: 'boolean', default: false },
+            maxCarryForwardDays: { type: 'integer', default: 0, minimum: 0 },
+            encashmentAllowed: { type: 'boolean', default: false },
+            requiresDocument: { type: 'boolean', default: true },
+            documentRequiredAfterDays: { type: 'integer', nullable: true, minimum: 1, example: 1 },
+            isActive: { type: 'boolean', default: true },
+          },
+        },
+        UpdateLeaveTypeRequest: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', minLength: 2, maxLength: 80 },
+            description: { type: 'string', nullable: true },
+            color: { type: 'string', nullable: true },
+            defaultDays: { type: 'number', minimum: 0 },
+            allocationType: { type: 'string', enum: ['ANNUAL', 'MONTHLY_ACCRUAL'] },
+            isPaid: { type: 'boolean' },
+            requiresApproval: { type: 'boolean' },
+            allowHalfDay: { type: 'boolean' },
+            allowNegativeBalance: { type: 'boolean' },
+            maxConsecutiveDays: { type: 'integer', nullable: true, minimum: 1 },
+            minNoticeDays: { type: 'integer', minimum: 0 },
+            carryForwardAllowed: { type: 'boolean' },
+            maxCarryForwardDays: { type: 'integer', minimum: 0 },
+            encashmentAllowed: { type: 'boolean' },
+            requiresDocument: { type: 'boolean' },
+            documentRequiredAfterDays: { type: 'integer', nullable: true, minimum: 1 },
+            isActive: { type: 'boolean' },
+          },
+        },
+        LeaveTypeStatusRequest: {
+          type: 'object',
+          required: ['isActive'],
+          properties: {
+            isActive: { type: 'boolean', example: false },
+          },
+        },
+        LeaveBalanceItem: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            typeId: { type: 'string' },
+            code: { type: 'string', example: 'ANNUAL' },
+            name: { type: 'string', example: 'Annual Leave' },
+            color: { type: 'string', example: '#6366f1' },
+            allowHalfDay: { type: 'boolean', example: true },
+            requiresDocument: { type: 'boolean', example: false },
+            documentRequiredAfterDays: { type: 'integer', nullable: true, example: 2 },
+            allocated: { type: 'number', example: 18 },
+            carriedForward: { type: 'number', example: 0 },
+            adjusted: { type: 'number', example: 0 },
+            totalQuota: { type: 'number', example: 18 },
+            used: { type: 'number', example: 4 },
+            pending: { type: 'number', example: 2 },
+            available: { type: 'number', example: 12 },
+          },
+        },
+        MyLeaveBalancesResponse: {
+          type: 'object',
+          properties: {
+            year: { type: 'integer', example: 2026 },
+            leaveTypes: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/LeaveBalanceItem' },
+            },
+            wfh: {
+              type: 'object',
+              properties: {
+                allocated: { type: 'number', example: 15 },
+                adjusted: { type: 'number', example: 0 },
+                totalQuota: { type: 'number', example: 15 },
+                used: { type: 'number', example: 3 },
+                pending: { type: 'number', example: 1 },
+                available: { type: 'number', example: 11 },
+                isEnabled: { type: 'boolean', example: true },
+              },
+            },
+            summary: {
+              type: 'object',
+              properties: {
+                totalAllocated: { type: 'number', example: 36 },
+                totalUsed: { type: 'number', example: 7 },
+                totalPending: { type: 'number', example: 3 },
+                totalAvailable: { type: 'number', example: 26 },
+              },
+            },
+          },
+        },
+        AdjustBalanceRequest: {
+          type: 'object',
+          required: ['employeeId', 'days', 'operation', 'reason'],
+          properties: {
+            employeeId: { type: 'string', example: 'user_123' },
+            leaveTypeId: { type: 'string', nullable: true, example: 'lt_annual123', description: 'Leave type ID (null if adjusting WFH)' },
+            isWfh: { type: 'boolean', default: false, example: false },
+            days: { type: 'number', minimum: 0.5, example: 3 },
+            operation: { type: 'string', enum: ['ADD', 'DEDUCT'], example: 'ADD' },
+            reason: { type: 'string', example: 'Special management quota incentive for weekend hackathon support' },
+          },
+        },
+        CreateLeaveRequest: {
+          type: 'object',
+          required: ['startDate', 'endDate', 'reason'],
+          properties: {
+            leaveTypeId: { type: 'string', nullable: true, example: 'lt_sick123', description: 'Omit or null if requestType is WFH' },
+            requestType: { type: 'string', enum: ['LEAVE', 'WFH'], default: 'LEAVE', example: 'LEAVE' },
+            startDate: { type: 'string', format: 'date', example: '2026-09-15' },
+            endDate: { type: 'string', format: 'date', example: '2026-09-16' },
+            dayType: { type: 'string', enum: ['FULL', 'FIRST_HALF', 'SECOND_HALF'], default: 'FULL', example: 'FULL' },
+            reason: { type: 'string', example: 'High fever and doctor consultation', minLength: 3, maxLength: 500 },
+            attachmentUrl: { type: 'string', nullable: true, example: 'https://ueibi-storage.s3.amazonaws.com/tenants/t1/doc.pdf' },
+          },
+        },
+        LeaveRequestItem: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', example: 'lr_123456' },
+            employeeId: { type: 'string', example: 'user_123' },
+            leaveTypeId: { type: 'string', nullable: true, example: 'lt_sick123' },
+            leaveType: { $ref: '#/components/schemas/LeaveType' },
+            requestType: { type: 'string', enum: ['LEAVE', 'WFH'], example: 'LEAVE' },
+            dayType: { type: 'string', enum: ['FULL', 'FIRST_HALF', 'SECOND_HALF'], example: 'FULL' },
+            startDate: { type: 'string', format: 'date-time' },
+            endDate: { type: 'string', format: 'date-time' },
+            totalDays: { type: 'number', example: 2 },
+            reason: { type: 'string', example: 'High fever and doctor consultation' },
+            attachmentUrl: { type: 'string', nullable: true },
+            status: { type: 'string', enum: ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED'], example: 'PENDING' },
+            managerStatus: { type: 'string', enum: ['Pending', 'Approved', 'Rejected'], example: 'Pending' },
+            hrStatus: { type: 'string', enum: ['Pending', 'Approved', 'Rejected'], example: 'Pending' },
+            managerComment: { type: 'string', nullable: true },
+            hrComment: { type: 'string', nullable: true },
+            createdAt: { type: 'string', format: 'date-time' },
+            employee: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                name: { type: 'string' },
+                email: { type: 'string' },
+                department: { type: 'string', nullable: true },
+                role: { type: 'string' },
+              },
+            },
+          },
+        },
+        ApprovalActionRequest: {
+          type: 'object',
+          properties: {
+            comment: { type: 'string', example: 'Approved, take rest.' },
+          },
+        },
+        WfhPolicy: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            tenantId: { type: 'string' },
+            isEnabled: { type: 'boolean', example: true },
+            annualDays: { type: 'number', example: 15 },
+            monthlyLimit: { type: 'number', nullable: true, example: 4 },
+            requiresApproval: { type: 'boolean', example: true },
+            maxConsecutiveDays: { type: 'integer', example: 5 },
+            minNoticeDays: { type: 'integer', example: 1 },
+            createdAt: { type: 'string', format: 'date-time' },
+            updatedAt: { type: 'string', format: 'date-time' },
+          },
+        },
+        UpdateWfhPolicyRequest: {
+          type: 'object',
+          properties: {
+            isEnabled: { type: 'boolean' },
+            annualDays: { type: 'number', minimum: 0 },
+            monthlyLimit: { type: 'number', nullable: true, minimum: 1 },
+            requiresApproval: { type: 'boolean' },
+            maxConsecutiveDays: { type: 'integer', minimum: 1 },
+            minNoticeDays: { type: 'integer', minimum: 0 },
+          },
+        },
+        LeaveAuditLog: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            action: { type: 'string', example: 'CREATE_LEAVE_TYPE' },
+            performedById: { type: 'string' },
+            performedBy: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                name: { type: 'string' },
+                email: { type: 'string' },
+              },
+            },
+            details: { type: 'object' },
+            createdAt: { type: 'string', format: 'date-time' },
           },
         },
       },
@@ -3145,6 +3452,159 @@ const options = {
             403: { description: 'Access forbidden: not owner' },
             404: { description: 'Request not found' },
           },
+        },
+      },
+      '/admin/leave-types': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'List all leave types with search and status filters (Admin/HR)',
+          operationId: 'adminListLeaveTypes',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'search', in: 'query', schema: { type: 'string' } },
+            { name: 'status', in: 'query', schema: { type: 'string', enum: ['ALL', 'ACTIVE', 'INACTIVE'] } },
+            { name: 'page', in: 'query', schema: { type: 'integer', default: 1 } },
+            { name: 'limit', in: 'query', schema: { type: 'integer', default: 50 } },
+          ],
+          responses: {
+            200: { description: 'Leave types retrieved successfully' },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden' },
+          },
+        },
+        post: {
+          tags: ['Leaves & WFH'],
+          summary: 'Create a dynamic leave type (Admin/HR)',
+          operationId: 'adminCreateLeaveType',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/CreateLeaveType' } } },
+          },
+          responses: {
+            201: { description: 'Leave type created successfully' },
+            400: { description: 'Validation error' },
+            409: { description: 'Code already exists' },
+          },
+        },
+      },
+      '/admin/leave-types/{id}': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'Get leave type details',
+          operationId: 'adminGetLeaveTypeById',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: { 200: { description: 'Leave type details' }, 404: { description: 'Not found' } },
+        },
+        put: {
+          tags: ['Leaves & WFH'],
+          summary: 'Update leave type configuration',
+          operationId: 'adminUpdateLeaveType',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } },
+          responses: { 200: { description: 'Leave type updated' }, 404: { description: 'Not found' } },
+        },
+        delete: {
+          tags: ['Leaves & WFH'],
+          summary: 'Safely delete leave type (only if no dependent records exist)',
+          operationId: 'adminDeleteLeaveType',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: {
+            200: { description: 'Leave type safely deleted' },
+            409: { description: 'Cannot delete: historical records depend on this leave type' },
+          },
+        },
+      },
+      '/admin/leave-types/{id}/status': {
+        patch: {
+          tags: ['Leaves & WFH'],
+          summary: 'Activate or deactivate leave type',
+          operationId: 'adminToggleLeaveTypeStatus',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { isActive: { type: 'boolean' } } } } } },
+          responses: { 200: { description: 'Status updated successfully' } },
+        },
+      },
+      '/leave-types': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'List active leave types for employee application dropdown',
+          operationId: 'listActiveLeaveTypes',
+          security: [{ userCookie: [] }],
+          responses: { 200: { description: 'Active leave types list' } },
+        },
+      },
+      '/wfh/policy': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'Get company Work From Home policy',
+          operationId: 'getWfhPolicy',
+          security: [{ userCookie: [] }],
+          responses: { 200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/WfhPolicy' } } } } },
+        },
+      },
+      '/admin/wfh/policy': {
+        put: {
+          tags: ['Leaves & WFH'],
+          summary: 'Update company Work From Home policy (Admin)',
+          operationId: 'adminUpdateWfhPolicy',
+          security: [{ userCookie: [] }],
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } },
+          responses: { 200: { description: 'WFH policy updated' } },
+        },
+      },
+      '/admin/leave-balances': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'List employee leave and WFH balances (Admin/HR)',
+          operationId: 'adminListEmployeeBalances',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'search', in: 'query', schema: { type: 'string' } },
+            { name: 'year', in: 'query', schema: { type: 'integer' } },
+          ],
+          responses: { 200: { description: 'Employee balances retrieved' } },
+        },
+      },
+      '/admin/leave-balances/adjust': {
+        post: {
+          tags: ['Leaves & WFH'],
+          summary: 'Manually adjust employee balance with audit log (Admin)',
+          operationId: 'adminAdjustEmployeeBalance',
+          security: [{ userCookie: [] }],
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } },
+          responses: { 200: { description: 'Balance adjusted successfully' } },
+        },
+      },
+      '/admin/leave-overview/stats': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'Get leave and WFH overview statistics (Admin/HR)',
+          operationId: 'adminGetLeaveStats',
+          security: [{ userCookie: [] }],
+          responses: { 200: { description: 'Statistics summary' } },
+        },
+      },
+      '/admin/leave-overview/calendar': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'Get leave calendar events (Admin/HR)',
+          operationId: 'adminGetLeaveCalendar',
+          security: [{ userCookie: [] }],
+          responses: { 200: { description: 'Calendar events list' } },
+        },
+      },
+      '/admin/leave-logs': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'Get leave and WFH audit trail (Admin/HR)',
+          operationId: 'adminGetLeaveAuditLogs',
+          security: [{ userCookie: [] }],
+          responses: { 200: { description: 'Audit trail records' } },
         },
       },
 
@@ -5533,6 +5993,564 @@ const options = {
             403: { description: 'Forbidden — not authorized to delete this event' },
             404: { description: 'Event not found' },
             401: { description: 'Unauthorized' },
+          },
+        },
+      },
+
+      // ───── Leaves & Work From Home ─────
+      '/admin/leave-types': {
+        post: {
+          tags: ['Leaves & WFH'],
+          summary: 'Create a new dynamic leave type (HR/Admin)',
+          operationId: 'createLeaveType',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/CreateLeaveTypeRequest' } } },
+          },
+          responses: {
+            201: {
+              description: 'Leave type created successfully',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveType' } } },
+            },
+            400: { description: 'Validation failed' },
+            409: { description: 'Conflict — leave type code already exists for tenant' },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden — requires HR or Admin role' },
+          },
+        },
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'List all configured leave types for tenant (HR/Admin)',
+          operationId: 'listAdminLeaveTypes',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'includeInactive', in: 'query', schema: { type: 'boolean' }, description: 'Include inactive categories' },
+          ],
+          responses: {
+            200: {
+              description: 'List of leave types',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'array',
+                    items: { $ref: '#/components/schemas/LeaveType' },
+                  },
+                },
+              },
+            },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden' },
+          },
+        },
+      },
+      '/admin/leave-types/{id}': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'Get leave type details by ID (HR/Admin)',
+          operationId: 'getAdminLeaveTypeById',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveType' } } } },
+            404: { description: 'Leave type not found' },
+          },
+        },
+        put: {
+          tags: ['Leaves & WFH'],
+          summary: 'Update leave type configuration (HR/Admin)',
+          operationId: 'updateLeaveTypePut',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/UpdateLeaveTypeRequest' } } },
+          },
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveType' } } } },
+            400: { description: 'Validation failed' },
+            404: { description: 'Leave type not found' },
+          },
+        },
+        patch: {
+          tags: ['Leaves & WFH'],
+          summary: 'Partially update leave type configuration (HR/Admin)',
+          operationId: 'updateLeaveTypePatch',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/UpdateLeaveTypeRequest' } } },
+          },
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveType' } } } },
+            400: { description: 'Validation failed' },
+            404: { description: 'Leave type not found' },
+          },
+        },
+        delete: {
+          tags: ['Leaves & WFH'],
+          summary: 'Safely delete a leave type (blocked if historical records exist)',
+          operationId: 'deleteLeaveType',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          responses: {
+            200: {
+              description: 'Deleted successfully',
+              content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, message: { type: 'string' } } } } },
+            },
+            409: { description: 'Conflict — cannot delete leave type with existing employee requests; deactivate instead' },
+            404: { description: 'Leave type not found' },
+          },
+        },
+      },
+      '/admin/leave-types/{id}/status': {
+        patch: {
+          tags: ['Leaves & WFH'],
+          summary: 'Toggle active/inactive status of a leave type',
+          operationId: 'toggleLeaveTypeStatus',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveTypeStatusRequest' } } },
+          },
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveType' } } } },
+            404: { description: 'Leave type not found' },
+          },
+        },
+      },
+      '/leave-types': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'List active leave categories for employee application dropdown',
+          operationId: 'listActiveLeaveTypes',
+          security: [{ userCookie: [] }],
+          responses: {
+            200: {
+              description: 'Active leave categories',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'array',
+                    items: { $ref: '#/components/schemas/LeaveType' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      '/leave-types/{id}': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'Get public policy details of a leave category',
+          operationId: 'getLeaveTypePublic',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveType' } } } },
+            404: { description: 'Leave type not found' },
+          },
+        },
+      },
+      '/leaves/balances': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'Get current employee dynamic leave balances and WFH quota',
+          operationId: 'getMyLeaveBalances',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'year', in: 'query', schema: { type: 'integer' }, description: 'Target year (defaults to current year)' },
+          ],
+          responses: {
+            200: {
+              description: 'Employee dynamic balance cards payload',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/MyLeaveBalancesResponse' } } },
+            },
+          },
+        },
+      },
+      '/leave-balances/me': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'Alias for current employee dynamic balances',
+          operationId: 'getMyLeaveBalancesAlias',
+          security: [{ userCookie: [] }],
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/MyLeaveBalancesResponse' } } } },
+          },
+        },
+      },
+      '/admin/leave-balances': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'List all employee leave quotas and balances across tenant (HR/Admin)',
+          operationId: 'listEmployeeBalances',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'year', in: 'query', schema: { type: 'integer' } },
+            { name: 'search', in: 'query', schema: { type: 'string' } },
+          ],
+          responses: {
+            200: {
+              description: 'Employee balance lists',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        employeeId: { type: 'string' },
+                        employee: { type: 'object' },
+                        balances: { type: 'array', items: { $ref: '#/components/schemas/LeaveBalanceItem' } },
+                        wfh: { type: 'object' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      '/admin/leave-balances/adjust': {
+        post: {
+          tags: ['Leaves & WFH'],
+          summary: 'Manually adjust an employee quota with audit log (HR/Admin)',
+          operationId: 'adjustEmployeeBalance',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/AdjustBalanceRequest' } } },
+          },
+          responses: {
+            200: {
+              description: 'Adjustment recorded successfully',
+              content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, message: { type: 'string' } } } } },
+            },
+            400: { description: 'Validation failed' },
+          },
+        },
+      },
+      '/leaves': {
+        post: {
+          tags: ['Leaves & WFH'],
+          summary: 'Submit a new leave or work from home application',
+          operationId: 'createLeaveRequest',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/CreateLeaveRequest' } } },
+          },
+          responses: {
+            201: {
+              description: 'Request submitted successfully',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveRequestItem' } } },
+            },
+            400: { description: 'Validation failed (insufficient balance, overlap, missing document, or notice rule)' },
+          },
+        },
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'List leave applications (scoped by role or parameter)',
+          operationId: 'listLeaveRequests',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'scope', in: 'query', schema: { type: 'string', enum: ['my', 'team', 'company'] }, description: 'View scope' },
+            { name: 'status', in: 'query', schema: { type: 'string' } },
+            { name: 'type', in: 'query', schema: { type: 'string' } },
+            { name: 'page', in: 'query', schema: { type: 'integer', default: 1 } },
+            { name: 'limit', in: 'query', schema: { type: 'integer', default: 20 } },
+          ],
+          responses: {
+            200: {
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      items: { type: 'array', items: { $ref: '#/components/schemas/LeaveRequestItem' } },
+                      total: { type: 'integer' },
+                      page: { type: 'integer' },
+                      limit: { type: 'integer' },
+                      totalPages: { type: 'integer' },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      '/leaves/{id}/cancel': {
+        post: {
+          tags: ['Leaves & WFH'],
+          summary: 'Cancel own pending leave application and restore quota',
+          operationId: 'cancelLeaveRequest',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          responses: {
+            200: {
+              content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, message: { type: 'string' } } } } },
+            },
+            400: { description: 'Only pending leaves can be cancelled' },
+          },
+        },
+      },
+      '/leaves/{id}/admin/approve': {
+        patch: {
+          tags: ['Leaves & WFH'],
+          summary: 'Administrator Supreme Approval (Finalizes leave and marks both manager and HR approved)',
+          operationId: 'adminApproveLeave',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          requestBody: {
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/ApprovalActionRequest' } } },
+          },
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveRequestItem' } } } },
+            403: { description: 'Forbidden — requires Administrator or HR role' },
+          },
+        },
+      },
+      '/leaves/{id}/admin/reject': {
+        patch: {
+          tags: ['Leaves & WFH'],
+          summary: 'Administrator Supreme Rejection (Rejects leave and releases pending balance)',
+          operationId: 'adminRejectLeave',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/ApprovalActionRequest' } } },
+          },
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveRequestItem' } } } },
+            403: { description: 'Forbidden — requires Administrator or HR role' },
+          },
+        },
+      },
+      '/leaves/{id}/manager/approve': {
+        patch: {
+          tags: ['Leaves & WFH'],
+          summary: 'Level 1: Manager approval of employee leave/WFH',
+          operationId: 'managerApproveLeave',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          requestBody: {
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/ApprovalActionRequest' } } },
+          },
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveRequestItem' } } } },
+          },
+        },
+      },
+      '/leaves/{id}/manager/reject': {
+        patch: {
+          tags: ['Leaves & WFH'],
+          summary: 'Level 1: Manager rejection of employee leave/WFH (releases pending balance)',
+          operationId: 'managerRejectLeave',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/ApprovalActionRequest' } } },
+          },
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveRequestItem' } } } },
+          },
+        },
+      },
+      '/leaves/{id}/hr/approve': {
+        patch: {
+          tags: ['Leaves & WFH'],
+          summary: 'Level 2: Final HR approval of employee leave/WFH (deducts from used quota)',
+          operationId: 'hrApproveLeave',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          requestBody: {
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/ApprovalActionRequest' } } },
+          },
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveRequestItem' } } } },
+          },
+        },
+      },
+      '/leaves/{id}/hr/reject': {
+        patch: {
+          tags: ['Leaves & WFH'],
+          summary: 'Level 2: Final HR rejection of employee leave/WFH (releases pending balance)',
+          operationId: 'hrRejectLeave',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/ApprovalActionRequest' } } },
+          },
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveRequestItem' } } } },
+          },
+        },
+      },
+      '/wfh/policy': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'Get current tenant WFH policy configuration',
+          operationId: 'getWfhPolicy',
+          security: [{ userCookie: [] }],
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/WfhPolicy' } } } },
+          },
+        },
+      },
+      '/admin/wfh/policy': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'Get current tenant WFH policy configuration (HR/Admin)',
+          operationId: 'getAdminWfhPolicy',
+          security: [{ userCookie: [] }],
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/WfhPolicy' } } } },
+          },
+        },
+        put: {
+          tags: ['Leaves & WFH'],
+          summary: 'Update tenant WFH policy configuration (HR/Admin)',
+          operationId: 'updateWfhPolicyPut',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/UpdateWfhPolicyRequest' } } },
+          },
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/WfhPolicy' } } } },
+          },
+        },
+        patch: {
+          tags: ['Leaves & WFH'],
+          summary: 'Partially update tenant WFH policy configuration (HR/Admin)',
+          operationId: 'updateWfhPolicyPatch',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/UpdateWfhPolicyRequest' } } },
+          },
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/WfhPolicy' } } } },
+          },
+        },
+      },
+      '/admin/leave-overview/stats': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'High-level aggregate metrics for company leave overview dashboard',
+          operationId: 'getLeaveOverviewStats',
+          security: [{ userCookie: [] }],
+          responses: {
+            200: {
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      todayOnLeaveCount: { type: 'integer' },
+                      pendingManagerCount: { type: 'integer' },
+                      pendingHrCount: { type: 'integer' },
+                      approvedThisMonth: { type: 'integer' },
+                      leaveTypeBreakdown: { type: 'array', items: { type: 'object' } },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      '/admin/leave-overview/calendar': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'Calendar feed of approved and pending leaves',
+          operationId: 'getLeaveCalendarView',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'month', in: 'query', schema: { type: 'string' } },
+            { name: 'year', in: 'query', schema: { type: 'integer' } },
+          ],
+          responses: {
+            200: {
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        id: { type: 'string' },
+                        employeeName: { type: 'string' },
+                        title: { type: 'string' },
+                        startDate: { type: 'string', format: 'date-time' },
+                        endDate: { type: 'string', format: 'date-time' },
+                        color: { type: 'string' },
+                        status: { type: 'string' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      '/admin/leave-logs': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'Get chronological audit logs of all leave & policy modifications',
+          operationId: 'getLeaveAuditLogs',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'action', in: 'query', schema: { type: 'string' } },
+            { name: 'limit', in: 'query', schema: { type: 'integer', default: 50 } },
+          ],
+          responses: {
+            200: {
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'array',
+                    items: { $ref: '#/components/schemas/LeaveAuditLog' },
+                  },
+                },
+              },
+            },
           },
         },
       },

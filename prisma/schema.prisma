@@ -50,6 +50,13 @@ model Tenant {
   appraisalParameters AppraisalParameter[]
   peerNominations   PeerNomination[]
   hubEvents         HubEvent[]
+  leaveTypes        LeaveType[]
+  leaveBalances     LeaveBalance[]
+  wfhPolicy         WfhPolicy?
+  wfhBalances       WfhBalance[]
+  leaveRequests     LeaveRequest[]
+  leaveAuditLogs    LeaveAuditLog[]
+  leaveAdjustments  LeaveBalanceAdjustment[]
 
   @@map("tenants")
 }
@@ -108,6 +115,13 @@ model TenantUser {
   tasks          Task[]
   leaveRequests  LeaveRequest[]      @relation("EmployeeLeaves")
   approvedLeaves LeaveRequest[]      @relation("ApprovedLeaves")
+  createdLeaveTypes  LeaveType[]              @relation("LeaveTypeCreator")
+  updatedLeaveTypes  LeaveType[]              @relation("LeaveTypeUpdater")
+  leaveBalances      LeaveBalance[]           @relation("EmployeeLeaveBalances")
+  wfhBalances        WfhBalance[]             @relation("EmployeeWfhBalances")
+  leaveAuditLogs     LeaveAuditLog[]          @relation("LeaveAuditActor")
+  adjustedBalances   LeaveBalanceAdjustment[] @relation("BalanceAdjuster")
+  balanceAdjustments LeaveBalanceAdjustment[] @relation("BalanceAdjustmentEmployee")
   reviews        PerformanceReview[] @relation("EmployeeReviews")
   hrSignedOffReviews PerformanceReview[] @relation("HrSignoffActor")
   exReviews      ExEmployerReview[]  @relation("EmployeeExReviews")
@@ -512,21 +526,188 @@ model Notification {
 }
 
 model LeaveRequest {
-  id           String      @id @default(cuid())
-  employeeId   String
-  employee     TenantUser  @relation("EmployeeLeaves", fields: [employeeId], references: [id], onDelete: Cascade)
-  type         String // Casual | Sick | Annual
-  startDate    DateTime
-  endDate      DateTime
-  reason       String?     @db.Text
-  status       String      @default("PENDING") // PENDING | APPROVED | REJECTED
-  approvedById String?
-  approvedBy   TenantUser? @relation("ApprovedLeaves", fields: [approvedById], references: [id])
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
+  id                     String                  @id @default(cuid())
+  tenantId               String?
+  tenant                 Tenant?                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  employeeId             String
+  employee               TenantUser              @relation("EmployeeLeaves", fields: [employeeId], references: [id], onDelete: Cascade)
+  leaveTypeId            String?
+  leaveType              LeaveType?              @relation(fields: [leaveTypeId], references: [id], onDelete: SetNull)
+  type                   String                  // Legacy field: 'Casual Leave' | 'Sick Leave' | 'Annual Leave' | 'WFH'
+  requestType            String                  @default("LEAVE") // 'LEAVE' | 'WFH'
+  startDate              DateTime
+  endDate                DateTime
+  totalDays              Float                   @default(1)
+  dayType                String                  @default("FULL") // 'FULL' | 'FIRST_HALF' | 'SECOND_HALF'
+  reason                 String?                 @db.Text
+  attachmentUrl          String?
+  attachmentOriginalName String?
+  status                 String                  @default("PENDING") // PENDING | APPROVED | REJECTED | CANCELLED
+  managerStatus          String                  @default("Pending") // Pending | Approved | Rejected | Not Required
+  managerId              String?
+  managerComment         String?                 @db.Text
+  managerActedAt         DateTime?
+  hrStatus               String                  @default("Pending") // Pending | Approved | Rejected | Not Required
+  hrId                   String?
+  hrComment              String?                 @db.Text
+  hrActedAt              DateTime?
+  approvedById           String?
+  approvedBy             TenantUser?             @relation("ApprovedLeaves", fields: [approvedById], references: [id])
+  rejectedById           String?
+  rejectedAt             DateTime?
+  rejectionReason        String?                 @db.Text
+  cancelledById          String?
+  cancelledAt            DateTime?
+  auditLogs              LeaveAuditLog[]
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
 
-  @@index([employeeId])
+  @@index([tenantId])
+  @@index([employeeId, status])
+  @@index([leaveTypeId])
+  @@index([startDate, endDate])
   @@map("leave_requests")
+}
+
+model LeaveType {
+  id                        String                   @id @default(cuid())
+  tenantId                  String
+  tenant                    Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name                      String
+  code                      String
+  description               String?                  @db.Text
+  defaultDays               Float                    @default(0)
+  allocationType            String                   @default("ANNUAL") // ANNUAL | MONTHLY | ACCRUAL | LUMP_SUM
+  year                      Int?
+  isPaid                    Boolean                  @default(true)
+  requiresApproval          Boolean                  @default(true)
+  allowHalfDay              Boolean                  @default(true)
+  allowNegativeBalance      Boolean                  @default(false)
+  maxConsecutiveDays        Int?
+  minNoticeDays             Int                      @default(0)
+  carryForwardAllowed       Boolean                  @default(false)
+  maxCarryForwardDays       Int                      @default(0)
+  encashmentAllowed         Boolean                  @default(false)
+  requiresDocument          Boolean                  @default(false)
+  documentRequiredAfterDays Int                      @default(2)
+  isActive                  Boolean                  @default(true)
+  createdById               String?
+  createdBy                 TenantUser?              @relation("LeaveTypeCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedById               String?
+  updatedBy                 TenantUser?              @relation("LeaveTypeUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
+  leaveRequests             LeaveRequest[]
+  balances                  LeaveBalance[]
+  adjustments               LeaveBalanceAdjustment[]
+  auditLogs                 LeaveAuditLog[]
+  createdAt                 DateTime                 @default(now())
+  updatedAt                 DateTime                 @updatedAt
+
+  @@unique([tenantId, code])
+  @@index([tenantId, isActive])
+  @@map("leave_types")
+}
+
+model LeaveBalance {
+  id             String     @id @default(cuid())
+  tenantId       String
+  tenant         Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  employeeId     String
+  employee       TenantUser @relation("EmployeeLeaveBalances", fields: [employeeId], references: [id], onDelete: Cascade)
+  leaveTypeId    String
+  leaveType      LeaveType  @relation(fields: [leaveTypeId], references: [id], onDelete: Cascade)
+  year           Int
+  allocated      Float      @default(0)
+  carriedForward Float      @default(0)
+  adjusted       Float      @default(0)
+  used           Float      @default(0)
+  pending        Float      @default(0)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  @@unique([tenantId, employeeId, leaveTypeId, year])
+  @@index([tenantId, employeeId, year])
+  @@map("leave_balances")
+}
+
+model WfhPolicy {
+  id                 String   @id @default(cuid())
+  tenantId           String   @unique
+  tenant             Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  isEnabled          Boolean  @default(true)
+  annualDays         Float    @default(15)
+  requiresApproval   Boolean  @default(true)
+  maxConsecutiveDays Int?     @default(5)
+  minNoticeDays      Int      @default(0)
+  monthlyLimit       Int?
+  isActive           Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@map("wfh_policies")
+}
+
+model WfhBalance {
+  id         String     @id @default(cuid())
+  tenantId   String
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  employeeId String
+  employee   TenantUser @relation("EmployeeWfhBalances", fields: [employeeId], references: [id], onDelete: Cascade)
+  year       Int
+  allocated  Float      @default(15)
+  adjusted   Float      @default(0)
+  used       Float      @default(0)
+  pending    Float      @default(0)
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  @@unique([tenantId, employeeId, year])
+  @@index([tenantId, employeeId, year])
+  @@map("wfh_balances")
+}
+
+model LeaveAuditLog {
+  id             String        @id @default(cuid())
+  tenantId       String
+  tenant         Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  leaveTypeId    String?
+  leaveType      LeaveType?    @relation(fields: [leaveTypeId], references: [id], onDelete: SetNull)
+  leaveRequestId String?
+  leaveRequest   LeaveRequest? @relation(fields: [leaveRequestId], references: [id], onDelete: SetNull)
+  actorUserId    String
+  actor          TenantUser    @relation("LeaveAuditActor", fields: [actorUserId], references: [id])
+  action         String        // LEAVE_TYPE_CREATED | LEAVE_TYPE_UPDATED | LEAVE_TYPE_ACTIVATED | LEAVE_TYPE_DEACTIVATED | LEAVE_TYPE_DELETED | LEAVE_REQUEST_CREATED | LEAVE_REQUEST_APPROVED | LEAVE_REQUEST_REJECTED | LEAVE_REQUEST_CANCELLED | WFH_REQUEST_CREATED | WFH_REQUEST_APPROVED | WFH_REQUEST_REJECTED | WFH_REQUEST_CANCELLED | BALANCE_ADJUSTED | POLICY_UPDATED
+  details        String?       @db.Text
+  ipAddress      String?
+  userAgent      String?       @db.Text
+  metadata       Json?
+  createdAt      DateTime      @default(now())
+
+  @@index([tenantId])
+  @@index([action])
+  @@map("leave_audit_logs")
+}
+
+model LeaveBalanceAdjustment {
+  id               String      @id @default(cuid())
+  tenantId         String
+  tenant           Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  employeeId       String
+  employee         TenantUser  @relation("BalanceAdjustmentEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
+  leaveTypeId      String?
+  leaveType        LeaveType?  @relation(fields: [leaveTypeId], references: [id], onDelete: SetNull)
+  isWfh            Boolean     @default(false)
+  year             Int
+  previousBalance  Float
+  newBalance       Float
+  adjustmentAmount Float
+  reason           String      @db.Text
+  adjustedById     String
+  adjustedBy       TenantUser  @relation("BalanceAdjuster", fields: [adjustedById], references: [id])
+  createdAt        DateTime    @default(now())
+
+  @@index([tenantId])
+  @@index([employeeId])
+  @@map("leave_balance_adjustments")
 }
 
 enum AppraisalFrequency {
