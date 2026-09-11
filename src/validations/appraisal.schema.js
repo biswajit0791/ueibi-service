@@ -222,6 +222,12 @@ export const listAppraisalsQuerySchema = z.object({
   search: z.string().max(200).optional(),
   frequency: z.enum(['ANNUAL', 'QUARTERLY', 'MONTHLY']).optional(),
   status: z.enum(['DRAFT', 'SUBMITTED', 'MANAGER_REVIEWED', 'COMPLETED']).optional(),
+  department: z.string().max(200).optional(),
+  cycleId: z.string().optional(),
+});
+
+export const cycleSummaryQuerySchema = z.object({
+  department: z.string().max(200).optional(),
 });
 
 export const activeCycleQuerySchema = z.object({

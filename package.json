@@ -16,6 +16,7 @@
     "list-companies": "node list-companies.js",
     "reset-password": "node reset-password.js",
     "seed-users": "node seed-users.js",
+    "seed-appraisal": "node prisma/seed-appraisal.js",
     "check-users": "node check-users.js",
     "test:appraisal": "node test-appraisal.js"
   },
