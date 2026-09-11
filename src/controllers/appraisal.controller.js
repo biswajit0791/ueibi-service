@@ -2,6 +2,47 @@ import { prisma } from '../lib/prisma.js';
 import { stripPeerReviewerIdentity } from '../lib/privacy.js';
 import { AppraisalNotificationService } from '../services/appraisalNotification.service.js';
 import { goalService } from '../services/goal.service.js';
+import { ELEVATED_ROLES, HR_ROLES, MANAGER_OR_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
+
+/**
+ * True when `user` may act as the reviewing manager for `employee`:
+ * an elevated role, or a manager anywhere up the employee's reporting chain.
+ * (The old code also treated "employee has no manager" as "any MANAGER may
+ * review" — that fallback is deliberately gone.)
+ */
+async function canManagerReview(user, employee, tenantId) {
+  if (hasRole(user.role, ELEVATED_ROLES)) return true;
+  if (!employee || employee.id === user.id) return false;
+  if (employee.managerId === user.id) return true;
+  return goalService.isSubordinate(user.id, employee.id, tenantId);
+}
+
+// Self-assessment can no longer be edited once the manager (or HR) has acted.
+const SELF_LOCKED_STATUSES = ['MANAGER_REVIEWED', 'COMPLETED'];
+
+/**
+ * Fetch the review for (cycle, employee) or create a DRAFT — race-safe against
+ * the unique constraint on (cycleId, employeeId, reviewType).
+ */
+async function getOrCreateReview(cycleId, employeeId, extraData = {}, include = undefined) {
+  const existing = await prisma.performanceReview.findFirst({
+    where: { cycleId, employeeId },
+    ...(include ? { include } : {}),
+  });
+  if (existing) return existing;
+  try {
+    return await prisma.performanceReview.create({
+      data: { cycleId, employeeId, status: 'DRAFT', ...extraData },
+      ...(include ? { include } : {}),
+    });
+  } catch (err) {
+    if (err.code !== 'P2002') throw err;
+    return prisma.performanceReview.findFirst({
+      where: { cycleId, employeeId },
+      ...(include ? { include } : {}),
+    });
+  }
+}
 import {
   createCycleSchema,
   updateCycleSchema,
@@ -180,63 +221,57 @@ async function ensureActiveCycle(tenantId, options = {}) {
     },
   });
 
-  // If not found, create it dynamically
+  // If not found, create it dynamically. A concurrent request may create the
+  // same (tenantId, frequency, name) row first — the unique constraint turns
+  // that into a P2002 which we handle by re-fetching the winner.
   if (!cycle) {
-    cycle = await prisma.appraisalCycle.create({
-      data: {
-        tenantId,
-        name: period.name,
-        frequency: period.frequency,
-        startDate: period.startDate,
-        endDate: period.endDate,
-        status: 'ACTIVE',
-      },
-      include: {
-        parameters: true,
-      },
-    });
-
     try {
-      await prisma.$executeRawUnsafe(
-        `UPDATE "appraisal_cycles" SET "year" = $1, "month" = $2, "monthNumber" = $3, "createdById" = $4 WHERE "id" = $5`,
-        period.year,
-        period.month,
-        period.monthNumber,
-        createdById || null,
-        cycle.id
-      );
-    } catch (_) {}
-
-    // Check if the tenant already has parameters from an existing cycle so custom skills carry forward!
-    const existingParams = await prisma.appraisalParameter.findMany({
-      where: { tenantId },
-      distinct: ['name'],
-      orderBy: { order: 'asc' },
-    });
-
-    const paramsToSeed = existingParams.length > 0
-      ? existingParams.map((p) => ({ name: p.name, order: p.order, isActive: p.isActive }))
-      : DEFAULT_PARAMETERS;
-
-    for (const param of paramsToSeed) {
-      await prisma.appraisalParameter.create({
+      cycle = await prisma.appraisalCycle.create({
         data: {
           tenantId,
-          cycleId: cycle.id,
-          name: param.name,
-          order: param.order,
-          isActive: param.isActive !== false,
+          name: period.name,
+          frequency: period.frequency,
+          year: period.year ?? null,
+          month: period.month ?? null,
+          monthNumber: period.monthNumber ?? null,
+          createdById: createdById || null,
+          startDate: period.startDate,
+          endDate: period.endDate,
+          status: 'ACTIVE',
         },
+        include: { parameters: true },
       });
+
+      // Check if the tenant already has parameters from an existing cycle so custom skills carry forward!
+      const existingParams = await prisma.appraisalParameter.findMany({
+        where: { tenantId },
+        distinct: ['name'],
+        orderBy: { order: 'asc' },
+      });
+
+      const paramsToSeed = existingParams.length > 0
+        ? existingParams.map((p) => ({ name: p.name, order: p.order, isActive: p.isActive }))
+        : DEFAULT_PARAMETERS;
+
+      if (paramsToSeed.length > 0) {
+        await prisma.appraisalParameter.createMany({
+          data: paramsToSeed.map((param) => ({
+            tenantId,
+            cycleId: cycle.id,
+            name: param.name,
+            order: param.order,
+            isActive: param.isActive !== false,
+          })),
+        });
+      }
+    } catch (err) {
+      if (err.code !== 'P2002') throw err;
+      // Lost the race — fall through and load the row the other request created.
     }
 
-    cycle = await prisma.appraisalCycle.findUnique({
-      where: { id: cycle.id },
-      include: {
-        parameters: {
-          orderBy: { order: 'asc' },
-        },
-      },
+    cycle = await prisma.appraisalCycle.findFirst({
+      where: { tenantId, frequency: period.frequency, name: period.name },
+      include: { parameters: { orderBy: { order: 'asc' } } },
     });
   }
 
@@ -305,27 +340,30 @@ export async function createCycle(req, res, next) {
       });
     }
 
-    const newCycle = await prisma.appraisalCycle.create({
-      data: {
-        tenantId: req.tenantId,
-        name: cycleName,
-        frequency: period.frequency,
-        startDate: cycleStartDate,
-        endDate: cycleEndDate,
-        status,
-      },
-    });
-
+    let newCycle;
     try {
-      await prisma.$executeRawUnsafe(
-        `UPDATE "appraisal_cycles" SET "year" = $1, "month" = $2, "monthNumber" = $3, "createdById" = $4 WHERE "id" = $5`,
-        period.year,
-        period.month,
-        monthNumber || period.monthNumber,
-        req.user.id,
-        newCycle.id
-      );
-    } catch (_) {}
+      newCycle = await prisma.appraisalCycle.create({
+        data: {
+          tenantId: req.tenantId,
+          name: cycleName,
+          frequency: period.frequency,
+          year: period.year ?? null,
+          month: period.month ?? null,
+          monthNumber: monthNumber || period.monthNumber || null,
+          createdById: req.user.id,
+          startDate: cycleStartDate,
+          endDate: cycleEndDate,
+          status,
+        },
+      });
+    } catch (err) {
+      if (err.code === 'P2002') {
+        return res.status(409).json({
+          error: `Appraisal cycle for ${period.frequency} ${period.month || ''} ${period.year || ''} already exists.`,
+        });
+      }
+      throw err;
+    }
 
     // Clone existing tenant parameters so custom skills carry over to new cycles!
     const existingParams = await prisma.appraisalParameter.findMany({
@@ -338,15 +376,15 @@ export async function createCycle(req, res, next) {
       ? existingParams.map((p) => ({ name: p.name, order: p.order, isActive: p.isActive }))
       : DEFAULT_PARAMETERS;
 
-    for (const param of paramsToSeed) {
-      await prisma.appraisalParameter.create({
-        data: {
+    if (paramsToSeed.length > 0) {
+      await prisma.appraisalParameter.createMany({
+        data: paramsToSeed.map((param) => ({
           tenantId: req.tenantId,
           cycleId: newCycle.id,
           name: param.name,
           order: param.order,
           isActive: param.isActive !== false,
-        },
+        })),
       });
     }
 
@@ -404,24 +442,12 @@ export async function listCycles(req, res, next) {
       orderBy: [{ startDate: 'desc' }, { createdAt: 'desc' }],
     });
 
-    // Safely retrieve year, month, monthNumber, createdById from PostgreSQL table
-    const rawRows = await prisma.$queryRawUnsafe(
-      `SELECT "id", "year", "month", "monthNumber", "createdById" FROM "appraisal_cycles" WHERE "tenantId" = $1`,
-      req.tenantId
-    ).catch(() => []);
-
-    const metaMap = new Map();
-    for (const r of rawRows) {
-      metaMap.set(r.id, r);
-    }
-
     let mappedCycles = cycles.map((c) => {
-      const meta = metaMap.get(c.id);
       const sDate = new Date(c.startDate);
-      const computedYear = meta?.year ?? (c.year || sDate.getFullYear());
-      const computedMonth = meta?.month ?? (c.month || MONTH_NAMES[sDate.getMonth()]);
-      const computedMonthNum = meta?.monthNumber ?? (c.monthNumber || (sDate.getMonth() + 1));
-      const computedCreatedById = meta?.createdById ?? c.createdById;
+      const computedYear = c.year || sDate.getFullYear();
+      const computedMonth = c.month || MONTH_NAMES[sDate.getMonth()];
+      const computedMonthNum = c.monthNumber || (sDate.getMonth() + 1);
+      const computedCreatedById = c.createdById;
 
       return {
         id: c.id,
@@ -559,7 +585,7 @@ export async function updateCycle(req, res, next) {
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.errors });
     }
-    const { frequency, name, status, year, month, endDate, dueDate } = parsed.data;
+    const { frequency, name, status, year, month, startDate, endDate, dueDate } = parsed.data;
 
     const cycle = await prisma.appraisalCycle.findFirst({
       where: { id, tenantId: req.tenantId },
@@ -569,14 +595,19 @@ export async function updateCycle(req, res, next) {
       return res.status(404).json({ error: 'Appraisal cycle not found' });
     }
 
+    // `dueDate` is only an alias for `endDate` when no explicit endDate is given.
+    const resolvedEndDate = endDate ?? dueDate;
+
     const updated = await prisma.appraisalCycle.update({
       where: { id },
       data: {
         ...(frequency && { frequency }),
         ...(name && { name }),
         ...(status && { status }),
-        ...(endDate && { endDate: new Date(endDate) }),
-        ...(dueDate && { endDate: new Date(dueDate) }),
+        ...(startDate && { startDate: new Date(startDate) }),
+        ...(resolvedEndDate && { endDate: new Date(resolvedEndDate) }),
+        ...(year !== undefined && { year: parseInt(year, 10) }),
+        ...(month !== undefined && { month }),
       },
       include: {
         parameters: {
@@ -584,17 +615,6 @@ export async function updateCycle(req, res, next) {
         },
       },
     });
-
-    if (year !== undefined || month !== undefined) {
-      try {
-        await prisma.$executeRawUnsafe(
-          `UPDATE "appraisal_cycles" SET "year" = COALESCE($1, "year"), "month" = COALESCE($2, "month") WHERE "id" = $3`,
-          year !== undefined ? parseInt(year, 10) : null,
-          month !== undefined ? month : null,
-          id
-        );
-      } catch (_) {}
-    }
 
     res.json(updated);
   } catch (err) {
@@ -796,41 +816,12 @@ export async function getMyReview(req, res, next) {
     });
     const cycleId = activeCycle.id;
 
-    let review = await prisma.performanceReview.findFirst({
-      where: {
-        cycleId,
-        employeeId: req.user.id,
-      },
-      include: {
-        cycle: true,
-        scores: {
-          include: {
-            parameter: true,
-          },
-        },
-      },
-    });
-
-    // If no review exists, create a DRAFT review
-    if (!review) {
-      review = await prisma.performanceReview.create({
-        data: {
-          cycleId,
-          employeeId: req.user.id,
-          status: 'DRAFT',
-          reviewType: activeCycle.frequency || 'MONTHLY',
-          dueDate: activeCycle.endDate,
-        },
-        include: {
-          cycle: true,
-          scores: {
-            include: {
-              parameter: true,
-            },
-          },
-        },
-      });
-    }
+    const review = await getOrCreateReview(
+      cycleId,
+      req.user.id,
+      { reviewType: activeCycle.frequency || 'MONTHLY', dueDate: activeCycle.endDate },
+      { cycle: true, scores: { include: { parameter: true } } },
+    );
 
     // Ensure all active parameters have a score slot
     const activeParameters = await prisma.appraisalParameter.findMany({
@@ -873,6 +864,10 @@ export async function updateSelfAssessment(req, res, next) {
 
     if (review.employeeId !== req.user.id) {
       return res.status(403).json({ error: 'Forbidden: You can only update your own self-assessment' });
+    }
+
+    if (SELF_LOCKED_STATUSES.includes(review.status) || review.hrSignoffStatus === 'RELEASED') {
+      return res.status(409).json({ error: 'Your self-assessment is locked because it has already been reviewed.' });
     }
 
     // Upsert scores if provided
@@ -964,7 +959,7 @@ export async function getMyGoals(req, res, next) {
     // RBAC & Multi-tenant downline verification:
     // If accessing another employee's goals, caller must be HR / Admin / Super Admin or direct/downline manager
     const callerRole = (req.user.role || '').toUpperCase();
-    const isElevatedRole = ['SUPER_ADMIN', 'ADMIN', 'HR', 'LEADERSHIP', 'OWNER', 'CMD', 'DIRECTOR'].includes(callerRole);
+    const isElevatedRole = hasRole(callerRole, ELEVATED_ROLES);
     if (targetEmpId !== req.user.id && !isElevatedRole) {
       const isSubordinate = await goalService.isSubordinate(req.user.id, targetEmpId, req.tenantId);
       const isFallbackSubordinate = (!targetUser.managerId || targetUser.managerId === req.user.id) && ['MANAGER', 'HR', 'ADMIN'].includes(callerRole);
@@ -1167,18 +1162,9 @@ export async function syncGoalsToAppraisal(req, res, next) {
     let targetReviewId = reviewId;
     if (!targetReviewId) {
       const activeCycle = await ensureActiveCycle(req.tenantId, { frequency, periodName, cycleId, year, month, createdById: req.user.id });
-      let existingReview = await prisma.performanceReview.findFirst({
-        where: { employeeId, cycleId: activeCycle.id },
+      const existingReview = await getOrCreateReview(activeCycle.id, employeeId, {
+        reviewType: activeCycle.frequency || 'MONTHLY',
       });
-      if (!existingReview) {
-        existingReview = await prisma.performanceReview.create({
-          data: {
-            employeeId,
-            cycleId: activeCycle.id,
-            status: 'DRAFT',
-          },
-        });
-      }
       targetReviewId = existingReview.id;
     }
 
@@ -1236,7 +1222,7 @@ export async function getDirectReports(req, res, next) {
     const { search, department } = parsedQuery.data;
 
     const userRole = (req.user.role || '').toUpperCase();
-    const isHrOrAdmin = ['HR', 'SUPER_ADMIN', 'CMD', 'ADMIN', 'DIRECTOR', 'OWNER', 'LEADERSHIP'].includes(userRole);
+    const isHrOrAdmin = hasRole(userRole, ELEVATED_ROLES);
 
     let where;
     if (isHrOrAdmin) {
@@ -1371,70 +1357,37 @@ export async function getEmployeeReviewForManager(req, res, next) {
       return res.status(404).json({ error: 'Employee not found' });
     }
 
-    const userRole = (req.user.role || '').toUpperCase();
-    const isHrOrAdmin = ['HR', 'SUPER_ADMIN', 'CMD', 'ADMIN', 'OWNER', 'DIRECTOR', 'LEADERSHIP'].includes(userRole);
-    const isExplicitManager = employee.managerId === req.user.id;
-    const isFallbackManager = (!employee.managerId || employee.managerId === req.user.id) && ['MANAGER', 'HR', 'ADMIN', 'SUPER_ADMIN', 'CMD', 'OWNER', 'DIRECTOR', 'LEADERSHIP'].includes(userRole);
-
-    if (!isExplicitManager && !isFallbackManager && !isHrOrAdmin) {
+    if (!(await canManagerReview(req.user, employee, req.tenantId))) {
       return res.status(403).json({ error: 'Access forbidden: you are not the manager of this employee' });
     }
 
-    let review = await prisma.performanceReview.findFirst({
-      where: { cycleId, employeeId },
-      include: {
-        employee: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            designation: true,
-            department: true,
-            role: true,
-            managerId: true,
-            manager: {
-              select: { id: true, name: true, email: true },
-            },
-            createdAt: true,
+    const reviewInclude = {
+      employee: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          designation: true,
+          department: true,
+          role: true,
+          managerId: true,
+          manager: {
+            select: { id: true, name: true, email: true },
           },
-        },
-        scores: {
-          include: { parameter: true },
+          createdAt: true,
         },
       },
-    });
+      scores: {
+        include: { parameter: true },
+      },
+    };
 
-    if (!review) {
-      review = await prisma.performanceReview.create({
-        data: {
-          cycleId,
-          employeeId,
-          status: 'DRAFT',
-          reviewType: activeCycle.frequency || 'MONTHLY',
-          dueDate: activeCycle.endDate,
-        },
-        include: {
-          employee: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-              designation: true,
-              department: true,
-              role: true,
-              managerId: true,
-              manager: {
-                select: { id: true, name: true, email: true },
-              },
-              createdAt: true,
-            },
-          },
-          scores: {
-            include: { parameter: true },
-          },
-        },
-      });
-    }
+    const review = await getOrCreateReview(
+      cycleId,
+      employeeId,
+      { reviewType: activeCycle.frequency || 'MONTHLY', dueDate: activeCycle.endDate },
+      reviewInclude,
+    );
 
     const activeParameters = await prisma.appraisalParameter.findMany({
       where: { cycleId, isActive: true },
@@ -1471,13 +1424,17 @@ export async function updateManagerReview(req, res, next) {
       return res.status(404).json({ error: 'Performance review not found' });
     }
 
-    const userRole = (req.user.role || '').toUpperCase();
-    const isHrOrAdmin = ['HR', 'SUPER_ADMIN', 'CMD', 'ADMIN', 'OWNER', 'DIRECTOR', 'LEADERSHIP'].includes(userRole);
-    const isExplicitManager = review.employee.managerId === req.user.id;
-    const isFallbackManager = (!review.employee.managerId || review.employee.managerId === req.user.id) && ['MANAGER', 'HR', 'ADMIN', 'SUPER_ADMIN', 'CMD', 'OWNER', 'DIRECTOR', 'LEADERSHIP'].includes(userRole);
-
-    if (!isExplicitManager && !isFallbackManager && !isHrOrAdmin) {
+    if (!(await canManagerReview(req.user, review.employee, req.tenantId))) {
       return res.status(403).json({ error: 'Access forbidden: you are not authorized to evaluate this employee' });
+    }
+
+    // Stage gating: the employee must have submitted their self-assessment, and a
+    // finalised (HR-released / completed) review can no longer be re-opened here.
+    if (review.hrSignoffStatus === 'RELEASED' || review.status === 'COMPLETED') {
+      return res.status(409).json({ error: 'This appraisal has been finalised and can no longer be changed by the manager.' });
+    }
+    if (!['SUBMITTED', 'MANAGER_REVIEWED'].includes(review.status) && !hasRole(req.user.role, ELEVATED_ROLES)) {
+      return res.status(409).json({ error: 'The employee has not submitted their self-assessment yet.' });
     }
 
     let totalScore = 0;
@@ -1558,7 +1515,7 @@ export async function createPeerNomination(req, res, next) {
     const cycleId = passedCycleId || activeCycle.id;
 
     const userRole = (req.user.role || '').toUpperCase();
-    const isElevated = ['HR', 'SUPER_ADMIN', 'CMD', 'ADMIN', 'OWNER', 'LEADERSHIP', 'MANAGER'].includes(userRole);
+    const isElevated = hasRole(userRole, MANAGER_OR_ELEVATED_ROLES);
     const actualRevieweeId = (isElevated && revieweeId) ? revieweeId : req.user.id;
 
     if (!reviewerId) {
@@ -1719,7 +1676,7 @@ export async function getMyNominatedPeers(req, res, next) {
     const activeCycle = await ensureActiveCycle(req.tenantId, { cycleId: cycleIdQuery, year: yearQuery, month: monthQuery });
 
     const userRole = (req.user.role || '').toUpperCase();
-    const isElevated = ['HR', 'SUPER_ADMIN', 'CMD', 'ADMIN', 'OWNER', 'LEADERSHIP', 'MANAGER'].includes(userRole);
+    const isElevated = hasRole(userRole, MANAGER_OR_ELEVATED_ROLES);
     const targetRevieweeId = (isElevated && (employeeId || revieweeId))
       ? (employeeId || revieweeId)
       : req.user.id;
@@ -1772,7 +1729,7 @@ export async function deletePeerNomination(req, res, next) {
     const { id } = parsedParams.data;
 
     const userRole = (req.user.role || '').toUpperCase();
-    const isElevated = ['HR', 'SUPER_ADMIN', 'CMD', 'ADMIN', 'OWNER', 'LEADERSHIP'].includes(userRole);
+    const isElevated = hasRole(userRole, ELEVATED_ROLES);
 
     const nomination = await prisma.peerNomination.findFirst({
       where: {
@@ -2040,42 +1997,16 @@ export async function getHrAuditReview(req, res, next) {
       return res.status(404).json({ error: 'Employee not found' });
     }
 
-    let review = await prisma.performanceReview.findFirst({
-      where: { cycleId, employeeId },
-      include: {
-        employee: {
-          select: { id: true, name: true, email: true, designation: true, department: true, band: true },
-        },
-        hrSignedOffBy: {
-          select: { id: true, name: true, email: true },
-        },
-        scores: {
-          include: { parameter: true },
-        },
+    const review = await getOrCreateReview(
+      cycleId,
+      employeeId,
+      { reviewType: activeCycle.frequency || 'ANNUAL' },
+      {
+        employee: { select: { id: true, name: true, email: true, designation: true, department: true, band: true } },
+        hrSignedOffBy: { select: { id: true, name: true, email: true } },
+        scores: { include: { parameter: true } },
       },
-    });
-
-    if (!review) {
-      review = await prisma.performanceReview.create({
-        data: {
-          cycleId,
-          employeeId,
-          status: 'DRAFT',
-          reviewType: activeCycle.frequency || 'ANNUAL',
-        },
-        include: {
-          employee: {
-            select: { id: true, name: true, email: true, designation: true, department: true, band: true },
-          },
-          hrSignedOffBy: {
-            select: { id: true, name: true, email: true },
-          },
-          scores: {
-            include: { parameter: true },
-          },
-        },
-      });
-    }
+    );
 
     const activeParameters = await prisma.appraisalParameter.findMany({
       where: { cycleId, isActive: true },
@@ -2184,7 +2115,7 @@ export async function updateHrAuditReview(req, res, next) {
 // PHASE 9: REVIEWS ROLLUP DASHBOARD (/uer/reviews)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function getMyAllReviews(req, res, next) {
+export async function getMyAllReviews(req, res, next, opts = {}) {
   try {
     const parsedQuery = listAppraisalsQuerySchema.safeParse(req.query);
     if (!parsedQuery.success) {
@@ -2195,9 +2126,16 @@ export async function getMyAllReviews(req, res, next) {
     const skip = (page - 1) * limit;
 
     const whereClause = {
-      employeeId: req.user.id,
       cycle: { tenantId: req.tenantId },
     };
+
+    if (opts.allEmployees) {
+      // Org-wide view for HR / Admin — optionally narrowed to one employee.
+      const empFilter = req.query.employeeId;
+      if (empFilter && empFilter !== 'all') whereClause.employeeId = empFilter;
+    } else {
+      whereClause.employeeId = req.user.id;
+    }
 
     if (frequency) {
       whereClause.cycle = {
@@ -2239,6 +2177,9 @@ export async function getMyAllReviews(req, res, next) {
           scores: {
             include: { parameter: true },
           },
+          ...(opts.allEmployees ? {
+            employee: { select: { id: true, name: true, email: true, designation: true, department: true } },
+          } : {}),
         },
         orderBy: { createdAt: 'desc' },
         skip,
@@ -2282,6 +2223,7 @@ export async function getMyAllReviews(req, res, next) {
         averageHrScore: avgHr,
         scores: rev.scores,
         createdAt: rev.createdAt,
+        ...(rev.employee ? { employee: rev.employee, employeeId: rev.employeeId } : {}),
       };
     });
 
@@ -2357,14 +2299,12 @@ export async function getReviewById(req, res, next) {
 
     // RBAC:
     // - Employee can view their own review
-    // - Manager can view direct reports' reviews
-    // - HR, ADMIN, SUPER_ADMIN, CMD, LEADERSHIP, OWNER can view all within tenant
-    const allowedRoles = ['HR', 'ADMIN', 'SUPER_ADMIN', 'CMD', 'LEADERSHIP', 'OWNER'];
-    const isElevated = allowedRoles.includes(req.user.role?.toUpperCase());
+    // - A manager anywhere up the reporting chain can view it
+    // - Elevated roles (HR / ADMIN / SUPER_ADMIN / CMD) can view all within tenant
     const isOwner = review.employeeId === req.user.id;
-    const isManager = review.employee?.managerId === req.user.id;
+    const canView = isOwner || await canManagerReview(req.user, review.employee, req.tenantId);
 
-    if (!isElevated && !isOwner && !isManager) {
+    if (!canView) {
       return res.status(403).json({ error: 'Access forbidden: You do not have permission to view this appraisal' });
     }
 
@@ -2433,23 +2373,13 @@ export async function submitSelfRating(req, res, next) {
     });
     const cycleId = activeCycle.id;
 
-    let review = await prisma.performanceReview.findFirst({
-       where: {
-         cycleId,
-         employeeId: req.user.id,
-       },
+    const review = await getOrCreateReview(cycleId, req.user.id, {
+      reviewType: activeCycle.frequency || 'MONTHLY',
+      dueDate: activeCycle.endDate,
     });
 
-    if (!review) {
-      review = await prisma.performanceReview.create({
-        data: {
-          cycleId,
-          employeeId: req.user.id,
-          status: 'DRAFT',
-          reviewType: activeCycle.frequency || 'MONTHLY',
-          dueDate: activeCycle.endDate,
-        },
-      });
+    if (SELF_LOCKED_STATUSES.includes(review.status) || review.hrSignoffStatus === 'RELEASED') {
+      return res.status(409).json({ error: 'Your self-assessment is locked because it has already been reviewed.' });
     }
 
     let totalScore = 0;
@@ -2522,9 +2452,12 @@ export async function submitManagerRating(req, res, next) {
 
 /**
  * List appraisal reviews (GET /api/appraisals)
+ * - HR / Admin / CMD / Super Admin: every review in the tenant (optionally
+ *   filtered by ?employeeId=).
+ * - Everyone else: only their own reviews.
  */
 export async function listAppraisals(req, res, next) {
-  return getMyAllReviews(req, res, next);
+  return getMyAllReviews(req, res, next, { allEmployees: hasRole(req.user.role, ELEVATED_ROLES) });
 }
 
 /**
@@ -2555,13 +2488,21 @@ export async function deleteReview(req, res, next) {
       return res.status(404).json({ error: 'Performance review not found' });
     }
 
-    const role = req.user.role?.toUpperCase() || '';
     const isOwner = review.employeeId === req.user.id;
-    const isManager = review.employee.managerId === req.user.id;
-    const isElevated = ['HR', 'SUPER_ADMIN', 'CMD', 'ADMIN', 'OWNER', 'LEADERSHIP'].includes(role);
+    const isElevated = hasRole(req.user.role, ELEVATED_ROLES);
+    const isManager = !isElevated && await canManagerReview(req.user, review.employee, req.tenantId);
 
     if (!isOwner && !isManager && !isElevated) {
       return res.status(403).json({ error: 'Access denied: You are not authorized to delete this appraisal record.' });
+    }
+
+    // A review that has progressed past DRAFT is part of the record — only
+    // elevated roles may delete it, and a released one is immutable.
+    if (review.hrSignoffStatus === 'RELEASED' && req.user.role?.toUpperCase() !== 'SUPER_ADMIN') {
+      return res.status(409).json({ error: 'A released appraisal cannot be deleted.' });
+    }
+    if (review.status !== 'DRAFT' && !isElevated) {
+      return res.status(409).json({ error: 'Only a draft appraisal can be deleted by the employee or manager.' });
     }
 
     await prisma.performanceReview.delete({
@@ -2612,13 +2553,17 @@ export async function updateReview(req, res, next) {
       return res.status(404).json({ error: 'Performance review not found' });
     }
 
-    const role = req.user.role?.toUpperCase() || '';
     const isOwner = review.employeeId === req.user.id;
-    const isManager = review.employee.managerId === req.user.id;
-    const isElevated = ['HR', 'SUPER_ADMIN', 'CMD', 'ADMIN', 'OWNER', 'LEADERSHIP'].includes(role);
+    const isElevated = hasRole(req.user.role, ELEVATED_ROLES);
+    const isManager = !isElevated && await canManagerReview(req.user, review.employee, req.tenantId);
 
     if (!isOwner && !isManager && !isElevated) {
       return res.status(403).json({ error: 'Access denied: You are not authorized to update this review.' });
+    }
+
+    // A finalised review is immutable for everyone except elevated roles.
+    if ((review.hrSignoffStatus === 'RELEASED' || review.status === 'COMPLETED') && !isElevated) {
+      return res.status(409).json({ error: 'This appraisal has been finalised and can no longer be edited.' });
     }
 
     const {
@@ -2633,9 +2578,12 @@ export async function updateReview(req, res, next) {
 
     const dataToUpdate = {};
     if (isOwner || isElevated) {
-      if (selfAccomplishments !== undefined) dataToUpdate.selfAccomplishments = selfAccomplishments;
-      if (selfWeaknesses !== undefined) dataToUpdate.selfWeaknesses = selfWeaknesses;
-      if (selfRating !== undefined) dataToUpdate.selfRating = Number(selfRating);
+      // The owner can only touch self fields while the review is still theirs.
+      if (isElevated || !SELF_LOCKED_STATUSES.includes(review.status)) {
+        if (selfAccomplishments !== undefined) dataToUpdate.selfAccomplishments = selfAccomplishments;
+        if (selfWeaknesses !== undefined) dataToUpdate.selfWeaknesses = selfWeaknesses;
+        if (selfRating !== undefined) dataToUpdate.selfRating = Number(selfRating);
+      }
     }
 
     if (isManager || isElevated) {
@@ -2646,7 +2594,8 @@ export async function updateReview(req, res, next) {
     if (isElevated) {
       if (hikePercentage !== undefined) dataToUpdate.hikePercentage = Number(hikePercentage);
       if (status !== undefined) dataToUpdate.status = status;
-    } else if (status === 'DRAFT' || status === 'SUBMITTED') {
+    } else if (isOwner && (status === 'DRAFT' || status === 'SUBMITTED') && !SELF_LOCKED_STATUSES.includes(review.status)) {
+      // Owner may only move between DRAFT and SUBMITTED, and only before a review has started.
       dataToUpdate.status = status;
     }
 

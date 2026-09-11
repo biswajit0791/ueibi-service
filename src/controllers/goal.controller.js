@@ -9,6 +9,9 @@ import {
   goalResubmitSchema,
 } from '../validations/goal.schema.js';
 import { goalService, GOAL_CATEGORIES, GOAL_TYPES, GOAL_PRIORITIES } from '../services/goal.service.js';
+import { ELEVATED_ROLES, hasRole } from '../lib/roles.js';
+import { getCurrentFinancialYear, getCurrentQuarter } from '../lib/financialYear.js';
+import { GOAL_EDITABLE_STATUSES } from '../lib/workflowStatus.js';
 
 /**
  * Traverses up the reporting chain from targetId to see if managerId is encountered.
@@ -34,9 +37,9 @@ export async function getAssignableUsers(req, res, next) {
     const role = req.user.role;
     const tenantId = req.tenantId;
 
-    if (role === 'SUPER_ADMIN' || role === 'ADMIN' || role === 'HR' || role === 'LEADERSHIP' || role === 'OWNER') {
+    if (hasRole(role, ELEVATED_ROLES)) {
       const users = await prisma.tenantUser.findMany({
-        where: { tenantId, status: 'ACTIVE' },
+        where: { tenantId, status: 'ACTIVE', isDeleted: false },
         select: {
           id: true,
           name: true,
@@ -52,7 +55,7 @@ export async function getAssignableUsers(req, res, next) {
     }
 
     const allUsers = await prisma.tenantUser.findMany({
-      where: { tenantId, status: 'ACTIVE' },
+      where: { tenantId, status: 'ACTIVE', isDeleted: false },
       select: {
         id: true,
         name: true,
@@ -157,6 +160,7 @@ export async function createGoal(req, res, next) {
         id: { in: targetEmployeeIds },
         tenantId: req.tenantId,
         status: 'ACTIVE',
+        isDeleted: false,
       },
       select: { id: true, name: true, email: true, department: true, designation: true, managerId: true },
     });
@@ -170,13 +174,13 @@ export async function createGoal(req, res, next) {
     }
 
     // Enforce server-side RBAC & Manager reporting downline authorization
-    const allowedRoles = ['SUPER_ADMIN', 'ADMIN', 'HR', 'MANAGER', 'LEADERSHIP', 'OWNER'];
-    const isElevated = ['SUPER_ADMIN', 'ADMIN', 'HR', 'LEADERSHIP', 'OWNER'].includes(req.user.role);
+    const isElevated = hasRole(req.user.role, ELEVATED_ROLES);
+    const canAssignToOthers = isElevated || String(req.user.role || '').toUpperCase() === 'MANAGER';
 
     for (const targetId of targetEmployeeIds) {
       if (targetId === req.user.id) continue;
 
-      if (!allowedRoles.includes(req.user.role)) {
+      if (!canAssignToOthers) {
         return res.status(403).json({
           error: 'Access forbidden: you do not have permission to assign goals to other employees',
         });
@@ -203,8 +207,8 @@ export async function createGoal(req, res, next) {
           category: category || 'General',
           goalType: goalType || 'General',
           priority: priority || 'medium',
-          financialYear: financialYear || 'FY 2026-27',
-          quarter: quarter || 'All',
+          financialYear: financialYear || getCurrentFinancialYear(),
+          quarter: quarter || getCurrentQuarter(),
           startDate: startDate ? new Date(startDate) : undefined,
           targetDate: targetDate ? new Date(targetDate) : undefined,
           dueDate: dueDate ? new Date(dueDate) : (targetDate ? new Date(targetDate) : undefined),
@@ -212,6 +216,7 @@ export async function createGoal(req, res, next) {
           specialNotes: specialNotes || null,
           employeeId: targetEmployeeIds[0],
           createdBy: req.user.name,
+          createdById: req.user.id,
           status: 'DRAFT',
         },
       });
@@ -287,8 +292,15 @@ export async function listGoals(req, res, next) {
   try {
     const { employeeId, status, financialYear, category, scope } = req.query;
 
+    // Pagination (backwards compatible: callers that don't pass `page` still get
+    // a single page, just capped so a huge tenant can't return thousands of
+    // deeply-included goal trees in one response).
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 100));
+    const skip = (page - 1) * limit;
+
     const where = { tenantId: req.tenantId };
-    const isElevated = ['SUPER_ADMIN', 'ADMIN', 'HR', 'LEADERSHIP', 'OWNER'].includes(req.user.role);
+    const isElevated = hasRole(req.user.role, ELEVATED_ROLES);
 
     if (employeeId && employeeId !== 'all') {
       const targetUser = await prisma.tenantUser.findFirst({
@@ -323,7 +335,7 @@ export async function listGoals(req, res, next) {
         // 2. Goals assigned to downline employees (including HR/Admin created goals!)
         // 3. Goals created by self
         const allTenantUsers = await prisma.tenantUser.findMany({
-          where: { tenantId: req.tenantId, status: 'ACTIVE' },
+          where: { tenantId: req.tenantId, status: 'ACTIVE', isDeleted: false },
           select: { id: true, managerId: true },
         });
 
@@ -355,7 +367,8 @@ export async function listGoals(req, res, next) {
         where.OR = [
           { employeeId: { in: allowedUserIds } },
           { assignments: { some: { employeeId: { in: allowedUserIds } } } },
-          { createdBy: req.user.name },
+          { createdById: req.user.id },
+          { createdBy: req.user.name }, // legacy rows without createdById
         ];
       } else if (isElevated) {
         // HR/Admin: If employeeId is not specified and not 'all', default to own or tenant
@@ -379,39 +392,52 @@ export async function listGoals(req, res, next) {
       where.category = category;
     }
 
-    const items = await prisma.goal.findMany({
-      where,
-      include: {
-        employee: {
-          select: { id: true, name: true, email: true, department: true, designation: true, managerId: true },
-        },
-        assignments: {
-          include: {
-            employee: {
-              select: { id: true, name: true, email: true, department: true, designation: true, managerId: true },
+    const [total, items] = await Promise.all([
+      prisma.goal.count({ where }),
+      prisma.goal.findMany({
+        where,
+        include: {
+          employee: {
+            select: { id: true, name: true, email: true, department: true, designation: true, managerId: true },
+          },
+          assignments: {
+            include: {
+              employee: {
+                select: { id: true, name: true, email: true, department: true, designation: true, managerId: true },
+              },
+              assignedBy: {
+                select: { id: true, name: true, role: true },
+              },
             },
-            assignedBy: {
-              select: { id: true, name: true, role: true },
+          },
+          tasks: {
+            orderBy: { createdAt: 'asc' },
+            include: {
+              employee: { select: { id: true, name: true } },
+            },
+          },
+          auditLogs: {
+            orderBy: { createdAt: 'desc' },
+            include: {
+              performedBy: { select: { id: true, name: true, role: true } },
             },
           },
         },
-        tasks: {
-          orderBy: { createdAt: 'asc' },
-          include: {
-            employee: { select: { id: true, name: true } },
-          },
-        },
-        auditLogs: {
-          orderBy: { createdAt: 'desc' },
-          include: {
-            performedBy: { select: { id: true, name: true, role: true } },
-          },
-        },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+    ]);
 
-    res.json({ items });
+    res.json({
+      items,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit) || 1,
+      },
+    });
   } catch (err) {
     next(err);
   }
@@ -456,23 +482,9 @@ export async function getGoalById(req, res, next) {
       return res.status(404).json({ error: 'Goal not found' });
     }
 
-    // IDOR Protection: Verify caller is elevated, assignee, creator, or downline manager
-    const isElevated = ['SUPER_ADMIN', 'ADMIN', 'HR', 'LEADERSHIP', 'OWNER'].includes(req.user.role);
-    const isOwner = goal.employeeId === req.user.id || (goal.assignments && goal.assignments.some(a => a.employeeId === req.user.id));
-    let isAuthorizedManager = false;
-    if (req.user.role === 'MANAGER' || !isElevated) {
-      for (const a of (goal.assignments || [])) {
-        if (await checkIsSubordinate(req.user.id, a.employeeId, req.tenantId)) {
-          isAuthorizedManager = true;
-          break;
-        }
-      }
-      if (!isAuthorizedManager && goal.employeeId) {
-        isAuthorizedManager = await checkIsSubordinate(req.user.id, goal.employeeId, req.tenantId);
-      }
-    }
-
-    if (!isElevated && !isOwner && !isAuthorizedManager && goal.createdBy !== req.user.name) {
+    // IDOR protection: elevated role, primary/assignee, creator, or downline manager
+    const canAccess = await goalService.canAccessGoal(goal, req.user, req.tenantId);
+    if (!canAccess) {
       return res.status(403).json({ error: 'Access forbidden: you do not have permission to view this goal' });
     }
 
@@ -499,22 +511,18 @@ export async function updateGoal(req, res, next) {
       return res.status(404).json({ error: 'Goal not found' });
     }
 
-    const isOwner = existing.employeeId === req.user.id || existing.assignments.some(a => a.employeeId === req.user.id);
-    const isElevated = ['SUPER_ADMIN', 'ADMIN', 'HR'].includes(req.user.role);
-    let isManager = false;
-    if (!isOwner && !isElevated) {
-      for (const a of existing.assignments) {
-        if (await checkIsSubordinate(req.user.id, a.employeeId, req.tenantId)) {
-          isManager = true;
-          break;
-        }
-      }
-      if (!isManager && existing.employeeId) {
-        isManager = await checkIsSubordinate(req.user.id, existing.employeeId, req.tenantId);
-      }
-      if (!isManager && existing.createdBy !== req.user.name) {
-        return res.status(403).json({ error: 'Access forbidden: you cannot edit this goal' });
-      }
+    const canAccess = await goalService.canAccessGoal(existing, req.user, req.tenantId);
+    if (!canAccess) {
+      return res.status(403).json({ error: 'Access forbidden: you cannot edit this goal' });
+    }
+
+    // A plain edit is only allowed while the goal is still being worked on.
+    // Once it has entered the review workflow (PENDING_MANAGER_REVIEW, etc.) the
+    // dedicated workflow endpoints must be used instead.
+    if (!GOAL_EDITABLE_STATUSES.includes(existing.status) && !hasRole(req.user.role, ELEVATED_ROLES)) {
+      return res.status(409).json({
+        error: `Goal cannot be edited while it is in "${existing.status}". Use the review workflow actions instead.`,
+      });
     }
 
     const updated = await prisma.goal.update({
@@ -531,7 +539,6 @@ export async function updateGoal(req, res, next) {
         ...(parsed.data.targetDate ? { targetDate: new Date(parsed.data.targetDate) } : {}),
         ...(parsed.data.attachments ? { attachments: parsed.data.attachments } : {}),
         ...(parsed.data.specialNotes !== undefined ? { specialNotes: parsed.data.specialNotes } : {}),
-        ...(parsed.data.status ? { status: parsed.data.status } : {}),
       },
       include: {
         employee: true,
@@ -571,10 +578,11 @@ export async function deleteGoal(req, res, next) {
       return res.status(404).json({ error: 'Goal not found' });
     }
 
-    const isElevated = ['SUPER_ADMIN', 'ADMIN', 'HR'].includes(req.user.role);
-    const isOwner = goal.employeeId === req.user.id || (goal.assignments.length === 1 && goal.assignments[0].employeeId === req.user.id);
+    const isElevated = hasRole(req.user.role, ELEVATED_ROLES);
+    const isCreator = (goal.createdById && goal.createdById === req.user.id)
+      || (!goal.createdById && goal.createdBy === req.user.name);
     let isAuthorizedManager = false;
-    if (req.user.role === 'MANAGER' || !isElevated) {
+    if (!isElevated && !isCreator) {
       for (const a of goal.assignments) {
         if (await checkIsSubordinate(req.user.id, a.employeeId, req.tenantId)) {
           isAuthorizedManager = true;
@@ -586,13 +594,25 @@ export async function deleteGoal(req, res, next) {
       }
     }
 
-    if (!isElevated && !isOwner && !isAuthorizedManager && goal.createdBy !== req.user.name) {
+    if (!isElevated && !isCreator && !isAuthorizedManager) {
       return res.status(403).json({ error: 'Access forbidden: you do not have permission to delete this goal' });
     }
 
-    await prisma.goal.delete({
-      where: { id },
-    });
+    // A completed goal is part of the appraisal record — only elevated roles may remove it.
+    if (goal.status === 'COMPLETED' && !isElevated) {
+      return res.status(409).json({ error: 'A completed goal can only be removed by HR / Admin.' });
+    }
+
+    // Detach linked tasks (convert to standalone) BEFORE deleting the goal so the
+    // `onDelete: Cascade` on Task.goalId doesn't silently wipe employees' task
+    // history, comments and audit logs.
+    await prisma.$transaction([
+      prisma.task.updateMany({
+        where: { goalId: id },
+        data: { goalId: null, isStandalone: true },
+      }),
+      prisma.goal.delete({ where: { id } }),
+    ]);
 
     res.json({ success: true, message: 'Goal deleted successfully' });
   } catch (err) {

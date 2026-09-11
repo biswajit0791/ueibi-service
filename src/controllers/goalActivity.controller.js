@@ -1,12 +1,30 @@
 import { prisma } from '../lib/prisma.js';
 import { goalCommentSchema } from '../validations/goal.schema.js';
 import { logTaskAudit, pushNotification } from './taskActivity.controller.js';
+import { goalService } from '../services/goal.service.js';
+import { HR_ROLES, hasRole } from '../lib/roles.js';
 
 // ─── Helper: write a goal audit log entry ──────────────────────────────────
 async function logGoalAudit({ goalId, performedById, action, details, previousValue }) {
   return prisma.goalAuditLog.create({
     data: { goalId, performedById, action, details: details || null, previousValue: previousValue || undefined },
   });
+}
+
+// ─── Helper: load a tenant-scoped goal and assert the caller may see it ─────
+async function loadAccessibleGoal(goalId, req) {
+  const goal = await prisma.goal.findFirst({
+    where: { id: goalId, tenantId: req.tenantId },
+    include: { assignments: { select: { employeeId: true } } },
+  });
+  if (!goal) {
+    throw { status: 404, message: 'Goal not found' };
+  }
+  const allowed = await goalService.canAccessGoal(goal, req.user, req.tenantId);
+  if (!allowed) {
+    throw { status: 403, message: 'Access forbidden: you do not have permission to view this goal' };
+  }
+  return goal;
 }
 
 // ─── POST /api/goals/:id/comments ───────────────────────────────────────────
@@ -19,20 +37,14 @@ export async function addGoalComment(req, res, next) {
     }
     const { comment, attachments } = parsed.data;
 
-    // Verify goal belongs to current tenant
-    const goal = await prisma.goal.findFirst({
-      where: { id: goalId, tenantId: req.tenantId },
-    });
-    if (!goal) return res.status(404).json({ error: 'Goal not found' });
-
-    const isOwner = goal.employeeId === req.user.id;
-    const allowedRoles = ['SUPER_ADMIN', 'HR', 'ADMIN'];
-    if (!isOwner && !allowedRoles.includes(req.user.role)) {
-      const isSubordinate = await prisma.tenantUser.findFirst({
-        where: { id: goal.employeeId, managerId: req.user.id, tenantId: req.tenantId },
-      });
-      if (!isSubordinate) return res.status(403).json({ error: 'Access forbidden' });
+    let goal;
+    try {
+      goal = await loadAccessibleGoal(goalId, req);
+    } catch (e) {
+      return res.status(e.status || 500).json({ error: e.message });
     }
+    const isOwner = goal.employeeId === req.user.id
+      || goal.assignments.some((a) => a.employeeId === req.user.id);
 
     const newComment = await prisma.goalComment.create({
       data: {
@@ -76,11 +88,11 @@ export async function listGoalComments(req, res, next) {
   try {
     const { id: goalId } = req.params;
 
-    // Verify goal belongs to current tenant
-    const goal = await prisma.goal.findFirst({
-      where: { id: goalId, tenantId: req.tenantId },
-    });
-    if (!goal) return res.status(404).json({ error: 'Goal not found' });
+    try {
+      await loadAccessibleGoal(goalId, req);
+    } catch (e) {
+      return res.status(e.status || 500).json({ error: e.message });
+    }
 
     const items = await prisma.goalComment.findMany({
       where: { goalId },
@@ -101,11 +113,11 @@ export async function listGoalAudit(req, res, next) {
   try {
     const { id: goalId } = req.params;
 
-    // Verify goal belongs to current tenant
-    const goal = await prisma.goal.findFirst({
-      where: { id: goalId, tenantId: req.tenantId },
-    });
-    if (!goal) return res.status(404).json({ error: 'Goal not found' });
+    try {
+      await loadAccessibleGoal(goalId, req);
+    } catch (e) {
+      return res.status(e.status || 500).json({ error: e.message });
+    }
 
     const items = await prisma.goalAuditLog.findMany({
       where: { goalId },
@@ -135,7 +147,7 @@ export async function deleteGoalComment(req, res, next) {
       return res.status(404).json({ error: 'Comment not found' });
     }
 
-    if (comment.authorId !== req.user.id && !['SUPER_ADMIN', 'HR', 'ADMIN'].includes(req.user.role)) {
+    if (comment.authorId !== req.user.id && !hasRole(req.user.role, HR_ROLES)) {
       return res.status(403).json({ error: 'Access forbidden' });
     }
 
