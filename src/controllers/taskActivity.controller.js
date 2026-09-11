@@ -3,6 +3,7 @@ import { emitToUser } from '../lib/socket.js';
 import { commentService } from '../services/comment.service.js';
 import { storageService } from '../services/storage/storage.service.js';
 import { createTaskCommentSchema } from '../validations/task.schema.js';
+import { loadTaskForUser } from '../services/taskAccess.service.js';
 
 // ─── Helper: write an audit log entry ──────────────────────────────────────
 export async function logTaskAudit({ taskId, performedById, action, details, previousValue }) {
@@ -23,42 +24,9 @@ export async function pushNotification({ tenantId, recipientId, type, title, bod
 }
 
 // ─── Helper: verify task access for requester ──────────────────────────────
-async function verifyTaskAccess(taskId, requestingUser, tenantId) {
-  const task = await prisma.task.findFirst({
-    where: { id: taskId, tenantId },
-  });
-  if (!task) {
-    throw { status: 404, message: 'Task not found' };
-  }
-
-  const isOwner = task.employeeId === requestingUser.id;
-  const allowedRoles = ['SUPER_ADMIN', 'HR', 'ADMIN', 'LEADERSHIP', 'OWNER'];
-  if (!isOwner && !allowedRoles.includes(requestingUser.role)) {
-    if (requestingUser.role === 'MANAGER') {
-      const isSubordinate = await prisma.tenantUser.findFirst({
-        where: { id: task.employeeId, managerId: requestingUser.id, tenantId },
-      });
-      if (isSubordinate) return task;
-
-      // Also allow if this is a companion dependency task created for the manager's team
-      if (task.isDependencyOf) {
-        const parentTask = await prisma.task.findFirst({
-          where: { id: task.isDependencyOf, tenantId },
-        });
-        if (parentTask) {
-          if (parentTask.employeeId === requestingUser.id) return task;
-          const parentSub = await prisma.tenantUser.findFirst({
-            where: { id: parentTask.employeeId, managerId: requestingUser.id, tenantId },
-          });
-          if (parentSub) return task;
-        }
-      }
-    }
-    throw { status: 403, message: 'Access forbidden: you are not authorized to view or comment on this task' };
-  }
-
-  return task;
-}
+// Delegates to the shared taskAccess service so comments/audit enforce the same
+// rule as task edits.
+const verifyTaskAccess = (taskId, requestingUser, tenantId) => loadTaskForUser(taskId, requestingUser, tenantId);
 
 // ─── POST /api/tasks/:id/comments ───────────────────────────────────────────
 export async function addTaskComment(req, res, next) {

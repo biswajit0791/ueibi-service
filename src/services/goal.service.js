@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma.js';
 import { emitToTenant, emitToUser } from '../lib/socket.js';
+import { ELEVATED_ROLES, HR_ROLES, hasRole } from '../lib/roles.js';
 
 export const GOAL_CATEGORIES = [
   'Technical Skills',
@@ -68,6 +69,45 @@ export class GoalService {
       console.warn('[GoalService] Failed to create audit log:', err.message);
       return null;
     }
+  }
+
+  /**
+   * Central authorization check for a single goal.
+   *
+   * Access is granted when the caller is:
+   *  - an elevated role (SUPER_ADMIN / ADMIN / CMD / HR)
+   *  - the goal's primary employee OR any assignee
+   *  - the person who created the goal (matched by id, with a name fallback for
+   *    legacy rows created before `createdById` existed)
+   *  - a manager anywhere up the reporting chain of the primary employee or any
+   *    assignee
+   *
+   * @param {{ id, employeeId, createdById, createdBy, assignments? }} goal
+   * @returns {Promise<boolean>}
+   */
+  async canAccessGoal(goal, user, tenantId) {
+    if (!goal) return false;
+    if (hasRole(user.role, ELEVATED_ROLES)) return true;
+
+    if (goal.employeeId === user.id) return true;
+    if (goal.createdById && goal.createdById === user.id) return true;
+    if (!goal.createdById && goal.createdBy && goal.createdBy === user.name) return true;
+
+    let assignments = goal.assignments;
+    if (!assignments) {
+      assignments = await prisma.goalAssignment.findMany({
+        where: { goalId: goal.id },
+        select: { employeeId: true },
+      });
+    }
+    if (assignments.some((a) => a.employeeId === user.id)) return true;
+
+    const targets = new Set(assignments.map((a) => a.employeeId));
+    if (goal.employeeId) targets.add(goal.employeeId);
+    for (const targetId of targets) {
+      if (await this.isSubordinate(user.id, targetId, tenantId)) return true;
+    }
+    return false;
   }
 
   /**
@@ -198,7 +238,7 @@ export class GoalService {
 
     const userAssignment = goal.assignments?.find(a => a.employeeId === user.id);
     const isAssignee = goal.employeeId === user.id || Boolean(userAssignment);
-    const isElevated = ['SUPER_ADMIN', 'HR', 'ADMIN', 'CMD', 'DIRECTOR', 'LEADERSHIP', 'OWNER'].includes(user.role);
+    const isElevated = hasRole(user.role, ELEVATED_ROLES);
 
     if (!isAssignee && !isElevated) {
       throw { status: 403, message: 'Access forbidden: only the goal assignee can submit this goal for review' };
@@ -282,7 +322,7 @@ export class GoalService {
       });
     } else {
       const hrUsers = await prisma.tenantUser.findMany({
-        where: { tenantId, role: { in: ['HR', 'SUPER_ADMIN', 'ADMIN'] } },
+        where: { tenantId, role: { in: HR_ROLES } },
         select: { id: true },
       });
       for (const hr of hrUsers) {
@@ -331,17 +371,16 @@ export class GoalService {
     const targetEmpId = targetEmployeeId || goal.employeeId || goal.assignments?.[0]?.employeeId;
     const targetUser = goal.assignments?.find(a => a.employeeId === targetEmpId)?.employee || goal.employee;
 
-    const isDirectManager = targetUser?.managerId === user.id;
-    const isElevated = ['SUPER_ADMIN', 'ADMIN', 'HR', 'LEADERSHIP', 'OWNER', 'CMD', 'DIRECTOR'].includes(user.role);
-    const isAssignedByManager = goal.assignments?.some(a => a.assignedById === user.id) || goal.createdBy === user.name;
-    const isManagerRole = user.role === 'MANAGER';
-    let isAuthorizedManager = isDirectManager || isElevated;
+    const isElevated = hasRole(user.role, ELEVATED_ROLES);
+    const createdByCaller = (goal.createdById && goal.createdById === user.id)
+      || (!goal.createdById && goal.createdBy && goal.createdBy === user.name);
+    const isAssignedByCaller = goal.assignments?.some(a => a.assignedById === user.id) || createdByCaller;
+    // A line manager anywhere up the reporting chain of the target employee may review.
+    const isReportingManager = (targetEmpId && targetEmpId !== user.id)
+      ? await this.isSubordinate(user.id, targetEmpId, tenantId)
+      : false;
 
-    if (!isAuthorizedManager && isManagerRole) {
-      if (isAssignedByManager || !targetUser?.managerId) {
-        isAuthorizedManager = true;
-      }
-    }
+    const isAuthorizedManager = isElevated || isReportingManager || isAssignedByCaller;
 
     if (!isAuthorizedManager) {
       throw { status: 403, message: 'Access forbidden: you are not the reporting manager for this employee' };
@@ -408,7 +447,7 @@ export class GoalService {
     // If Manager Approved, notify HR
     if (isApprove) {
       const hrUsers = await prisma.tenantUser.findMany({
-        where: { tenantId, role: { in: ['HR', 'SUPER_ADMIN', 'ADMIN', 'CMD', 'DIRECTOR'] } },
+        where: { tenantId, role: { in: HR_ROLES } },
         select: { id: true },
       });
       for (const hr of hrUsers) {
@@ -454,7 +493,7 @@ export class GoalService {
       throw { status: 404, message: 'Goal not found' };
     }
 
-    const isHR = ['HR', 'SUPER_ADMIN', 'ADMIN', 'LEADERSHIP', 'OWNER', 'CMD', 'DIRECTOR'].includes(user.role);
+    const isHR = hasRole(user.role, HR_ROLES);
     if (!isHR) {
       throw { status: 403, message: 'Access forbidden: HR authorization required for final sign-off' };
     }
@@ -554,7 +593,7 @@ export class GoalService {
 
     const userAssignment = goal.assignments?.find(a => a.employeeId === user.id);
     const isAssignee = goal.employeeId === user.id || Boolean(userAssignment);
-    const isElevated = ['SUPER_ADMIN', 'HR', 'ADMIN', 'CMD', 'DIRECTOR', 'LEADERSHIP', 'OWNER'].includes(user.role);
+    const isElevated = hasRole(user.role, ELEVATED_ROLES);
 
     if (!isAssignee && !isElevated) {
       throw { status: 403, message: 'Access forbidden: only the goal assignee can resubmit this goal' };

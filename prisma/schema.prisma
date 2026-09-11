@@ -26,38 +26,38 @@ enum UserStatus {
 }
 
 model Tenant {
-  id                String               @id @default(cuid())
-  companyName       String
-  domainName        String               @unique
-  tenantCode        String               @unique
-  licenseLimit      Int                  @default(0)
-  createdAt         DateTime             @default(now())
-  updatedAt         DateTime             @updatedAt
-  users             TenantUser[]
-  registrationId    String?              @unique
-  registration      CompanyRegistration? @relation(fields: [registrationId], references: [id])
-  exEmployeeRecords ExEmployeeRecord[]
-  nonJoinerRecords  NonJoinerRecord[]
-  notifications     Notification[]
-  goals             Goal[]
-  goalAssignments   GoalAssignment[]
-  tasks             Task[]
-  policies          Policy[]
-  policyAssignments PolicyAssignment[]
-  policyAcceptances PolicyAcceptance[]
-  policyAuditLogs   PolicyAuditLog[]
-  appraisalCycles   AppraisalCycle[]
+  id                  String                   @id @default(cuid())
+  companyName         String
+  domainName          String                   @unique
+  tenantCode          String                   @unique
+  licenseLimit        Int                      @default(0)
+  createdAt           DateTime                 @default(now())
+  updatedAt           DateTime                 @updatedAt
+  users               TenantUser[]
+  registrationId      String?                  @unique
+  registration        CompanyRegistration?     @relation(fields: [registrationId], references: [id])
+  exEmployeeRecords   ExEmployeeRecord[]
+  nonJoinerRecords    NonJoinerRecord[]
+  notifications       Notification[]
+  goals               Goal[]
+  goalAssignments     GoalAssignment[]
+  tasks               Task[]
+  policies            Policy[]
+  policyAssignments   PolicyAssignment[]
+  policyAcceptances   PolicyAcceptance[]
+  policyAuditLogs     PolicyAuditLog[]
+  appraisalCycles     AppraisalCycle[]
   appraisalParameters AppraisalParameter[]
-  peerNominations   PeerNomination[]
-  hubEvents         HubEvent[]
-  leaveTypes        LeaveType[]
-  leaveBalances     LeaveBalance[]
-  wfhPolicy         WfhPolicy?
-  wfhBalances       WfhBalance[]
-  leaveRequests     LeaveRequest[]
-  leaveAuditLogs    LeaveAuditLog[]
-  leaveAdjustments  LeaveBalanceAdjustment[]
-  galleryPosts      GalleryPost[]
+  peerNominations     PeerNomination[]
+  hubEvents           HubEvent[]
+  leaveTypes          LeaveType[]
+  leaveBalances       LeaveBalance[]
+  wfhPolicy           WfhPolicy?
+  wfhBalances         WfhBalance[]
+  leaveRequests       LeaveRequest[]
+  leaveAuditLogs      LeaveAuditLog[]
+  leaveAdjustments    LeaveBalanceAdjustment[]
+  galleryPosts        GalleryPost[]
 
   @@map("tenants")
 }
@@ -107,43 +107,43 @@ model TenantUser {
   esic    String?
 
   // Smart HR Relations
-  bankDetails    BankDetails?
-  workHistory    WorkHistory[]
-  exitDetails    ExitDetails?
-  goals          Goal[]
-  goalAssignments GoalAssignment[] @relation("UserGoalAssignments")
-  assignedGoalRecords GoalAssignment[] @relation("AssignedGoals")
-  tasks          Task[]
-  leaveRequests  LeaveRequest[]      @relation("EmployeeLeaves")
-  approvedLeaves LeaveRequest[]      @relation("ApprovedLeaves")
-  createdLeaveTypes  LeaveType[]              @relation("LeaveTypeCreator")
-  updatedLeaveTypes  LeaveType[]              @relation("LeaveTypeUpdater")
-  leaveBalances      LeaveBalance[]           @relation("EmployeeLeaveBalances")
-  wfhBalances        WfhBalance[]             @relation("EmployeeWfhBalances")
-  leaveAuditLogs     LeaveAuditLog[]          @relation("LeaveAuditActor")
-  adjustedBalances   LeaveBalanceAdjustment[] @relation("BalanceAdjuster")
-  balanceAdjustments LeaveBalanceAdjustment[] @relation("BalanceAdjustmentEmployee")
-  reviews        PerformanceReview[] @relation("EmployeeReviews")
-  hrSignedOffReviews PerformanceReview[] @relation("HrSignoffActor")
-  exReviews      ExEmployerReview[]  @relation("EmployeeExReviews")
-  nominatedReviewsAsReviewee PeerNomination[] @relation("NominationReviewee")
-  nominatedReviewsAsReviewer PeerNomination[] @relation("NominationReviewer")
-  createdAppraisalCycles     AppraisalCycle[] @relation("CycleCreator")
+  bankDetails                BankDetails?
+  workHistory                WorkHistory[]
+  exitDetails                ExitDetails?
+  goals                      Goal[]
+  goalAssignments            GoalAssignment[]         @relation("UserGoalAssignments")
+  assignedGoalRecords        GoalAssignment[]         @relation("AssignedGoals")
+  tasks                      Task[]
+  leaveRequests              LeaveRequest[]           @relation("EmployeeLeaves")
+  approvedLeaves             LeaveRequest[]           @relation("ApprovedLeaves")
+  createdLeaveTypes          LeaveType[]              @relation("LeaveTypeCreator")
+  updatedLeaveTypes          LeaveType[]              @relation("LeaveTypeUpdater")
+  leaveBalances              LeaveBalance[]           @relation("EmployeeLeaveBalances")
+  wfhBalances                WfhBalance[]             @relation("EmployeeWfhBalances")
+  leaveAuditLogs             LeaveAuditLog[]          @relation("LeaveAuditActor")
+  adjustedBalances           LeaveBalanceAdjustment[] @relation("BalanceAdjuster")
+  balanceAdjustments         LeaveBalanceAdjustment[] @relation("BalanceAdjustmentEmployee")
+  reviews                    PerformanceReview[]      @relation("EmployeeReviews")
+  hrSignedOffReviews         PerformanceReview[]      @relation("HrSignoffActor")
+  exReviews                  ExEmployerReview[]       @relation("EmployeeExReviews")
+  nominatedReviewsAsReviewee PeerNomination[]         @relation("NominationReviewee")
+  nominatedReviewsAsReviewer PeerNomination[]         @relation("NominationReviewer")
+  createdAppraisalCycles     AppraisalCycle[]         @relation("CycleCreator")
   // Policies & Compliance Relations
-  createdPolicies   Policy[]           @relation("PolicyAuthor")
-  publishedPolicies Policy[]           @relation("PolicyPublisher")
-  assignedPolicies  PolicyAssignment[] @relation("PolicyAssigner")
-  policyAssignments PolicyAssignment[] @relation("UserPolicyAssignments")
-  policyAcceptances PolicyAcceptance[] @relation("UserPolicyAcceptances")
-  policyAuditLogs   PolicyAuditLog[]   @relation("PolicyAuditActor")
+  createdPolicies            Policy[]                 @relation("PolicyAuthor")
+  publishedPolicies          Policy[]                 @relation("PolicyPublisher")
+  assignedPolicies           PolicyAssignment[]       @relation("PolicyAssigner")
+  policyAssignments          PolicyAssignment[]       @relation("UserPolicyAssignments")
+  policyAcceptances          PolicyAcceptance[]       @relation("UserPolicyAcceptances")
+  policyAuditLogs            PolicyAuditLog[]         @relation("PolicyAuditActor")
 
   // Activity & Notifications
-  taskComments   TaskComment[]       @relation("TaskCommentAuthor")
-  taskAuditLogs  TaskAuditLog[]      @relation("TaskAuditPerformer")
-  goalComments   GoalComment[]       @relation("GoalCommentAuthor")
-  goalAuditLogs  GoalAuditLog[]      @relation("GoalAuditPerformer")
-  notifications  Notification[]      @relation("UserNotifications")
-  createdEvents  HubEvent[]          @relation("EventCreator")
+  taskComments        TaskComment[]        @relation("TaskCommentAuthor")
+  taskAuditLogs       TaskAuditLog[]       @relation("TaskAuditPerformer")
+  goalComments        GoalComment[]        @relation("GoalCommentAuthor")
+  goalAuditLogs       GoalAuditLog[]       @relation("GoalAuditPerformer")
+  notifications       Notification[]       @relation("UserNotifications")
+  createdEvents       HubEvent[]           @relation("EventCreator")
   passwordResetTokens PasswordResetToken[]
   galleryPosts   GalleryPost[]       @relation("GalleryPostUploader")
   galleryLikes   GalleryLike[]       @relation("GalleryLikeUser")
@@ -155,8 +155,8 @@ model TenantUser {
 
   // Company Hub Profile (employee-controlled social fields)
   hubBio       String?
-  hubBirthday  String?  // Display string e.g. "June 28" — separate from statutory dob
-  profileSnaps Json?    // Array of uploaded image URL strings
+  hubBirthday  String? // Display string e.g. "June 28" — separate from statutory dob
+  profileSnaps Json? // Array of uploaded image URL strings
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -186,7 +186,7 @@ model WorkHistory {
   companyName    String
   designation    String
   startDate      DateTime
-  endDate        DateTime
+  endDate        DateTime? // null = still employed there ("current")
   reasonForExit  String?
   verifiedStatus String     @default("PENDING") // PENDING | VERIFIED | REJECTED
 
@@ -196,7 +196,7 @@ model WorkHistory {
 model ExitDetails {
   id              String     @id @default(cuid())
   userId          String     @unique
-  user          TenantUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user            TenantUser @relation(fields: [userId], references: [id], onDelete: Cascade)
   resignationDate DateTime
   lastWorkingDay  DateTime
   exitReason      String
@@ -354,56 +354,60 @@ model NotificationLog {
 }
 
 model Goal {
-  id                  String         @id @default(cuid())
+  id                  String           @id @default(cuid())
   tenantId            String
-  tenant              Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant              Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   title               String
-  description         String?        @db.Text
-  goalType            String?        @default("General") // General | Private
+  description         String?          @db.Text
+  goalType            String?          @default("General") // General | Private
   category            String?
-  priority            String? // high | medium | low
-  createdBy           String?
-  progress            Int            @default(0)
-  status              String         @default("DRAFT") // DRAFT | ASSIGNED | ACKNOWLEDGED | IN_PROGRESS | UNDER_REVIEW | COMPLETED
+  priority            String? // low | medium | high | critical
+  createdBy           String? // creator display name (legacy; kept for display)
+  createdById         String? // creator user id — used for authorization
+  progress            Int              @default(0)
+  // Lifecycle: DRAFT → IN_PROGRESS → READY_FOR_SUBMISSION → PENDING_MANAGER_REVIEW
+  //   → PENDING_HR_REVIEW → COMPLETED  (CHANGES_REQUESTED / REJECTED route back)
+  status              String           @default("DRAFT")
   financialYear       String?
   quarter             String?
   startDate           DateTime?
   targetDate          DateTime?
   attachments         String[]
-  specialNotes        String?        @db.Text
+  specialNotes        String?          @db.Text
   dueDate             DateTime?
   employeeId          String?
-  employee            TenantUser?    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  milestones          Int            @default(0)
-  completedMilestones Int            @default(0)
+  employee            TenantUser?      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  milestones          Int              @default(0)
+  completedMilestones Int              @default(0)
   tasks               Task[]
   comments            GoalComment[]
   auditLogs           GoalAuditLog[]
   assignments         GoalAssignment[]
-  createdAt           DateTime       @default(now())
-  updatedAt           DateTime       @updatedAt
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
 
   @@index([tenantId])
   @@index([employeeId])
+  @@index([createdById])
   @@map("goals")
 }
 
 model GoalAssignment {
-  id                  String     @id @default(cuid())
+  id                  String      @id @default(cuid())
   tenantId            String
-  tenant              Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant              Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   goalId              String
-  goal                Goal       @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  goal                Goal        @relation(fields: [goalId], references: [id], onDelete: Cascade)
   employeeId          String
-  employee            TenantUser @relation("UserGoalAssignments", fields: [employeeId], references: [id], onDelete: Cascade)
+  employee            TenantUser  @relation("UserGoalAssignments", fields: [employeeId], references: [id], onDelete: Cascade)
   assignedById        String?
   assignedBy          TenantUser? @relation("AssignedGoals", fields: [assignedById], references: [id], onDelete: SetNull)
-  progress            Int        @default(0)
-  status              String     @default("DRAFT") // DRAFT | ASSIGNED | ACKNOWLEDGED | IN_PROGRESS | UNDER_REVIEW | COMPLETED
-  milestones          Int        @default(0)
-  completedMilestones Int        @default(0)
-  createdAt           DateTime   @default(now())
-  updatedAt           DateTime   @updatedAt
+  progress            Int         @default(0)
+  status              String      @default("DRAFT") // DRAFT | ASSIGNED | ACKNOWLEDGED | IN_PROGRESS | UNDER_REVIEW | COMPLETED
+  milestones          Int         @default(0)
+  completedMilestones Int         @default(0)
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
 
   @@unique([goalId, employeeId])
   @@index([tenantId])
@@ -414,24 +418,24 @@ model GoalAssignment {
 }
 
 model Task {
-  id             String                  @id @default(cuid())
+  id             String         @id @default(cuid())
   tenantId       String
-  tenant         Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant         Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   title          String
   priority       String? // high | critical | medium | low
-  status         String                  @default("todo") // todo | in_progress | pending_on_others | in_review | done
-  progress       Int                     @default(0)
+  status         String         @default("todo") // todo | in_progress | pending_on_others | in_review | done | pending_approval | rejected  (see src/lib/workflowStatus.js)
+  progress       Int            @default(0)
   startDate      DateTime?
   dueDate        DateTime?
   financialYear  String? // e.g. "FY 2026-27"
   tags           String? // comma-separated tags
   goalId         String?
-  goal           Goal?                   @relation(fields: [goalId], references: [id], onDelete: Cascade)
-  isPrivate      Boolean                 @default(false)
-  isStandalone   Boolean                 @default(false)
-  weight         Int                     @default(1)
+  goal           Goal?          @relation(fields: [goalId], references: [id], onDelete: SetNull)
+  isPrivate      Boolean        @default(false)
+  isStandalone   Boolean        @default(false)
+  weight         Int            @default(1)
   employeeId     String
-  employee       TenantUser              @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  employee       TenantUser     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   description    String?        @db.Text
   dependency     Json? // serialised dep object: { assigneeId, depTitle, status, escalated, depTaskId }
   isDependencyOf String? // parent task ID this task is a companion dep of
@@ -468,7 +472,7 @@ model TaskAuditLog {
   task          Task       @relation(fields: [taskId], references: [id], onDelete: Cascade)
   performedById String
   performedBy   TenantUser @relation("TaskAuditPerformer", fields: [performedById], references: [id])
-  action        String // created | status_changed | edited | dependency_created | escalated | approved | deleted
+  action        String // created | status_changed | edited | progress_update | dependency_created | escalated | approved | deleted
   details       String?    @db.Text
   previousValue Json?
   createdAt     DateTime   @default(now())
@@ -499,7 +503,7 @@ model GoalAuditLog {
   goal          Goal       @relation(fields: [goalId], references: [id], onDelete: Cascade)
   performedById String
   performedBy   TenantUser @relation("GoalAuditPerformer", fields: [performedById], references: [id])
-  action        String
+  action        String // GOAL_CREATED | GOAL_UPDATED | GOAL_SUBMITTED | GOAL_RESUBMITTED | MANAGER_APPROVED | CHANGES_REQUESTED | HR_APPROVED | HR_CHANGES_REQUESTED | progress_update
   details       String?    @db.Text
   previousValue Json?
   createdAt     DateTime   @default(now())
@@ -530,41 +534,41 @@ model Notification {
 }
 
 model LeaveRequest {
-  id                     String                  @id @default(cuid())
+  id                     String          @id @default(cuid())
   tenantId               String?
-  tenant                 Tenant?                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant                 Tenant?         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   employeeId             String
-  employee               TenantUser              @relation("EmployeeLeaves", fields: [employeeId], references: [id], onDelete: Cascade)
+  employee               TenantUser      @relation("EmployeeLeaves", fields: [employeeId], references: [id], onDelete: Cascade)
   leaveTypeId            String?
-  leaveType              LeaveType?              @relation(fields: [leaveTypeId], references: [id], onDelete: SetNull)
-  type                   String                  // Legacy field: 'Casual Leave' | 'Sick Leave' | 'Annual Leave' | 'WFH'
-  requestType            String                  @default("LEAVE") // 'LEAVE' | 'WFH'
+  leaveType              LeaveType?      @relation(fields: [leaveTypeId], references: [id], onDelete: SetNull)
+  type                   String // Legacy field: 'Casual Leave' | 'Sick Leave' | 'Annual Leave' | 'WFH'
+  requestType            String          @default("LEAVE") // 'LEAVE' | 'WFH'
   startDate              DateTime
   endDate                DateTime
-  totalDays              Float                   @default(1)
-  dayType                String                  @default("FULL") // 'FULL' | 'FIRST_HALF' | 'SECOND_HALF'
-  reason                 String?                 @db.Text
+  totalDays              Float           @default(1)
+  dayType                String          @default("FULL") // 'FULL' | 'FIRST_HALF' | 'SECOND_HALF'
+  reason                 String?         @db.Text
   attachmentUrl          String?
   attachmentOriginalName String?
-  status                 String                  @default("PENDING") // PENDING | APPROVED | REJECTED | CANCELLED
-  managerStatus          String                  @default("Pending") // Pending | Approved | Rejected | Not Required
+  status                 String          @default("PENDING") // PENDING | APPROVED | REJECTED | CANCELLED
+  managerStatus          String          @default("Pending") // Pending | Approved | Rejected | Not Required
   managerId              String?
-  managerComment         String?                 @db.Text
+  managerComment         String?         @db.Text
   managerActedAt         DateTime?
-  hrStatus               String                  @default("Pending") // Pending | Approved | Rejected | Not Required
+  hrStatus               String          @default("Pending") // Pending | Approved | Rejected | Not Required
   hrId                   String?
-  hrComment              String?                 @db.Text
+  hrComment              String?         @db.Text
   hrActedAt              DateTime?
   approvedById           String?
-  approvedBy             TenantUser?             @relation("ApprovedLeaves", fields: [approvedById], references: [id])
+  approvedBy             TenantUser?     @relation("ApprovedLeaves", fields: [approvedById], references: [id])
   rejectedById           String?
   rejectedAt             DateTime?
-  rejectionReason        String?                 @db.Text
+  rejectionReason        String?         @db.Text
   cancelledById          String?
   cancelledAt            DateTime?
   auditLogs              LeaveAuditLog[]
-  createdAt              DateTime                @default(now())
-  updatedAt              DateTime                @updatedAt
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
 
   @@index([tenantId])
   @@index([employeeId, status])
@@ -679,7 +683,7 @@ model LeaveAuditLog {
   leaveRequest   LeaveRequest? @relation(fields: [leaveRequestId], references: [id], onDelete: SetNull)
   actorUserId    String
   actor          TenantUser    @relation("LeaveAuditActor", fields: [actorUserId], references: [id])
-  action         String        // LEAVE_TYPE_CREATED | LEAVE_TYPE_UPDATED | LEAVE_TYPE_ACTIVATED | LEAVE_TYPE_DEACTIVATED | LEAVE_TYPE_DELETED | LEAVE_REQUEST_CREATED | LEAVE_REQUEST_APPROVED | LEAVE_REQUEST_REJECTED | LEAVE_REQUEST_CANCELLED | WFH_REQUEST_CREATED | WFH_REQUEST_APPROVED | WFH_REQUEST_REJECTED | WFH_REQUEST_CANCELLED | BALANCE_ADJUSTED | POLICY_UPDATED
+  action         String // LEAVE_TYPE_CREATED | LEAVE_TYPE_UPDATED | LEAVE_TYPE_ACTIVATED | LEAVE_TYPE_DEACTIVATED | LEAVE_TYPE_DELETED | LEAVE_REQUEST_CREATED | LEAVE_REQUEST_APPROVED | LEAVE_REQUEST_REJECTED | LEAVE_REQUEST_CANCELLED | WFH_REQUEST_CREATED | WFH_REQUEST_APPROVED | WFH_REQUEST_REJECTED | WFH_REQUEST_CANCELLED | BALANCE_ADJUSTED | POLICY_UPDATED
   details        String?       @db.Text
   ipAddress      String?
   userAgent      String?       @db.Text
@@ -692,22 +696,22 @@ model LeaveAuditLog {
 }
 
 model LeaveBalanceAdjustment {
-  id               String      @id @default(cuid())
+  id               String     @id @default(cuid())
   tenantId         String
-  tenant           Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant           Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   employeeId       String
-  employee         TenantUser  @relation("BalanceAdjustmentEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
+  employee         TenantUser @relation("BalanceAdjustmentEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
   leaveTypeId      String?
-  leaveType        LeaveType?  @relation(fields: [leaveTypeId], references: [id], onDelete: SetNull)
-  isWfh            Boolean     @default(false)
+  leaveType        LeaveType? @relation(fields: [leaveTypeId], references: [id], onDelete: SetNull)
+  isWfh            Boolean    @default(false)
   year             Int
   previousBalance  Float
   newBalance       Float
   adjustmentAmount Float
-  reason           String      @db.Text
+  reason           String     @db.Text
   adjustedById     String
-  adjustedBy       TenantUser  @relation("BalanceAdjuster", fields: [adjustedById], references: [id])
-  createdAt        DateTime    @default(now())
+  adjustedBy       TenantUser @relation("BalanceAdjuster", fields: [adjustedById], references: [id])
+  createdAt        DateTime   @default(now())
 
   @@index([tenantId])
   @@index([employeeId])
@@ -763,23 +767,24 @@ model AppraisalCycle {
   createdAt   DateTime             @default(now())
   updatedAt   DateTime             @updatedAt
 
+  @@unique([tenantId, frequency, name])
   @@index([tenantId])
   @@index([tenantId, year, month])
   @@map("appraisal_cycles")
 }
 
 model AppraisalParameter {
-  id        String             @id @default(cuid())
+  id        String         @id @default(cuid())
   tenantId  String
-  tenant    Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant    Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   cycleId   String
-  cycle     AppraisalCycle     @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  cycle     AppraisalCycle @relation(fields: [cycleId], references: [id], onDelete: Cascade)
   name      String
-  order     Int                @default(1)
-  isActive  Boolean            @default(true)
+  order     Int            @default(1)
+  isActive  Boolean        @default(true)
   scores    ReviewScore[]
-  createdAt DateTime           @default(now())
-  updatedAt DateTime           @updatedAt
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
 
   @@index([tenantId])
   @@index([cycleId])
@@ -1053,19 +1058,19 @@ model PolicyAcceptance {
 }
 
 model PolicyAuditLog {
-  id          String      @id @default(cuid())
+  id          String     @id @default(cuid())
   tenantId    String
-  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant      Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   policyId    String?
-  policy      Policy?     @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  policy      Policy?    @relation(fields: [policyId], references: [id], onDelete: Cascade)
   actorUserId String
-  actor       TenantUser  @relation("PolicyAuditActor", fields: [actorUserId], references: [id])
-  action      String      // POLICY_CREATED | POLICY_UPDATED | POLICY_PUBLISHED | POLICY_ASSIGNED | POLICY_SIGNED | POLICY_ARCHIVED | POLICY_REMINDER_SENT
-  details     String?     @db.Text
+  actor       TenantUser @relation("PolicyAuditActor", fields: [actorUserId], references: [id])
+  action      String // POLICY_CREATED | POLICY_UPDATED | POLICY_PUBLISHED | POLICY_ASSIGNED | POLICY_SIGNED | POLICY_ARCHIVED | POLICY_REMINDER_SENT
+  details     String?    @db.Text
   ipAddress   String?
-  userAgent   String?     @db.Text
+  userAgent   String?    @db.Text
   metadata    Json?
-  createdAt   DateTime    @default(now())
+  createdAt   DateTime   @default(now())
 
   @@index([tenantId])
   @@index([policyId])
@@ -1107,7 +1112,6 @@ model PasswordResetToken {
   @@index([expiresAt])
   @@map("password_reset_tokens")
 }
-
 // ── Corporate Gallery ───────────────────────────────────────────────────────
 
 model GalleryPost {
@@ -1162,4 +1166,3 @@ model GalleryComment {
   @@index([authorId])
   @@map("gallery_comments")
 }
-
