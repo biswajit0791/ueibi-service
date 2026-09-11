@@ -102,7 +102,7 @@ export class AppraisalNotificationService {
           recipientId: revieweeId,
           type: 'appraisal',
           title: 'New 360° Feedback Received',
-          body: 'You received new 360 peer feedback. Review details are anonymized in your dashboard.',
+          body: 'You received new 360 peer feedback. Review the details in your dashboard.',
           entityType: 'peer_feedback',
       });
     } catch (err) {

@@ -1,5 +1,4 @@
 import { prisma } from '../lib/prisma.js';
-import { stripPeerReviewerIdentity } from '../lib/privacy.js';
 import { AppraisalNotificationService } from '../services/appraisalNotification.service.js';
 import { goalService } from '../services/goal.service.js';
 import { ELEVATED_ROLES, HR_ROLES, MANAGER_OR_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
@@ -2042,18 +2041,17 @@ export async function getReceivedPeerFeedback(req, res, next) {
         reviewer: n.reviewer,
       }));
 
-    // Mask reviewer identity for non-CMD
-    const sanitizedItems = stripPeerReviewerIdentity(items, req.user.role);
-
-    const count = sanitizedItems.length;
+    // Reviewer identity is shown to the recipient by design (not anonymized) —
+    // see the "Nominate a Peer" flow, which no longer promises anonymity.
+    const count = items.length;
     const averageRating = count > 0
-      ? (sanitizedItems.reduce((acc, curr) => acc + curr.rating, 0) / count).toFixed(1)
+      ? (items.reduce((acc, curr) => acc + curr.rating, 0) / count).toFixed(1)
       : '0.0';
 
     res.json({
       count,
       averageRating,
-      items: sanitizedItems,
+      items,
     });
   } catch (err) {
     next(err);
