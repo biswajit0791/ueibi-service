@@ -43,3 +43,8 @@ export const reminderSchema = z.object({
   userId: z.string().optional().nullable(),
   customMessage: z.string().optional().nullable(),
 });
+
+export const publishPolicySchema = z.object({
+  assignees: z.union([z.array(z.string()), z.literal('ALL')]).optional(),
+});
+

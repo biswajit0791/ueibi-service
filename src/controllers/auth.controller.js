@@ -6,14 +6,15 @@ import { env } from '../config/env.js';
 import { generateRawToken, hashToken } from '../lib/tokens.js';
 import { sendMail } from '../lib/mailer.js';
 import { renderPasswordResetEmail } from '../lib/emailTemplates.js';
-import { forgotPasswordSchema, resetPasswordSchema } from '../validations/auth.schema.js';
+import { loginSchema, forgotPasswordSchema, resetPasswordSchema } from '../validations/auth.schema.js';
 
 export async function login(req, res, next) {
   try {
-    const { email, password } = req.body || {};
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password are required' });
+    const parsed = loginSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
+    const { email, password } = parsed.data;
 
     const user = await prisma.tenantUser.findUnique({
       where: { email: email.trim().toLowerCase() },

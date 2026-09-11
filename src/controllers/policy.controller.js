@@ -5,6 +5,7 @@ import {
   signPolicySchema,
   assignPolicySchema,
   reminderSchema,
+  publishPolicySchema,
 } from '../validations/policy.schema.js';
 
 export async function getMyPolicies(req, res, next) {
@@ -144,7 +145,11 @@ export async function updatePolicy(req, res, next) {
 export async function publishPolicy(req, res, next) {
   try {
     const { id } = req.params;
-    const { assignees } = req.body || {};
+    const parsed = publishPolicySchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    }
+    const { assignees } = parsed.data;
     const published = await policyService.publishPolicy({
       tenantId: req.tenantId,
       user: req.user,

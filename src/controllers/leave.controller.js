@@ -275,14 +275,17 @@ export async function cancelLeaveRequest(req, res, next) {
 export async function managerApproveLeave(req, res, next) {
   try {
     const { id } = req.params;
-    const { comment } = req.body || {};
+    const validated = approvalActionSchema.safeParse({ action: 'APPROVE', comment: req.body?.comment });
+    if (!validated.success) {
+      return res.status(400).json({ error: validated.error.errors[0]?.message || 'Validation failed' });
+    }
 
     const updated = await leaveService.managerAction({
       tenantId: req.tenantId,
       requestId: id,
       managerUser: req.user,
       action: 'APPROVE',
-      comment,
+      comment: validated.data.comment,
       req,
     });
 
@@ -320,14 +323,17 @@ export async function managerRejectLeave(req, res, next) {
 export async function hrApproveLeave(req, res, next) {
   try {
     const { id } = req.params;
-    const { comment } = req.body || {};
+    const validated = approvalActionSchema.safeParse({ action: 'APPROVE', comment: req.body?.comment });
+    if (!validated.success) {
+      return res.status(400).json({ error: validated.error.errors[0]?.message || 'Validation failed' });
+    }
 
     const updated = await leaveService.hrAction({
       tenantId: req.tenantId,
       requestId: id,
       hrUser: req.user,
       action: 'APPROVE',
-      comment,
+      comment: validated.data.comment,
       req,
     });
 
@@ -365,14 +371,17 @@ export async function hrRejectLeave(req, res, next) {
 export async function adminApproveLeave(req, res, next) {
   try {
     const { id } = req.params;
-    const { comment } = req.body || {};
+    const validated = approvalActionSchema.safeParse({ action: 'APPROVE', comment: req.body?.comment });
+    if (!validated.success) {
+      return res.status(400).json({ error: validated.error.errors[0]?.message || 'Validation failed' });
+    }
 
     const updated = await leaveService.adminAction({
       tenantId: req.tenantId,
       requestId: id,
       adminUser: req.user,
       action: 'APPROVE',
-      comment,
+      comment: validated.data.comment,
       req,
     });
 

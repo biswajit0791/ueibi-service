@@ -1,5 +1,6 @@
 import swaggerJsdoc from 'swagger-jsdoc';
 import swaggerUi from 'swagger-ui-express';
+import { swaggerExtensions } from './swaggerExtensions.js';
 
 const options = {
   definition: {
@@ -6559,6 +6560,25 @@ const options = {
   apis: [], // We defined everything inline, no JSDoc annotations needed
 
 };
+
+// Merge dynamic extensions (Departments, Gallery, Registry, Employee Stats, Exits, etc.)
+if (swaggerExtensions) {
+  if (swaggerExtensions.tags) {
+    options.definition.tags = [...(options.definition.tags || []), ...swaggerExtensions.tags];
+  }
+  if (swaggerExtensions.schemas) {
+    options.definition.components.schemas = {
+      ...(options.definition.components.schemas || {}),
+      ...swaggerExtensions.schemas,
+    };
+  }
+  if (swaggerExtensions.paths) {
+    options.definition.paths = {
+      ...(options.definition.paths || {}),
+      ...swaggerExtensions.paths,
+    };
+  }
+}
 
 export const swaggerSpec = swaggerJsdoc(options);
 export const swaggerUiServe = swaggerUi.serve;

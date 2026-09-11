@@ -91,3 +91,9 @@ export const updateTaskSchema = z.object({
 export const createTaskCommentSchema = z.object({
   comment: z.string().max(2000, "Comment cannot exceed 2000 characters").optional().default(''),
 }).passthrough();
+
+export const updateTaskStatusSchema = z.object({
+  status: taskStatusSchema,
+  progress: progressSchema,
+});
+

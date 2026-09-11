@@ -58,6 +58,7 @@ model Tenant {
   leaveAuditLogs      LeaveAuditLog[]
   leaveAdjustments    LeaveBalanceAdjustment[]
   galleryPosts        GalleryPost[]
+  departments         Department[]
 
   @@map("tenants")
 }
@@ -1165,4 +1166,27 @@ model GalleryComment {
   @@index([postId])
   @@index([authorId])
   @@map("gallery_comments")
+}
+
+// ─── Department Master List ───────────────────────────────────────────────────
+// Tenant-scoped, RBAC-managed list of departments.
+// Used to drive dropdowns across Employee Records, UER Team, Leave, etc.
+// Names are stored as strings on employee records (no FK) — renaming a dept
+// does NOT retroactively change historical employee records.
+model Department {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String                        // e.g. "Engineering", "Design"
+  description String?
+  color       String?                       // optional hex e.g. "#6366f1"
+  isActive    Boolean  @default(true)       // soft-delete — false = archived
+  createdBy   String?                       // TenantUser.id (nullable for seeded)
+  sortOrder   Int      @default(0)          // for custom ordering in the dropdown
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([tenantId, name])               // no duplicate names within a tenant
+  @@index([tenantId, isActive])
+  @@map("departments")
 }
