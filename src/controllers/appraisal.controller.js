@@ -2005,13 +2005,18 @@ export async function getReceivedPeerFeedback(req, res, next) {
     if (!parsedQuery.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
     }
-    const activeCycle = await ensureActiveCycle(req.tenantId);
-    const cycleId = parsedQuery.data.cycleId || activeCycle.id;
+    // Nominations can be created under whichever cycle happens to be selected
+    // wherever the nomination was made (self-assessment cadence on the main
+    // appraisal page vs. the default "current month" on the 360 hub), and this
+    // page has no cycle picker of its own — so unless a cycleId is explicitly
+    // requested, show feedback across every cycle rather than silently
+    // defaulting to just today's real calendar month.
+    const cycleId = parsedQuery.data.cycleId || null;
 
     const nominations = await prisma.peerNomination.findMany({
       where: {
         tenantId: req.tenantId,
-        cycleId,
+        ...(cycleId ? { cycleId } : {}),
         revieweeId: req.user.id,
         status: 'COMPLETED',
       },
@@ -2067,13 +2072,14 @@ export async function getCmdPeerFeedbackForEmployee(req, res, next) {
     if (!parsedQuery.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
     }
-    const activeCycle = await ensureActiveCycle(req.tenantId);
-    const cycleId = parsedQuery.data.cycleId || activeCycle.id;
+    // Same reasoning as getReceivedPeerFeedback: don't silently scope to
+    // today's real calendar-month cycle when no cycleId was requested.
+    const cycleId = parsedQuery.data.cycleId || null;
 
     const nominations = await prisma.peerNomination.findMany({
       where: {
         tenantId: req.tenantId,
-        cycleId,
+        ...(cycleId ? { cycleId } : {}),
         revieweeId: employeeId,
         status: 'COMPLETED',
       },
