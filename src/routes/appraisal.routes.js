@@ -23,6 +23,7 @@ import {
   deletePeerNomination,
   getHrAuditReview,
   updateHrAuditReview,
+  getCycleSummary,
   getMyAllReviews,
   submitSelfRating,
   submitManagerRating,
@@ -53,6 +54,7 @@ router.post('/appraisal-cycles', requireAuth, requireTenant, authorize('HR', 'SU
 router.get('/appraisal-cycles', requireAuth, requireTenant, listCycles);
 router.get('/appraisal-cycles/active', requireAuth, requireTenant, getActiveCycle);
 router.patch('/appraisal-cycles/:id', requireAuth, requireTenant, authorize('HR', 'SUPER_ADMIN', 'CMD', 'ADMIN'), updateCycle);
+router.get('/appraisal-cycles/:id/summary', requireAuth, requireTenant, authorize('HR', 'SUPER_ADMIN', 'CMD', 'ADMIN'), getCycleSummary);
 router.get('/appraisal-parameters', requireAuth, requireTenant, listParameters);
 router.post('/appraisal-parameters', requireAuth, requireTenant, authorize('HR', 'SUPER_ADMIN', 'CMD', 'ADMIN'), createParameter);
 router.patch('/appraisal-parameters/:id', requireAuth, requireTenant, authorize('HR', 'SUPER_ADMIN', 'CMD', 'ADMIN'), updateParameter);

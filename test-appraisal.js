@@ -561,6 +561,36 @@ async function run() {
   assert(finishedReview && finishedReview.status === 'COMPLETED', 'Completed review appears in employee dashboard');
   assert(finishedReview && finishedReview.hikePercentage === 14.5, 'Final released hike percentage verified on dashboard');
 
+  // ── Phase 6.5: Org-Wide Cycle Summary & Roster Filters (HR/Admin console) ──
+  console.log(`\n${c.bold('Phase 6.5: Cycle Summary & Department/Cycle Filters')}`);
+
+  // Resolve the review's *actual* cycle from the dashboard payload rather than
+  // assuming it matches the Phase 1 `cycleId` var — /performance-reviews/mine
+  // and /appraisal-cycles/active can resolve to different cycles when multiple
+  // active cycles exist (as Phase 1B intentionally creates several).
+  const reviewCycleId = finishedReview?.cycleId;
+  assert(!!reviewCycleId, 'Completed review has a resolvable cycleId for summary/roster checks');
+
+  const summaryRes = await req(`/appraisal-cycles/${reviewCycleId}/summary`, { token: hrToken });
+  assert(summaryRes.status === 200, 'GET /api/appraisal-cycles/:id/summary returns 200 for HR');
+  assert(summaryRes.data?.cycleId === reviewCycleId, 'Summary is scoped to the requested cycle');
+  assert(typeof summaryRes.data?.totalEmployees === 'number', 'Summary includes totalEmployees headcount');
+  assert(summaryRes.data?.byStatus?.COMPLETED >= 1, 'Summary byStatus reflects the completed review from Phase 5');
+  assert(Array.isArray(summaryRes.data?.departmentBreakdown), 'Summary includes a per-department breakdown array');
+  const engDept = summaryRes.data?.departmentBreakdown?.find((d) => d.department === 'Engineering');
+  assert(!!engDept && engDept.total >= 1, 'Department breakdown includes the Engineering department with headcount');
+  assert(summaryRes.data?.hikeSummary?.released >= 1, 'Summary hikeSummary counts the released hike sign-off');
+
+  const summaryForbiddenRes = await req(`/appraisal-cycles/${reviewCycleId}/summary`, { token: employeeToken });
+  assert(summaryForbiddenRes.status === 403, 'RBAC check: plain employee gets 403 on cycle summary endpoint');
+
+  const rosterFilteredRes = await req(`/appraisals?cycleId=${reviewCycleId}&department=Engineering`, { token: hrToken });
+  assert(rosterFilteredRes.status === 200, 'GET /api/appraisals?cycleId&department returns 200 for HR');
+  const rosterHasReview = rosterFilteredRes.data?.reviews?.some((r) => r.id === reviewId);
+  assert(rosterHasReview, 'Cycle + department filtered roster includes the seeded employee review');
+  const rosterAllEngineering = rosterFilteredRes.data?.reviews?.every((r) => r.employee?.department === 'Engineering');
+  assert(rosterAllEngineering, 'Every review returned by the department filter belongs to the Engineering department');
+
   // ── Phase 7: Zod Server-Side Validation Tests ──────────────────────────────
   console.log(`\n${c.bold('Phase 7: Server-Side Zod Validation Negative Tests')}`);
 

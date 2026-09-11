@@ -71,6 +71,7 @@ import {
   peerFeedbackQuerySchema,
   cmdPeerFeedbackQuerySchema,
   hrAuditQuerySchema,
+  cycleSummaryQuerySchema,
 } from '../validations/appraisal.schema.js';
 
 const DEFAULT_PARAMETERS = [
@@ -617,6 +618,151 @@ export async function updateCycle(req, res, next) {
     });
 
     res.json(updated);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /api/appraisal-cycles/:id/summary
+ * Org-wide roll-up for HR/Admin/Super Admin/CMD: headcount vs. review status,
+ * per-department completion and average scores, and hike sign-off progress
+ * for one cycle. Tenant-scoped; no cross-tenant data.
+ */
+export async function getCycleSummary(req, res, next) {
+  try {
+    const parsedParams = cycleIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid cycle ID parameter', details: parsedParams.error.errors });
+    }
+    const { id } = parsedParams.data;
+
+    const parsedQuery = cycleSummaryQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      return res.status(400).json({ error: 'Invalid query parameters', details: parsedQuery.error.errors });
+    }
+    const { department } = parsedQuery.data;
+
+    const cycle = await prisma.appraisalCycle.findFirst({
+      where: { id, tenantId: req.tenantId },
+    });
+    if (!cycle) {
+      return res.status(404).json({ error: 'Appraisal cycle not found' });
+    }
+
+    const employeeWhere = {
+      tenantId: req.tenantId,
+      status: 'ACTIVE',
+      isDeleted: false,
+      ...(department ? { department } : {}),
+    };
+
+    const [totalEmployees, headcountByDept, reviews] = await Promise.all([
+      prisma.tenantUser.count({ where: employeeWhere }),
+      prisma.tenantUser.groupBy({
+        by: ['department'],
+        where: employeeWhere,
+        _count: { department: true },
+      }),
+      prisma.performanceReview.findMany({
+        where: {
+          cycleId: id,
+          ...(department ? { employee: { department } } : {}),
+        },
+        select: {
+          status: true,
+          hikePercentage: true,
+          hrSignoffStatus: true,
+          employee: { select: { department: true } },
+          scores: { select: { selfScore: true, managerScore: true, hrScore: true } },
+        },
+      }),
+    ]);
+
+    const byStatus = { DRAFT: 0, SUBMITTED: 0, MANAGER_REVIEWED: 0, COMPLETED: 0 };
+    const deptMap = new Map();
+    for (const row of headcountByDept) {
+      const dept = row.department || 'Unassigned';
+      deptMap.set(dept, {
+        department: dept, total: row._count.department, completed: 0,
+        selfSum: 0, selfN: 0, mgrSum: 0, mgrN: 0, hrSum: 0, hrN: 0,
+      });
+    }
+
+    let hikeSum = 0;
+    let hikeN = 0;
+    let pendingRelease = 0;
+    let released = 0;
+
+    for (const rev of reviews) {
+      byStatus[rev.status] = (byStatus[rev.status] || 0) + 1;
+
+      const dept = rev.employee?.department || 'Unassigned';
+      if (!deptMap.has(dept)) {
+        deptMap.set(dept, {
+          department: dept, total: 0, completed: 0,
+          selfSum: 0, selfN: 0, mgrSum: 0, mgrN: 0, hrSum: 0, hrN: 0,
+        });
+      }
+      const bucket = deptMap.get(dept);
+      if (rev.status === 'COMPLETED') bucket.completed += 1;
+
+      const selfScores = rev.scores.filter((s) => s.selfScore != null);
+      const mgrScores = rev.scores.filter((s) => s.managerScore != null);
+      const hrScores = rev.scores.filter((s) => s.hrScore != null);
+      if (selfScores.length) {
+        bucket.selfSum += selfScores.reduce((a, s) => a + s.selfScore, 0) / selfScores.length;
+        bucket.selfN += 1;
+      }
+      if (mgrScores.length) {
+        bucket.mgrSum += mgrScores.reduce((a, s) => a + s.managerScore, 0) / mgrScores.length;
+        bucket.mgrN += 1;
+      }
+      if (hrScores.length) {
+        bucket.hrSum += hrScores.reduce((a, s) => a + s.hrScore, 0) / hrScores.length;
+        bucket.hrN += 1;
+      }
+
+      if (rev.hikePercentage != null) {
+        hikeSum += Number(rev.hikePercentage);
+        hikeN += 1;
+      }
+      if (rev.hrSignoffStatus === 'RELEASED') released += 1;
+      else pendingRelease += 1;
+    }
+
+    const departmentBreakdown = Array.from(deptMap.values())
+      // A review whose employee has no headcount in this department bucket
+      // (e.g. an inactive/deleted employee, or one with no department set)
+      // shouldn't produce a hollow "0 of 0" entry.
+      .filter((b) => b.total > 0)
+      .map((b) => ({
+        department: b.department,
+        total: b.total,
+        completed: b.completed,
+        completionRate: b.total > 0 ? Number(((b.completed / b.total) * 100).toFixed(1)) : 0,
+        avgSelfScore: b.selfN > 0 ? Number((b.selfSum / b.selfN).toFixed(1)) : null,
+        avgManagerScore: b.mgrN > 0 ? Number((b.mgrSum / b.mgrN).toFixed(1)) : null,
+        avgHrScore: b.hrN > 0 ? Number((b.hrSum / b.hrN).toFixed(1)) : null,
+      }))
+      .sort((a, b) => a.department.localeCompare(b.department));
+
+    const completedCount = byStatus.COMPLETED || 0;
+
+    res.json({
+      cycleId: id,
+      cycleName: cycle.name,
+      totalEmployees,
+      totalReviews: reviews.length,
+      byStatus,
+      completionRate: totalEmployees > 0 ? Number(((completedCount / totalEmployees) * 100).toFixed(1)) : 0,
+      departmentBreakdown,
+      hikeSummary: {
+        avgHikePercentage: hikeN > 0 ? Number((hikeSum / hikeN).toFixed(1)) : null,
+        pendingRelease,
+        released,
+      },
+    });
   } catch (err) {
     next(err);
   }
@@ -2122,7 +2268,7 @@ export async function getMyAllReviews(req, res, next, opts = {}) {
       return res.status(400).json({ error: 'Invalid query parameters', details: parsedQuery.error.errors });
     }
 
-    const { page, limit, search, frequency, status } = parsedQuery.data;
+    const { page, limit, search, frequency, status, department, cycleId } = parsedQuery.data;
     const skip = (page - 1) * limit;
 
     const whereClause = {
@@ -2130,11 +2276,16 @@ export async function getMyAllReviews(req, res, next, opts = {}) {
     };
 
     if (opts.allEmployees) {
-      // Org-wide view for HR / Admin — optionally narrowed to one employee.
+      // Org-wide view for HR / Admin — optionally narrowed to one employee or department.
       const empFilter = req.query.employeeId;
       if (empFilter && empFilter !== 'all') whereClause.employeeId = empFilter;
+      if (department) whereClause.employee = { department };
     } else {
       whereClause.employeeId = req.user.id;
+    }
+
+    if (cycleId) {
+      whereClause.cycleId = cycleId;
     }
 
     if (frequency) {
