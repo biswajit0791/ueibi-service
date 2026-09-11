@@ -672,6 +672,97 @@ export const swaggerExtensions = {
       },
     },
     '/gallery/posts/{id}': {
+      put: {
+        tags: ['Gallery'],
+        summary: 'Update a gallery post (title, category, or replace photo)',
+        operationId: 'updateGalleryPost',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          content: {
+            'multipart/form-data': {
+              schema: {
+                type: 'object',
+                properties: {
+                  title: { type: 'string', minLength: 2, maxLength: 120, description: 'Post caption or title' },
+                  category: {
+                    type: 'string',
+                    enum: ['Socials', 'Hackathon', 'Retreat', 'Awards', 'Townhall', 'Onboarding', 'Other'],
+                  },
+                  image: { type: 'string', format: 'binary', description: 'Optional replacement photo file' },
+                },
+              },
+            },
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  title: { type: 'string', minLength: 2, maxLength: 120 },
+                  category: {
+                    type: 'string',
+                    enum: ['Socials', 'Hackathon', 'Retreat', 'Awards', 'Townhall', 'Onboarding', 'Other'],
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description: 'Gallery post updated successfully',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    message: { type: 'string' },
+                    post: { type: 'object' },
+                  },
+                },
+              },
+            },
+          },
+          400: { description: 'Validation failed' },
+          403: { description: 'Forbidden - only author or HR/Admin can update' },
+          404: { description: 'Post not found' },
+        },
+      },
+      patch: {
+        tags: ['Gallery'],
+        summary: 'Partially update a gallery post',
+        operationId: 'patchGalleryPost',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          content: {
+            'multipart/form-data': {
+              schema: {
+                type: 'object',
+                properties: {
+                  title: { type: 'string' },
+                  category: { type: 'string' },
+                  image: { type: 'string', format: 'binary' },
+                },
+              },
+            },
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  title: { type: 'string' },
+                  category: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: 'Gallery post updated' },
+          400: { description: 'Validation failed' },
+          403: { description: 'Forbidden' },
+          404: { description: 'Post not found' },
+        },
+      },
       delete: {
         tags: ['Gallery'],
         summary: 'Delete a gallery post',
@@ -679,7 +770,23 @@ export const swaggerExtensions = {
         security: [{ userCookie: [] }, { bearerAuth: [] }],
         parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
         responses: {
-          200: { description: 'Post deleted' },
+          200: {
+            description: 'Post deleted successfully',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    message: { type: 'string' },
+                    id: { type: 'string' },
+                  },
+                },
+              },
+            },
+          },
+          400: { description: 'Invalid post ID' },
+          403: { description: 'Forbidden - only author or HR/Admin can delete' },
+          404: { description: 'Post not found' },
         },
       },
     },

@@ -7,6 +7,7 @@ import { requireTenant } from '../middleware/tenantScope.js';
 import {
   listGalleryPosts,
   createGalleryPost,
+  updateGalleryPost,
   deleteGalleryPost,
   toggleGalleryLike,
   getGalleryComments,
@@ -46,6 +47,8 @@ const upload = multer({
 router.get('/gallery/categories', requireAuth, requireTenant, getGalleryCategories);
 router.get('/gallery/posts', requireAuth, requireTenant, listGalleryPosts);
 router.post('/gallery/posts', requireAuth, requireTenant, upload.single('image'), createGalleryPost);
+router.put('/gallery/posts/:id', requireAuth, requireTenant, upload.single('image'), updateGalleryPost);
+router.patch('/gallery/posts/:id', requireAuth, requireTenant, upload.single('image'), updateGalleryPost);
 router.delete('/gallery/posts/:id', requireAuth, requireTenant, deleteGalleryPost);
 
 // Like routes
