@@ -104,8 +104,9 @@ export async function updateMyHubProfile(req, res, next) {
       });
     }
 
-    const { hubBio, hubBirthday, profileSnaps } = parsed.data;
+    const { name, hubBio, hubBirthday, profileSnaps } = parsed.data;
     const data = {};
+    if (name !== undefined) data.name = name.trim();
     if (hubBio !== undefined) data.hubBio = hubBio;
     if (hubBirthday !== undefined) data.hubBirthday = hubBirthday ? hubBirthday.trim() : null;
     if (profileSnaps !== undefined) data.profileSnaps = profileSnaps;

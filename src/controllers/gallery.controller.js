@@ -13,8 +13,11 @@ import {
   saveCommentInMongo,
   deleteCommentFromMongo,
 } from '../services/galleryMongo.service.js';
-
-const ALLOWED_CATEGORIES = ['Socials', 'Hackathon', 'Retreat', 'Awards', 'Townhall', 'Onboarding', 'Other'];
+import {
+  ALLOWED_GALLERY_CATEGORIES,
+  createGalleryPostSchema,
+  addGalleryCommentSchema,
+} from '../validations/gallery.schema.js';
 
 // Helper to build full image URL
 function buildImageUrl(imageUrl) {
@@ -60,7 +63,7 @@ export async function listGalleryPosts(req, res, next) {
     const search = (req.query.search || '').trim();
 
     const where = { tenantId, isActive: true };
-    if (category && ALLOWED_CATEGORIES.includes(category)) {
+    if (category && ALLOWED_GALLERY_CATEGORIES.includes(category)) {
       where.category = category;
     }
     if (search) {
@@ -112,15 +115,11 @@ export async function createGalleryPost(req, res, next) {
       return res.status(400).json({ error: 'An image file is required' });
     }
 
-    const title = (req.body.title || '').trim();
-    if (!title || title.length < 2 || title.length > 120) {
-      return res.status(400).json({ error: 'Title must be between 2 and 120 characters' });
+    const parsed = createGalleryPostSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
-
-    const category = req.body.category || 'Socials';
-    if (!ALLOWED_CATEGORIES.includes(category)) {
-      return res.status(400).json({ error: `Category must be one of: ${ALLOWED_CATEGORIES.join(', ')}` });
-    }
+    const { title, category } = parsed.data;
 
     const imageUrl = `/uploads/${req.file.filename}`;
 
@@ -307,10 +306,11 @@ export async function addGalleryComment(req, res, next) {
     const userName = req.user.name;
     const { id: postId } = req.params;
 
-    const text = (req.body.text || '').trim();
-    if (!text || text.length > 1000) {
-      return res.status(400).json({ error: 'Comment text must be 1–1000 characters' });
+    const parsed = addGalleryCommentSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
+    const { text } = parsed.data;
 
     const post = await prisma.galleryPost.findFirst({ where: { id: postId, tenantId, isActive: true } });
     if (!post) return res.status(404).json({ error: 'Post not found' });
@@ -426,5 +426,5 @@ export async function deleteGalleryComment(req, res, next) {
 
 // GET /gallery/categories
 export async function getGalleryCategories(req, res) {
-  res.json({ categories: ALLOWED_CATEGORIES });
+  res.json({ categories: ALLOWED_GALLERY_CATEGORIES });
 }

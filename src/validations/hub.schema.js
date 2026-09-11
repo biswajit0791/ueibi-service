@@ -4,6 +4,12 @@ import { z } from 'zod';
 
 // PATCH /hub/me
 export const updateHubProfileSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(2, 'Name must be at least 2 characters')
+    .max(80, 'Name cannot exceed 80 characters')
+    .optional(),
   hubBio: z
     .string()
     .max(500, 'Bio cannot exceed 500 characters')
@@ -16,7 +22,7 @@ export const updateHubProfileSchema = z.object({
   profileSnaps: z
     .array(
       z.string().refine(
-        (url) => url.startsWith('/uploads/') || url.startsWith('http://') || url.startsWith('https://'),
+        (url) => url.startsWith('/uploads/') || url.startsWith('/') || url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:'),
         'Each snap must be a valid URL or a /uploads/ path'
       )
     )
@@ -24,7 +30,7 @@ export const updateHubProfileSchema = z.object({
     .optional(),
 }).refine(
   (data) => Object.keys(data).length > 0,
-  { message: 'At least one field (hubBio, hubBirthday, profileSnaps) must be provided' }
+  { message: 'At least one field (name, hubBio, hubBirthday, profileSnaps) must be provided' }
 );
 
 // POST /hub/events

@@ -12,10 +12,14 @@ import {
   updateEmployeeSchema,
   createExEmployeeSchema,
   createNonJoinerSchema,
+  exitEmployeeSchema,
+  bulkExEmployeeSchema,
+  bulkNonJoinerSchema,
 } from '../validations/employee.schema.js';
 import { env } from '../config/env.js';
 import { canCreateRole, getAllowedRoles } from '../lib/roleHierarchy.js';
 import { validatePasswordStrength } from '../lib/passwordPolicy.js';
+import { getLicenseStats, assertLicenseAvailable } from '../services/license.service.js';
 
 export async function inviteEmployee(req, res, next) {
   try {
@@ -58,27 +62,10 @@ export async function inviteEmployee(req, res, next) {
       return res.status(409).json({ error: 'A user with this email address already exists' });
     }
 
-    // Check license limit
-    const tenant = await prisma.tenant.findUnique({
-      where: { id: tenantId },
-    });
-    if (!tenant) {
-      return res.status(404).json({ error: 'Tenant not found' });
-    }
-
-    const activeCount = await prisma.tenantUser.count({
-      where: {
-        tenantId,
-        isDeleted: false,
-        status: { in: ['ACTIVE', 'INVITED'] },
-      },
-    });
-
-    if (activeCount >= tenant.licenseLimit) {
-      return res.status(400).json({
-        error: `License limit reached (${tenant.licenseLimit} licenses). Cannot invite more users.`,
-      });
-    }
+    // ── Atomic license capacity check ────────────────────────────────────────
+    // Using a Prisma interactive transaction ensures the count() and the
+    // subsequent create() are serialized, preventing race conditions when two
+    // admins invite employees simultaneously at the last available slot.
 
     // Validate the reporting manager (if supplied) belongs to this tenant.
     let resolvedManagerId = null;
@@ -97,25 +84,44 @@ export async function inviteEmployee(req, res, next) {
     const tempPassword = 'UEIBI-' + crypto.randomBytes(6).toString('hex').toUpperCase();
     const passwordHash = await bcrypt.hash(tempPassword, 10);
 
-    const user = await prisma.tenantUser.create({
-      data: {
-        tenantId,
-        email: email.trim().toLowerCase(),
-        passwordHash,
-        name: name.trim(),
-        role: targetRole, // validated & authorized above
-        status: 'INVITED',
-        mustChangePassword: true,
-        designation,
-        department,
-        band: band || undefined,
-        managerId: resolvedManagerId,
-        joinDate: joinDate ? new Date(joinDate) : null,
-        phone,
-        pan,
-        dob: dob ? new Date(`${dob}-01-01`) : null, // Store birth year correctly as DateTime
-        remarks: feedbackRemarks,
-      },
+    // Safely parse date fields
+    const parsedJoinDate = joinDate ? (() => {
+      const d = new Date(joinDate);
+      return isNaN(d.getTime()) ? new Date() : d;
+    })() : new Date();
+
+    const parsedDob = dob ? (() => {
+      const trimmed = String(dob).trim();
+      if (/^\d{4}$/.test(trimmed)) return new Date(`${trimmed}-01-01T00:00:00.000Z`);
+      const d = new Date(trimmed);
+      return isNaN(d.getTime()) ? null : d;
+    })() : null;
+
+    // Atomic transaction: capacity check + create to prevent race conditions
+    const user = await prisma.$transaction(async (tx) => {
+      // Re-check license inside the transaction (prevents double-booking)
+      await assertLicenseAvailable(tx, tenantId);
+
+      return tx.tenantUser.create({
+        data: {
+          tenantId,
+          email: email.trim().toLowerCase(),
+          passwordHash,
+          name: name.trim(),
+          role: targetRole, // validated & authorized above
+          status: 'INVITED',
+          mustChangePassword: true,
+          designation: designation ? designation.trim() : 'Member',
+          department: department ? department.trim() : 'General',
+          band: band || undefined,
+          managerId: resolvedManagerId,
+          joinDate: parsedJoinDate,
+          phone: phone ? phone.trim() : null,
+          pan: pan ? pan.trim().toUpperCase() : null,
+          dob: parsedDob,
+          remarks: feedbackRemarks || null,
+        },
+      });
     });
 
     // Send invitation email
@@ -145,6 +151,9 @@ export async function inviteEmployee(req, res, next) {
       event: 'EMPLOYEE_INVITED',
     });
 
+    // Fetch updated license stats to return in response
+    const licenseStats = await getLicenseStats(tenantId);
+
     res.status(201).json({
       message: 'Employee invited successfully',
       user: {
@@ -154,8 +163,17 @@ export async function inviteEmployee(req, res, next) {
         role: user.role,
         status: user.status,
       },
+      licenseStats,
     });
   } catch (err) {
+    // Propagate structured license errors as HTTP 400
+    if (err.statusCode) {
+      return res.status(err.statusCode).json({
+        error: err.message,
+        code: err.code || undefined,
+        details: err.details || undefined,
+      });
+    }
     next(err);
   }
 }
@@ -403,6 +421,23 @@ export async function listEmployees(req, res, next) {
   }
 }
 
+// ── License Statistics Endpoint ──────────────────────────────────────────────
+
+/**
+ * GET /api/employees/stats
+ * Returns real-time license capacity and employee category counts for the
+ * authenticated user's tenant. Used to drive the dashboard metric cards.
+ */
+export async function getEmployeeStats(req, res, next) {
+  try {
+    const tenantId = req.tenantId;
+    const stats = await getLicenseStats(tenantId);
+    res.json(stats);
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function listExEmployees(req, res, next) {
   try {
     const tenantId = req.tenantId;
@@ -466,28 +501,64 @@ export async function addExEmployee(req, res, next) {
       docs,
     } = parsed.data;
 
-    const record = await prisma.exEmployeeRecord.create({
-      data: {
+    // ── Auto-deactivate matching TenantUser to free the license slot ──────────
+    // If the ex-employee being registered is also still active as a TenantUser
+    // in this tenant (matched by email or PAN), automatically transition them
+    // to EXITED + isDeleted=true so the license slot is released immediately.
+    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedPan = pan.trim().toUpperCase();
+
+    const matchingTenantUser = await prisma.tenantUser.findFirst({
+      where: {
         tenantId,
-        firstName,
-        lastName,
-        email: email.trim().toLowerCase(),
-        phone,
-        pan: pan.trim().toUpperCase(),
-        dob: dob ? String(dob) : null,
-        designation,
-        department,
-        serviceStart: new Date(serviceStart),
-        serviceEnd: new Date(serviceEnd),
-        exitReason: exitReason || 'Resigned',
-        techRating: techRating ?? 8,
-        attitudeRating: attitudeRating ?? 8,
-        conductValue: conductValue || 'Good',
-        feedback: feedback || '',
-        submittedBy: req.user.name || 'Direct',
-        status: 'Submitted',
-        docs: docs || undefined,
+        isDeleted: false,
+        status: { in: ['ACTIVE', 'INVITED'] },
+        OR: [
+          { email: normalizedEmail },
+          ...(normalizedPan ? [{ pan: normalizedPan }] : []),
+        ],
       },
+      select: { id: true, managerId: true },
+    });
+
+    const record = await prisma.$transaction(async (tx) => {
+      // 1. Soft-deactivate the TenantUser if found (frees the license slot)
+      if (matchingTenantUser) {
+        await tx.tenantUser.update({
+          where: { id: matchingTenantUser.id },
+          data: { isDeleted: true, status: 'EXITED' },
+        });
+        // Re-assign any direct reports to the departing user's own manager
+        await tx.tenantUser.updateMany({
+          where: { managerId: matchingTenantUser.id, tenantId },
+          data: { managerId: matchingTenantUser.managerId ?? null },
+        });
+      }
+
+      // 2. Create the ExEmployeeRecord
+      return tx.exEmployeeRecord.create({
+        data: {
+          tenantId,
+          firstName,
+          lastName,
+          email: normalizedEmail,
+          phone,
+          pan: normalizedPan,
+          dob: dob ? String(dob) : null,
+          designation,
+          department,
+          serviceStart: new Date(serviceStart),
+          serviceEnd: new Date(serviceEnd),
+          exitReason: exitReason || 'Resigned',
+          techRating: techRating ?? 8,
+          attitudeRating: attitudeRating ?? 8,
+          conductValue: conductValue || 'Good',
+          feedback: feedback || '',
+          submittedBy: req.user.name || 'Direct',
+          status: 'Submitted',
+          docs: docs || undefined,
+        },
+      });
     });
 
     const item = {
@@ -522,11 +593,11 @@ export async function addExEmployee(req, res, next) {
 export async function bulkAddExEmployees(req, res, next) {
   try {
     const tenantId = req.tenantId;
-    const { items } = req.body || {};
-
-    if (!items || !Array.isArray(items)) {
-      return res.status(400).json({ error: 'Items array is required' });
+    const parsed = bulkExEmployeeSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
+    const { items } = parsed.data;
 
     const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     const panRe = /^[A-Z]{5}[0-9]{4}[A-Z]$/i;
@@ -715,11 +786,11 @@ export async function addNonJoiner(req, res, next) {
 export async function bulkAddNonJoiners(req, res, next) {
   try {
     const tenantId = req.tenantId;
-    const { items } = req.body || {};
-
-    if (!items || !Array.isArray(items)) {
-      return res.status(400).json({ error: 'Items array is required' });
+    const parsed = bulkNonJoinerSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
+    const { items } = parsed.data;
 
     const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     const panRe = /^[A-Z]{5}[0-9]{4}[A-Z]$/i;
@@ -999,6 +1070,177 @@ export async function updateNonJoiner(req, res, next) {
   }
 }
 
+// ── Employee Exit / Offboarding Workflow ────────────────────────────────────
+
+/**
+ * POST /api/employees/:id/exit
+ * Dedicated employee offboarding endpoint. In a single atomic transaction:
+ *  1. Validates the employee belongs to this tenant and is currently active.
+ *  2. Transitions TenantUser to { isDeleted: true, status: 'EXITED' }.
+ *  3. Re-assigns any direct reports to the departing manager's own manager.
+ *  4. Creates a corresponding ExEmployeeRecord so the offboarding history
+ *     is preserved in the Ex-Employees tab.
+ *  5. Immediately frees the license slot (no DB round-trip needed).
+ */
+export async function exitEmployee(req, res, next) {
+  try {
+    const { id } = req.params;
+    const tenantId = req.tenantId;
+
+    const parsed = exitEmployeeSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    }
+    const {
+      serviceStart,
+      serviceEnd,
+      exitReason,
+      techRating,
+      attitudeRating,
+      conductValue,
+      feedback,
+      docs,
+    } = parsed.data;
+
+    // Guard: requester cannot exit themselves
+    if (id === req.user.id) {
+      return res.status(400).json({ error: 'You cannot exit your own account' });
+    }
+
+    const tenantUser = await prisma.tenantUser.findFirst({
+      where: { id, tenantId, isDeleted: false },
+      select: { id: true, name: true, email: true, pan: true, designation: true, department: true, managerId: true, status: true },
+    });
+
+    if (!tenantUser) {
+      return res.status(404).json({ error: 'Active employee not found' });
+    }
+
+    if (tenantUser.status === 'EXITED') {
+      return res.status(409).json({ error: 'This employee has already been exited' });
+    }
+
+    const nameParts = (tenantUser.name || '').trim().split(/\s+/);
+    const firstName = nameParts[0] || 'Unknown';
+    const lastName = nameParts.slice(1).join(' ') || firstName;
+
+    // Atomic transaction: deactivate + re-assign subordinates + create exit record
+    const exitRecord = await prisma.$transaction(async (tx) => {
+      // 1. Soft-delete the TenantUser
+      await tx.tenantUser.update({
+        where: { id },
+        data: { isDeleted: true, status: 'EXITED' },
+      });
+
+      // 2. Re-route direct reports to the exiting manager's manager
+      await tx.tenantUser.updateMany({
+        where: { managerId: id, tenantId },
+        data: { managerId: tenantUser.managerId ?? null },
+      });
+
+      // 3. Create the historical ExEmployeeRecord
+      return tx.exEmployeeRecord.create({
+        data: {
+          tenantId,
+          firstName,
+          lastName,
+          email: tenantUser.email,
+          phone: 'N/A',
+          pan: tenantUser.pan || 'N/A',
+          designation: tenantUser.designation || 'Member',
+          department: tenantUser.department || 'General',
+          serviceStart: new Date(serviceStart),
+          serviceEnd: new Date(serviceEnd),
+          exitReason: exitReason || 'Resigned',
+          techRating: techRating ?? 8,
+          attitudeRating: attitudeRating ?? 8,
+          conductValue: conductValue || 'Good',
+          feedback: feedback || '',
+          submittedBy: req.user.name || 'Direct',
+          status: 'Published',
+          docs: docs || undefined,
+        },
+      });
+    });
+
+    // Notify connected HR/Admin clients
+    emitToTenant(tenantId, 'employee_status_updated', { id, status: 'EXITED' });
+
+    // Return updated license stats so the frontend can refresh metrics instantly
+    const licenseStats = await getLicenseStats(tenantId);
+
+    res.json({
+      message: `${tenantUser.name} has been offboarded successfully`,
+      exitRecord: {
+        id: exitRecord.id,
+        name: `${firstName} ${lastName}`,
+        email: exitRecord.email,
+        serviceStart: exitRecord.serviceStart.toISOString().split('T')[0],
+        serviceEnd: exitRecord.serviceEnd.toISOString().split('T')[0],
+        exitReason: exitRecord.exitReason,
+        conductValue: exitRecord.conductValue,
+        techRating: exitRecord.techRating,
+        attitudeRating: exitRecord.attitudeRating,
+        status: exitRecord.status,
+      },
+      licenseStats,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /api/employees/:id/reactivate
+ * Re-activates a previously deactivated (EXITED + isDeleted:true) employee
+ * if license capacity is available. The account is restored to INVITED status
+ * so the employee is prompted to reset their password on next login.
+ */
+export async function reactivateEmployee(req, res, next) {
+  try {
+    const { id } = req.params;
+    const tenantId = req.tenantId;
+
+    const tenantUser = await prisma.tenantUser.findFirst({
+      where: { id, tenantId },
+      select: { id: true, name: true, email: true, status: true, isDeleted: true },
+    });
+
+    if (!tenantUser) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+
+    if (!tenantUser.isDeleted && tenantUser.status !== 'EXITED') {
+      return res.status(409).json({ error: 'Employee is already active and does not need reactivation' });
+    }
+
+    // Atomic: check capacity THEN reactivate
+    await prisma.$transaction(async (tx) => {
+      await assertLicenseAvailable(tx, tenantId);
+      await tx.tenantUser.update({
+        where: { id },
+        data: { isDeleted: false, status: 'INVITED', mustChangePassword: true },
+      });
+    });
+
+    const licenseStats = await getLicenseStats(tenantId);
+
+    res.json({
+      message: `${tenantUser.name} has been reactivated. They will be prompted to change their password on next login.`,
+      licenseStats,
+    });
+  } catch (err) {
+    if (err.statusCode) {
+      return res.status(err.statusCode).json({
+        error: err.message,
+        code: err.code || undefined,
+        details: err.details || undefined,
+      });
+    }
+    next(err);
+  }
+}
+
 export async function deleteEmployee(req, res, next) {
   try {
     const { id } = req.params;
@@ -1029,7 +1271,8 @@ export async function deleteEmployee(req, res, next) {
       }),
     ]);
 
-    res.json({ success: true, message: 'Employee soft-deleted successfully' });
+    const licenseStats = await getLicenseStats(tenantId);
+    res.json({ success: true, message: 'Employee deactivated successfully', licenseStats });
   } catch (err) {
     next(err);
   }

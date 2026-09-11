@@ -2,13 +2,15 @@ import crypto from 'node:crypto';
 import { prisma } from '../lib/prisma.js';
 import { sendMail } from '../lib/mailer.js';
 import { AppraisalNotificationService } from '../services/appraisalNotification.service.js';
+import { requestExReviewSchema, submitExReviewSchema } from '../validations/exReview.schema.js';
 
 export async function requestExReview(req, res, next) {
   try {
-    const { exCompany, exManagerName, exManagerEmail } = req.body || {};
-    if (!exCompany || !exManagerName || !exManagerEmail) {
-      return res.status(400).json({ error: 'Ex-company details, ex-manager name, and ex-manager email are required' });
+    const parsed = requestExReviewSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
+    const { exCompany, exManagerName, exManagerEmail } = parsed.data;
 
     // Rate-limit: max 3 pending verification requests per employee
     const pendingCount = await prisma.exEmployerReview.count({
@@ -100,11 +102,11 @@ export async function getExReviewByToken(req, res, next) {
 export async function submitExReview(req, res, next) {
   try {
     const { token } = req.params;
-    const { rating, feedback } = req.body || {};
-
-    if (rating === undefined || !feedback) {
-      return res.status(400).json({ error: 'Rating and feedback are required' });
+    const parsed = submitExReviewSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
+    const { rating, feedback } = parsed.data;
 
     const review = await prisma.exEmployerReview.findUnique({
       where: { token },

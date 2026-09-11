@@ -1,7 +1,7 @@
 import { prisma } from '../lib/prisma.js';
 import { logTaskAudit } from './taskActivity.controller.js';
 import { emitToTenant } from '../lib/socket.js';
-import { createTaskSchema, updateTaskSchema } from '../validations/task.schema.js';
+import { createTaskSchema, updateTaskSchema, updateTaskStatusSchema } from '../validations/task.schema.js';
 import { goalService } from '../services/goal.service.js';
 import { loadTaskForUser, getCompanionTaskId } from '../services/taskAccess.service.js';
 import { ELEVATED_ROLES, hasRole } from '../lib/roles.js';
@@ -291,16 +291,12 @@ export async function listTasks(req, res, next) {
 export async function updateTaskStatus(req, res, next) {
   try {
     const { id } = req.params;
-    const { status, progress } = req.body || {};
+    const parsed = updateTaskStatusSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    }
+    const { status, progress } = parsed.data;
     const tenantId = req.tenantId;
-
-    if (!status) {
-      return res.status(400).json({ error: 'Task status is required' });
-    }
-
-    if (!TASK_STATUSES.includes(status)) {
-      return res.status(400).json({ error: `Invalid task status. Allowed: ${TASK_STATUSES.join(', ')}` });
-    }
 
     const existing = await assertTaskOwner(id, req.user, tenantId).catch(e => {
       res.status(e.status || 500).json({ error: e.message });
