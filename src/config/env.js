@@ -37,5 +37,16 @@ export const env = {
   adminSessionCookieName: process.env.ADMIN_SESSION_COOKIE_NAME || 'admin_session',
   adminSessionTtlMs: parseInt(process.env.ADMIN_SESSION_TTL_MS || String(24 * 60 * 60 * 1000), 10),
   jwtSecret: process.env.JWT_SECRET,
+
+  // MongoDB & Apache Kafka
+  mongodbUri: process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/ueibi',
+  kafkaBrokers: (process.env.KAFKA_BROKERS || '127.0.0.1:9092').split(',').map((b) => b.trim()),
+  kafkaClientId: process.env.KAFKA_CLIENT_ID || 'ueibi-service',
+  kafkaGroupId: process.env.KAFKA_GROUP_ID || 'ueibi-gallery-consumer-group',
+  kafkaTopicGallery: process.env.KAFKA_TOPIC_GALLERY || 'ueibi-gallery-events',
+  kafkaSsl: process.env.KAFKA_SSL === 'true',
+  kafkaSaslMechanism: process.env.KAFKA_SASL_MECHANISM || 'plain',
+  kafkaSaslUsername: process.env.KAFKA_SASL_USERNAME || '',
+  kafkaSaslPassword: process.env.KAFKA_SASL_PASSWORD || '',
 };
 
