@@ -17,6 +17,8 @@ import {
   ALLOWED_GALLERY_CATEGORIES,
   createGalleryPostSchema,
   addGalleryCommentSchema,
+  updateGalleryPostSchema,
+  galleryIdParamSchema,
 } from '../validations/gallery.schema.js';
 
 // Helper to build full image URL
@@ -141,12 +143,101 @@ export async function createGalleryPost(req, res, next) {
   }
 }
 
+// PUT /gallery/posts/:id or PATCH /gallery/posts/:id
+export async function updateGalleryPost(req, res, next) {
+  try {
+    const tenantId = req.tenantId;
+    const user = req.user;
+
+    const paramParsed = galleryIdParamSchema.safeParse(req.params);
+    if (!paramParsed.success) {
+      if (req.file) {
+        try { fs.unlinkSync(req.file.path); } catch { /* non-fatal */ }
+      }
+      return res.status(400).json({ error: 'Invalid post ID', details: paramParsed.error.issues });
+    }
+    const { id } = paramParsed.data;
+
+    const post = await prisma.galleryPost.findFirst({ where: { id, tenantId, isActive: true } });
+    if (!post) {
+      if (req.file) {
+        try { fs.unlinkSync(req.file.path); } catch { /* non-fatal */ }
+      }
+      return res.status(404).json({ error: 'Post not found' });
+    }
+
+    const privilegedRoles = ['HR', 'CMD', 'ADMIN', 'SUPER_ADMIN'];
+    const isAuthor = post.uploadedById === user.id;
+    if (!isAuthor && !privilegedRoles.includes(user.role)) {
+      if (req.file) {
+        try { fs.unlinkSync(req.file.path); } catch { /* non-fatal */ }
+      }
+      return res.status(403).json({ error: 'Forbidden: You cannot edit this post' });
+    }
+
+    const parsed = updateGalleryPostSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      if (req.file) {
+        try { fs.unlinkSync(req.file.path); } catch { /* non-fatal */ }
+      }
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    }
+
+    const updateData = {};
+    if (parsed.data.title !== undefined) updateData.title = parsed.data.title;
+    if (parsed.data.category !== undefined) updateData.category = parsed.data.category;
+
+    if (req.file) {
+      const oldImageUrl = post.imageUrl;
+      updateData.imageUrl = `/uploads/${req.file.filename}`;
+      try {
+        if (oldImageUrl && oldImageUrl.startsWith('/uploads/')) {
+          const oldFilePath = path.join('./uploads', path.basename(oldImageUrl));
+          if (fs.existsSync(oldFilePath)) fs.unlinkSync(oldFilePath);
+        }
+      } catch { /* non-fatal */ }
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ error: 'At least one field (title, category, or image) must be provided to update' });
+    }
+
+    const updated = await prisma.galleryPost.update({
+      where: { id },
+      data: updateData,
+      include: {
+        uploadedBy: { select: { id: true, name: true } },
+        likes: { select: { userId: true } },
+        comments: {
+          orderBy: { createdAt: 'asc' },
+          include: { author: { select: { id: true, name: true } } },
+        },
+      },
+    });
+
+    const serialized = serializePost(updated, user.id);
+    emitToTenant(tenantId, 'gallery_post_updated', { post: serialized });
+
+    res.json({ message: 'Gallery post updated successfully', post: serialized });
+  } catch (err) {
+    if (req.file) {
+      try { fs.unlinkSync(req.file.path); } catch { /* non-fatal */ }
+    }
+    next(err);
+  }
+}
+
 // DELETE /gallery/posts/:id
 export async function deleteGalleryPost(req, res, next) {
   try {
     const tenantId = req.tenantId;
     const user = req.user;
-    const { id } = req.params;
+
+    const paramParsed = galleryIdParamSchema.safeParse(req.params);
+    if (!paramParsed.success) {
+      return res.status(400).json({ error: 'Invalid post ID', details: paramParsed.error.issues });
+    }
+    const { id } = paramParsed.data;
 
     const post = await prisma.galleryPost.findFirst({ where: { id, tenantId } });
     if (!post) return res.status(404).json({ error: 'Post not found' });
@@ -167,7 +258,7 @@ export async function deleteGalleryPost(req, res, next) {
     } catch { /* non-fatal */ }
 
     emitToTenant(tenantId, 'gallery_post_deleted', { id });
-    res.json({ message: 'Post deleted', id });
+    res.json({ message: 'Post deleted successfully', id });
   } catch (err) {
     next(err);
   }
