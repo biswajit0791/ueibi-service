@@ -66,11 +66,14 @@ BEGIN
   -- 4. Delete any remaining users with domain @usifdn.org
   DELETE FROM "tenant_users" WHERE lower("email") LIKE '%@usifdn.org';
 
-  -- 5. Delete registration and tokens
+  -- 5. Delete registration, tokens, and pending OTPs
   IF v_reg_id IS NOT NULL THEN
     DELETE FROM "registration_action_tokens" WHERE "registrationId" = v_reg_id;
     DELETE FROM "company_registrations" WHERE "id" = v_reg_id;
   END IF;
+
+  DELETE FROM "email_verifications" 
+  WHERE lower("domainName") = 'usifdn.org' OR lower("email") LIKE '%@usifdn.org';
 
   DELETE FROM "company_registrations" 
   WHERE lower("domainName") = 'usifdn.org' OR lower("email") LIKE '%@usifdn.org';

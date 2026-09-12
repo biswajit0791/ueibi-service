@@ -110,6 +110,16 @@ async function main() {
     console.log(`  ✔ Deleted ${leftoverUsers.count} lingering usifdn.org user(s).`);
   }
 
+  // Delete any lingering email verifications/OTPs
+  await prisma.emailVerification.deleteMany({
+    where: {
+      OR: [
+        { email: { endsWith: '@usifdn.org', mode: 'insensitive' } },
+        { domainName: { equals: DOMAIN, mode: 'insensitive' } },
+      ],
+    },
+  }).catch(() => {});
+
   // Delete Registration and Action Tokens
   if (registration) {
     console.log(`Found Registration: ID=${registration.id}, Company=${registration.companyName}`);
