@@ -451,7 +451,12 @@ export class GoalService {
       where: { tenantId, role: 'MANAGER', status: 'ACTIVE', isDeleted: false },
       select: { id: true, name: true },
     });
-    const requiresManagerReview = hasManager || (tenantManagers.length > 0 && String(user.role || '').toUpperCase() !== 'MANAGER');
+
+    // AUTO_APPROVE goals skip manager review entirely — go straight to HR
+    const isAutoApprove = goal.approvalMode === 'AUTO_APPROVE';
+    const requiresManagerReview = !isAutoApprove && (
+      hasManager || (tenantManagers.length > 0 && String(user.role || '').toUpperCase() !== 'MANAGER')
+    );
     const newStatus = requiresManagerReview ? GOAL_STATUS.PENDING_MANAGER_REVIEW : GOAL_STATUS.PENDING_HR_REVIEW;
 
     // Update assignment status independently
