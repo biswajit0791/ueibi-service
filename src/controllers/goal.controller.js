@@ -181,11 +181,33 @@ export async function createGoal(req, res, next) {
       targetEmployeeIds = [req.user.id];
     }
 
+    // If 'all' was passed (e.g. from a filter dropdown or company-wide assignment), expand it
+    if (targetEmployeeIds.includes('all')) {
+      const isElevated = hasRole(req.user.role, ELEVATED_ROLES);
+      if (isElevated) {
+        const allTenantUsers = await prisma.tenantUser.findMany({
+          where: { tenantId: req.tenantId, status: 'ACTIVE', isDeleted: false },
+          select: { id: true },
+        });
+        const expandedIds = allTenantUsers.map((u) => u.id);
+        targetEmployeeIds = targetEmployeeIds.filter((id) => id !== 'all').concat(expandedIds);
+      } else if (req.user.role === 'MANAGER') {
+        const downlineUsers = await prisma.tenantUser.findMany({
+          where: { tenantId: req.tenantId, managerId: req.user.id, status: 'ACTIVE', isDeleted: false },
+          select: { id: true },
+        });
+        const expandedIds = downlineUsers.map((u) => u.id);
+        targetEmployeeIds = targetEmployeeIds.filter((id) => id !== 'all').concat(expandedIds.length > 0 ? expandedIds : [req.user.id]);
+      } else {
+        targetEmployeeIds = targetEmployeeIds.filter((id) => id !== 'all').concat([req.user.id]);
+      }
+    }
+
     // Normalize and deduplicate IDs
     targetEmployeeIds = [...new Set(targetEmployeeIds.filter(Boolean))];
 
     if (targetEmployeeIds.length === 0) {
-      return res.status(400).json({ error: 'Please select at least one employee for goal assignment' });
+      targetEmployeeIds = [req.user.id];
     }
 
     const isSelfAssigned = targetEmployeeIds.length === 1 && targetEmployeeIds[0] === req.user.id;
