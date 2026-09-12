@@ -54,19 +54,6 @@ export async function inviteEmployee(req, res, next) {
     }
     // ─────────────────────────────────────────────────────────────────────────
 
-    // Check duplicate
-    const existing = await prisma.tenantUser.findUnique({
-      where: { email: email.trim().toLowerCase() },
-    });
-    if (existing) {
-      return res.status(409).json({ error: 'A user with this email address already exists' });
-    }
-
-    // ── Atomic license capacity check ────────────────────────────────────────
-    // Using a Prisma interactive transaction ensures the count() and the
-    // subsequent create() are serialized, preventing race conditions when two
-    // admins invite employees simultaneously at the last available slot.
-
     // Validate the reporting manager (if supplied) belongs to this tenant.
     let resolvedManagerId = null;
     if (managerId) {
@@ -97,12 +84,94 @@ export async function inviteEmployee(req, res, next) {
       return isNaN(d.getTime()) ? null : d;
     })() : null;
 
+    // Check duplicate
+    const existing = await prisma.tenantUser.findUnique({
+      where: { email: email.trim().toLowerCase() },
+    });
+    if (existing) {
+      if (existing.status === 'INVITED') {
+        const tenant = await prisma.tenant.findUnique({
+          where: { id: tenantId },
+          select: { id: true, companyName: true },
+        });
+        const companyName = tenant?.companyName || 'your organization';
+
+        const updatedUser = await prisma.tenantUser.update({
+          where: { id: existing.id },
+          data: {
+            passwordHash,
+            name: name.trim(),
+            role: targetRole,
+            designation: designation ? designation.trim() : existing.designation,
+            department: department ? department.trim() : existing.department,
+            band: band || existing.band,
+            managerId: resolvedManagerId || existing.managerId,
+            phone: phone ? phone.trim() : existing.phone,
+            pan: pan ? pan.trim().toUpperCase() : existing.pan,
+            dob: parsedDob || existing.dob,
+          },
+        });
+
+        // Send invitation email
+        const subject = `Welcome to UEIBI - Invitation to join ${companyName}`;
+        const text = `Hello ${name},\n\nYou have been invited to join the ${companyName} workspace on UEIBI.\n\nYour temporary login credentials are:\nEmail: ${email}\nPassword: ${tempPassword}\n\nPlease log in and complete your onboarding profile here: ${env.frontendOrigin}/login`;
+        const html = `
+          <div style="font-family: sans-serif; padding: 20px; line-height: 1.6;">
+            <h2 style="color: #4f46e5;">Welcome to UEIBI</h2>
+            <p>Hello <strong>${name}</strong>,</p>
+            <p>You have been invited to join the <strong>${companyName}</strong> workspace on the UEIBI Employee Registry portal.</p>
+            <div style="background-color: #f3f4f6; border-left: 4px solid #4f46e5; padding: 15px; margin: 20px 0;">
+              <p style="margin: 0 0 8px 0;"><strong>Your Temporary Credentials:</strong></p>
+              <p style="margin: 0 0 4px 0;">Email: <code>${email}</code></p>
+              <p style="margin: 0;">Password: <code>${tempPassword}</code></p>
+            </div>
+            <p>Please log in with these temporary credentials to complete your onboarding profile:</p>
+            <a href="${env.frontendOrigin}/login" style="display: inline-block; background-color: #4f46e5; color: white; padding: 10px 20px; text-decoration: none; border-radius: 6px; margin: 15px 0;">Log In & Complete Profile</a>
+            <p style="color: #6b7280; font-size: 13px;">For security reasons, you will be required to change your password upon your first login.</p>
+          </div>
+        `;
+
+        await sendMail({
+          to: email,
+          subject,
+          text,
+          html,
+          event: 'EMPLOYEE_INVITED',
+        }).catch((err) => console.warn('[EMPLOYEE] Failed to resend invite email:', err.message));
+
+        const licenseStats = await getLicenseStats(tenantId);
+        return res.status(200).json({
+          message: 'Invitation re-sent successfully',
+          user: {
+            id: updatedUser.id,
+            email: updatedUser.email,
+            name: updatedUser.name,
+            role: updatedUser.role,
+            status: updatedUser.status,
+          },
+          licenseStats,
+        });
+      }
+
+      return res.status(409).json({ error: 'A user with this email address already exists' });
+    }
+
+    // ── Atomic license capacity check ────────────────────────────────────────
+    // Using a Prisma interactive transaction ensures the count() and the
+    // subsequent create() are serialized, preventing race conditions when two
+    // admins invite employees simultaneously at the last available slot.
+
     // Atomic transaction: capacity check + create to prevent race conditions
-    const user = await prisma.$transaction(async (tx) => {
+    const { user, tenant } = await prisma.$transaction(async (tx) => {
       // Re-check license inside the transaction (prevents double-booking)
       await assertLicenseAvailable(tx, tenantId);
 
-      return tx.tenantUser.create({
+      const t = await tx.tenant.findUnique({
+        where: { id: tenantId },
+        select: { id: true, companyName: true },
+      });
+
+      const u = await tx.tenantUser.create({
         data: {
           tenantId,
           email: email.trim().toLowerCase(),
@@ -122,16 +191,20 @@ export async function inviteEmployee(req, res, next) {
           remarks: feedbackRemarks || null,
         },
       });
+
+      return { user: u, tenant: t };
     });
 
+    const companyName = tenant?.companyName || 'your organization';
+
     // Send invitation email
-    const subject = `Welcome to UEIBI - Invitation to join ${tenant.companyName}`;
-    const text = `Hello ${name},\n\nYou have been invited to join the ${tenant.companyName} workspace on UEIBI.\n\nYour temporary login credentials are:\nEmail: ${email}\nPassword: ${tempPassword}\n\nPlease log in and complete your onboarding profile here: ${env.frontendOrigin}/login`;
+    const subject = `Welcome to UEIBI - Invitation to join ${companyName}`;
+    const text = `Hello ${name},\n\nYou have been invited to join the ${companyName} workspace on UEIBI.\n\nYour temporary login credentials are:\nEmail: ${email}\nPassword: ${tempPassword}\n\nPlease log in and complete your onboarding profile here: ${env.frontendOrigin}/login`;
     const html = `
       <div style="font-family: sans-serif; padding: 20px; line-height: 1.6;">
         <h2 style="color: #4f46e5;">Welcome to UEIBI</h2>
         <p>Hello <strong>${name}</strong>,</p>
-        <p>You have been invited to join the <strong>${tenant.companyName}</strong> workspace on the UEIBI Employee Registry portal.</p>
+        <p>You have been invited to join the <strong>${companyName}</strong> workspace on the UEIBI Employee Registry portal.</p>
         <div style="background-color: #f3f4f6; border-left: 4px solid #4f46e5; padding: 15px; margin: 20px 0;">
           <p style="margin: 0 0 8px 0;"><strong>Your Temporary Credentials:</strong></p>
           <p style="margin: 0 0 4px 0;">Email: <code>${email}</code></p>
@@ -149,7 +222,7 @@ export async function inviteEmployee(req, res, next) {
       text,
       html,
       event: 'EMPLOYEE_INVITED',
-    });
+    }).catch((err) => console.warn('[EMPLOYEE] Failed to send invite email:', err.message));
 
     // Fetch updated license stats to return in response
     const licenseStats = await getLicenseStats(tenantId);
