@@ -100,7 +100,8 @@ model TenantUser {
   bankDetails    BankDetails?
   workHistory    WorkHistory[]
   exitDetails    ExitDetails?
-  goals          Goal[]
+  goals          Goal[]      @relation("GoalAssignee")
+  createdGoals   Goal[]      @relation("GoalCreatedBy")
   tasks          Task[]
   leaveRequests  LeaveRequest[]      @relation("EmployeeLeaves")
   approvedLeaves LeaveRequest[]      @relation("ApprovedLeaves")
@@ -332,9 +333,12 @@ model Goal {
   goalType            String?        @default("General") // General | Private
   category            String?
   priority            String? // high | medium | low
-  createdBy           String?
+  createdBy           String?        // Legacy: creator name string (kept for backward compat)
+  createdById         String?        // FK to TenantUser who created this goal (null = legacy record)
+  createdByUser       TenantUser?    @relation("GoalCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  approvalMode        String?        // MANAGER_APPROVAL | AUTO_APPROVE | null (null = employee self-created)
   progress            Int            @default(0)
-  status              String         @default("DRAFT") // DRAFT | ASSIGNED | ACKNOWLEDGED | IN_PROGRESS | UNDER_REVIEW | COMPLETED
+  status              String         @default("DRAFT") // DRAFT | PENDING_APPROVAL | ACTIVE | PENDING_MANAGER_REVIEW | PENDING_HR_REVIEW | CHANGES_REQUESTED | COMPLETED
   financialYear       String?
   quarter             String?
   startDate           DateTime?
@@ -343,7 +347,7 @@ model Goal {
   specialNotes        String?        @db.Text
   dueDate             DateTime?
   employeeId          String
-  employee            TenantUser     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  employee            TenantUser     @relation("GoalAssignee", fields: [employeeId], references: [id], onDelete: Cascade)
   milestones          Int            @default(0)
   completedMilestones Int            @default(0)
   tasks               Task[]
@@ -354,6 +358,7 @@ model Goal {
 
   @@index([tenantId])
   @@index([employeeId])
+  @@index([createdById])
   @@map("goals")
 }
 

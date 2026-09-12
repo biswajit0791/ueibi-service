@@ -9,6 +9,7 @@ import {
   getGoalCategories,
   getGoalTypes,
   getGoalPriorities,
+  activateApproveGoal,
   submitGoal,
   managerApproveGoal,
   managerRejectGoal,
@@ -47,6 +48,20 @@ router.patch('/goals/:id', requireAuth, requireTenant, updateGoal);
 router.delete('/goals/:id', requireAuth, requireTenant, deleteGoal);
 
 // ── Workflow Actions ───────────────────────────────────────────────────────
+//
+// Flow A: Employee self-created
+//   DRAFT → [/submit] → PENDING_MANAGER_REVIEW → [/approve] → PENDING_HR_REVIEW → [/hr-approve] → COMPLETED
+//
+// Flow B: Manager + MANAGER_APPROVAL
+//   PENDING_APPROVAL → [/activate-approve] → ACTIVE → [/submit] → PENDING_MANAGER_REVIEW → [/approve] → PENDING_HR_REVIEW → [/hr-approve] → COMPLETED
+//
+// Flow C: Manager + AUTO_APPROVE
+//   ACTIVE → [/submit] → PENDING_MANAGER_REVIEW → [/approve] → PENDING_HR_REVIEW → [/hr-approve] → COMPLETED
+//
+// Corrections (any flow):
+//   CHANGES_REQUESTED → [/resubmit] → PENDING_MANAGER_REVIEW → ...
+//
+router.post('/goals/:id/activate-approve', requireAuth, requireTenant, activateApproveGoal);
 router.post('/goals/:id/submit', requireAuth, requireTenant, submitGoal);
 router.post('/goals/:id/approve', requireAuth, requireTenant, managerApproveGoal);
 router.post('/goals/:id/reject', requireAuth, requireTenant, managerRejectGoal);
