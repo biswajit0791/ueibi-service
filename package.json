@@ -18,6 +18,7 @@
     "seed-users": "node seed-users.js",
     "seed-usifdn": "node seed-usifdn.js",
     "seed:usifdn": "node seed-usifdn.js",
+    "clear-db": "node clear-db.js",
     "seed-appraisal": "node prisma/seed-appraisal.js",
     "check-users": "node check-users.js",
     "test:appraisal": "node test-appraisal.js"
