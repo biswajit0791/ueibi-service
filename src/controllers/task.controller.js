@@ -253,15 +253,34 @@ export async function listTasks(req, res, next) {
   try {
     const tenantId = req.tenantId;
     const targetEmployeeId = req.query.employeeId || req.user.id;
+    const callerRole = String(req.user.role || '').toUpperCase();
+    const isElevated = hasRole(req.user.role, ELEVATED_ROLES);
+
+    // Regular employee can only ever view their own tasks
+    if (callerRole === 'EMPLOYEE' && !isElevated) {
+      if (targetEmployeeId !== 'all' && targetEmployeeId !== req.user.id) {
+        return res.status(403).json({ error: 'Access forbidden: employees can only view their own tasks' });
+      }
+      const where = {
+        tenantId,
+        employeeId: req.user.id,
+        ...(req.query.fy ? { financialYear: req.query.fy } : {}),
+      };
+      const items = await prisma.task.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+      });
+      return res.json({ items });
+    }
 
     if (targetEmployeeId === 'all') {
       let whereClause = { tenantId };
-      if (!hasRole(req.user.role, ELEVATED_ROLES)) {
-        // Non-elevated: own tasks, tasks of anyone in the reporting downline, plus
-        // companion dependency tasks that hang off one of those tasks.
+      if (!isElevated) {
+        // Manager: own tasks, tasks of downline subordinates, same-dept employees with role EMPLOYEE,
+        // and companion dependency tasks that hang off one of those tasks.
         const downline = await prisma.tenantUser.findMany({
           where: { tenantId, isDeleted: false },
-          select: { id: true, managerId: true },
+          select: { id: true, managerId: true, department: true, role: true },
         });
         const childrenOf = {};
         downline.forEach((u) => {
@@ -275,6 +294,16 @@ export async function listTasks(req, res, next) {
             if (!allowedIds.has(child)) { allowedIds.add(child); queue.push(child); }
           }
         }
+
+        // Also add same-department employees with role EMPLOYEE / STUDENT
+        if (req.user.department) {
+          downline.forEach(u => {
+            if (u.department === req.user.department && ['EMPLOYEE', 'STUDENT'].includes(String(u.role || '').toUpperCase())) {
+              allowedIds.add(u.id);
+            }
+          });
+        }
+
         const allowedIdList = [...allowedIds];
         // Companion ("dependency") tasks are visible when their parent task is
         // owned by someone in the downline — NOT tenant-wide as before.
@@ -296,10 +325,41 @@ export async function listTasks(req, res, next) {
 
     // Auth: only self, a manager anywhere up the chain, HR, Admin, or super-admin may fetch
     if (targetEmployeeId !== req.user.id) {
-      if (!hasRole(req.user.role, ELEVATED_ROLES)) {
+      if (!isElevated) {
+        const targetUser = await prisma.tenantUser.findFirst({
+          where: { id: targetEmployeeId, tenantId, isDeleted: false },
+          select: { id: true, role: true, department: true, managerId: true },
+        });
+        if (!targetUser) {
+          return res.status(404).json({ error: 'Target employee not found' });
+        }
+
+        const targetRole = String(targetUser.role || '').toUpperCase();
+        const higherRoles = ['SUPER_ADMIN', 'ADMIN', 'CMD', 'HR', 'FINANCE', 'DIRECTOR', 'LEADERSHIP', 'OWNER', 'MANAGER'];
+        if (higherRoles.includes(targetRole)) {
+          return res.status(403).json({
+            error: `Access forbidden: managers cannot view tasks of peer or higher authority roles (${targetRole})`,
+          });
+        }
+
         const isManager = await goalService.isSubordinate(req.user.id, targetEmployeeId, tenantId);
-        if (!isManager) {
-          return res.status(403).json({ error: 'Access forbidden' });
+        const isSameDept = req.user.department && targetUser.department === req.user.department;
+        const isCoAssigned = await prisma.goalAssignment.findFirst({
+          where: {
+            tenantId,
+            employeeId: targetEmployeeId,
+            goal: {
+              OR: [
+                { employeeId: req.user.id },
+                { createdById: req.user.id },
+                { assignments: { some: { employeeId: req.user.id } } },
+              ],
+            },
+          },
+        });
+
+        if (!isManager && !isSameDept && !isCoAssigned && targetUser.managerId) {
+          return res.status(403).json({ error: 'Access forbidden: user is not in your team' });
         }
       }
     }
