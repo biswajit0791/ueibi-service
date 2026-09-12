@@ -79,6 +79,8 @@ export async function getAssignableUsers(req, res, next) {
       },
     });
 
+    const higherRoles = ['SUPER_ADMIN', 'ADMIN', 'CMD', 'HR', 'FINANCE', 'DIRECTOR', 'LEADERSHIP', 'OWNER', 'MANAGER'];
+
     const directReportsMap = {};
     allUsers.forEach(u => {
       if (u.managerId) {
@@ -100,8 +102,12 @@ export async function getAssignableUsers(req, res, next) {
 
         const reports = directReportsMap[currentId] || [];
         reports.forEach(r => {
-          downline.push(r);
-          queue.push(r.id);
+          // A manager cannot have higher authority roles or peer managers in their downline
+          const reportRole = String(r.role || '').toUpperCase();
+          if (!higherRoles.includes(reportRole) || r.managerId === req.user.id) {
+            downline.push(r);
+            queue.push(r.id);
+          }
         });
       }
 
@@ -112,14 +118,14 @@ export async function getAssignableUsers(req, res, next) {
       }
 
       // If downline only contains self (no subordinates mapped via managerId yet),
-      // allow Manager to manage members in their department or active tenant employees
+      // allow Manager to manage members in their department or active tenant employees with role EMPLOYEE / STUDENT
       if (role === 'MANAGER' && downline.length <= 1) {
         const deptUsers = req.user.department
-          ? allUsers.filter(u => u.department === req.user.department)
+          ? allUsers.filter(u => u.department === req.user.department && !higherRoles.includes(String(u.role || '').toUpperCase()))
           : [];
-        const fallbackUsers = deptUsers.length > 1
+        const fallbackUsers = deptUsers.length > 0
           ? deptUsers
-          : allUsers.filter(u => !['SUPER_ADMIN', 'ADMIN'].includes(u.role));
+          : allUsers.filter(u => ['EMPLOYEE', 'STUDENT'].includes(String(u.role || '').toUpperCase()));
         fallbackUsers.forEach(u => {
           if (!downline.some(d => d.id === u.id)) {
             downline.push(u);
@@ -127,11 +133,13 @@ export async function getAssignableUsers(req, res, next) {
         });
       }
 
-      downline.sort((a, b) => a.name.localeCompare(b.name));
-      return res.json({ users: downline });
+      // Strict filter: managers must NEVER see peer managers or higher authority roles (HR, CMD, Finance, Admin)
+      const filteredDownline = downline.filter(u => u.id === req.user.id || !higherRoles.includes(String(u.role || '').toUpperCase()));
+      filteredDownline.sort((a, b) => a.name.localeCompare(b.name));
+      return res.json({ users: filteredDownline });
     }
 
-    // For standard EMPLOYEE with no reports: only allow self-assignment
+    // For standard EMPLOYEE with no reports: strictly only allow self-assignment
     const selfUser = allUsers.find(u => u.id === req.user.id);
     return res.json({ users: selfUser ? [selfUser] : [] });
   } catch (err) {
@@ -454,14 +462,35 @@ export async function listGoals(req, res, next) {
 
       if (employeeId !== req.user.id && !isElevated) {
         if (req.user.role === 'MANAGER') {
+          const targetRole = String(targetUser.role || '').toUpperCase();
+          const higherRoles = ['SUPER_ADMIN', 'ADMIN', 'CMD', 'HR', 'FINANCE', 'DIRECTOR', 'LEADERSHIP', 'OWNER', 'MANAGER'];
+          if (higherRoles.includes(targetRole)) {
+            return res.status(403).json({
+              error: `Access forbidden: managers cannot view boards of peer or higher authority roles (${targetRole})`,
+            });
+          }
+
           const isSubordinate = await checkIsSubordinate(req.user.id, employeeId, req.tenantId);
           const isSameDept = req.user.department && targetUser?.department === req.user.department;
-          const hasNoExplicitManager = !targetUser?.managerId;
-          if (!isSubordinate && !isSameDept && !hasNoExplicitManager) {
-            return res.status(403).json({ error: 'Access forbidden: user is not in your team or department' });
+          const isCoAssigned = await prisma.goalAssignment.findFirst({
+            where: {
+              tenantId: req.tenantId,
+              employeeId: employeeId,
+              goal: {
+                OR: [
+                  { employeeId: req.user.id },
+                  { createdById: req.user.id },
+                  { assignments: { some: { employeeId: req.user.id } } },
+                ],
+              },
+            },
+          });
+
+          if (!isSubordinate && !isSameDept && !isCoAssigned && targetUser?.managerId) {
+            return res.status(403).json({ error: 'Access forbidden: user is not in your team' });
           }
         } else {
-          return res.status(403).json({ error: 'Access forbidden: you cannot view other employees boards' });
+          return res.status(403).json({ error: 'Access forbidden: employees can only view their own goals' });
         }
       }
       where.OR = [
@@ -479,14 +508,14 @@ export async function listGoals(req, res, next) {
       } else if (req.user.role === 'MANAGER') {
         // Manager can see:
         // 1. Goals assigned to self
-        // 2. Goals assigned to downline employees (including HR/Admin created goals!)
+        // 2. Goals assigned to downline employees (including HR/Admin created goals on them)
         // 3. Goals created by self
-        // 4. Goals in their department
-        // 5. Goals anywhere in tenant awaiting manager activation or review
-        // 6. When employeeId === 'all', all non-private tenant goals
+        // 4. Goals where manager or subordinates are co-assigned
+        // 5. Goals in their department for non-elevated employees
+        // 6. Goals awaiting manager review
         const allTenantUsers = await prisma.tenantUser.findMany({
           where: { tenantId: req.tenantId, status: 'ACTIVE', isDeleted: false },
-          select: { id: true, managerId: true, department: true },
+          select: { id: true, managerId: true, department: true, role: true },
         });
 
         const directReportsMap = {};
@@ -532,9 +561,10 @@ export async function listGoals(req, res, next) {
           },
         ];
 
+        // Same-department employees with role EMPLOYEE / STUDENT
         if (req.user.department) {
           const deptUserIds = allTenantUsers
-            .filter(u => u.department === req.user.department)
+            .filter(u => u.department === req.user.department && ['EMPLOYEE', 'STUDENT'].includes(String(u.role || '').toUpperCase()))
             .map(u => u.id);
           if (deptUserIds.length > 0) {
             managerOrConditions.push({ employeeId: { in: deptUserIds } });
@@ -542,11 +572,15 @@ export async function listGoals(req, res, next) {
           }
         }
 
-        if (!employeeId || employeeId === 'all' || scope === 'team') {
-          managerOrConditions.push({
-            tenantId: req.tenantId,
-            goalType: { notIn: ['Private', 'Personal'] },
-          });
+        // If no subordinates mapped yet, allow manager to see non-elevated employees without manager
+        if (downlineIds.length === 0) {
+          const fallbackUserIds = allTenantUsers
+            .filter(u => ['EMPLOYEE', 'STUDENT'].includes(String(u.role || '').toUpperCase()) && !u.managerId)
+            .map(u => u.id);
+          if (fallbackUserIds.length > 0) {
+            managerOrConditions.push({ employeeId: { in: fallbackUserIds } });
+            managerOrConditions.push({ assignments: { some: { employeeId: { in: fallbackUserIds } } } });
+          }
         }
 
         where.OR = managerOrConditions;
