@@ -6,12 +6,14 @@ const prisma = new PrismaClient();
 async function main() {
   const targetEmail = (process.argv[2] || 'pratik@defigo.in').trim().toLowerCase();
   const newPassword = process.argv[3] || '123456789';
+  const targetRole = process.argv[4] ? process.argv[4].toUpperCase() : null;
 
   console.log(`\n========================================================`);
   console.log(`🔑 UEIBI PASSWORD RESET & ACCOUNT PROVISIONING`);
   console.log(`========================================================`);
   console.log(`Target Email : ${targetEmail}`);
   console.log(`New Password : ${newPassword}`);
+  if (targetRole) console.log(`Target Role  : ${targetRole}`);
   console.log(`--------------------------------------------------------`);
 
   const passwordHash = await bcrypt.hash(newPassword, 10);
@@ -74,6 +76,7 @@ async function main() {
         passwordHash,
         status: 'ACTIVE',
         mustChangePassword: false,
+        ...(targetRole ? { role: targetRole } : {}),
       },
     });
     console.log(`[✓] Updated password for existing TenantUser: ${updated.email} (${updated.role})`);
@@ -83,14 +86,14 @@ async function main() {
         tenantId: tenant.id,
         email: targetEmail,
         passwordHash,
-        name: reg.fullName || 'Admin User',
-        role: 'SUPER_ADMIN',
+        name: reg.fullName || 'HR User',
+        role: targetRole || 'HR',
         status: 'ACTIVE',
         mustChangePassword: false,
-        designation: reg.designation || 'Director',
+        designation: reg.designation || 'HR Manager',
       },
     });
-    console.log(`[✓] Created new active TenantUser account: ${newUser.email} (SUPER_ADMIN) in Tenant "${tenant.companyName}"`);
+    console.log(`[✓] Created new active TenantUser account: ${newUser.email} (${newUser.role}) in Tenant "${tenant.companyName}"`);
   } else {
     // Fallback: If no registration, search for any tenant or default tenant
     const defaultTenant = await prisma.tenant.findFirst();
@@ -101,12 +104,13 @@ async function main() {
           email: targetEmail,
           passwordHash,
           name: targetEmail.split('@')[0],
-          role: 'ADMIN',
+          role: targetRole || 'HR',
           status: 'ACTIVE',
           mustChangePassword: false,
+          designation: 'HR Manager',
         },
       });
-      console.log(`[✓] Created new TenantUser account in Tenant "${defaultTenant.companyName}": ${newUser.email}`);
+      console.log(`[✓] Created new TenantUser account in Tenant "${defaultTenant.companyName}": ${newUser.email} (${newUser.role})`);
     } else {
       console.error(`[!] No Tenant found to attach user.`);
     }
