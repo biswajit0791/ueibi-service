@@ -313,3 +313,61 @@ export function renderHrActivatedEmail({ registration }) {
     contentHtml,
   });
 }
+
+/**
+ * Password Reset Email Template
+ */
+export function renderPasswordResetEmail({ resetUrl, expiresMinutes = 30, name = '' }) {
+  const greeting = name ? `Hello ${name},` : 'Hello,';
+  const contentHtml = `
+    <div style="text-align: center; margin-bottom: 24px;">
+      <div style="display: inline-block; width: 52px; height: 52px; background-color: #e0e7ff; border-radius: 50%; margin-bottom: 16px; line-height: 52px; text-align: center;">
+        <span style="font-size: 24px;">🔑</span>
+      </div>
+      <h1 style="margin: 0 0 8px 0; font-size: 22px; font-weight: 700; color: #0f172a;">Reset Your UEIBI Password</h1>
+      <p style="margin: 0; font-size: 15px; color: #475569; line-height: 1.5;">
+        ${greeting} We received a request to reset your UEIBI password.
+      </p>
+    </div>
+
+    <!-- CTA Button -->
+    <div style="text-align: center; margin: 32px 0;">
+      <a href="${resetUrl}" target="_blank" rel="noopener noreferrer" style="display: inline-block; background: linear-gradient(135deg, #4f46e5 0%, #3b82f6 100%); color: #ffffff; font-size: 15px; font-weight: 600; text-decoration: none; padding: 14px 36px; border-radius: 8px; box-shadow: 0 4px 12px rgba(79, 70, 229, 0.25);">
+        Reset Password &rarr;
+      </a>
+    </div>
+
+    <div style="background-color: #fffbe0; border-left: 4px solid #eab308; padding: 12px 16px; border-radius: 4px; margin-bottom: 24px;">
+      <p style="margin: 0; font-size: 13px; color: #854d0e; line-height: 1.5;">
+        ⏱️ This password reset link will expire in <strong>${expiresMinutes} minutes</strong> and can only be used once.
+      </p>
+    </div>
+
+    <p style="margin: 0 0 16px 0; font-size: 13px; color: #64748b; line-height: 1.5;">
+      If you did not request this password reset, you can safely ignore this email. Your password will not change until you access the link above and create a new one.
+    </p>
+
+    <div style="border-top: 1px solid #e2e8f0; padding-top: 16px; margin-top: 24px;">
+      <p style="margin: 0; font-size: 12px; color: #94a3b8; word-break: break-all;">
+        If the button above does not work, copy and paste this URL into your browser:<br/>
+        <a href="${resetUrl}" target="_blank" rel="noopener noreferrer" style="color: #6366f1; text-decoration: underline;">${resetUrl}</a>
+      </p>
+    </div>
+  `;
+
+  const html = renderEmailWrapper({
+    title: 'Reset your UEIBI password',
+    preheader: 'Secure password reset request for your UEIBI account.',
+    contentHtml,
+  });
+
+  const text = `${greeting}\n\n` +
+    `We received a request to reset your UEIBI password.\n\n` +
+    `Please use the following link to reset your password:\n${resetUrl}\n\n` +
+    `The link will expire after ${expiresMinutes} minutes and can only be used once.\n\n` +
+    `If you did not request this password reset, you can safely ignore this email.\n\n` +
+    `UEIBI Platform`;
+
+  return { html, text };
+}
+

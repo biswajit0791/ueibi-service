@@ -2,19 +2,41 @@ import { z } from 'zod';
 
 // ── Cycle & Parameter ─────────────────────────────────────────────────────────
 
+export const createCycleSchema = z.object({
+  year: z.coerce.number().int().min(2000).max(2100),
+  month: z.string().min(1).max(30).optional(),
+  monthNumber: z.coerce.number().int().min(1).max(12).optional(),
+  frequency: z.enum(['ANNUAL', 'QUARTERLY', 'MONTHLY']).optional().default('MONTHLY'),
+  name: z.string().max(100).optional(),
+  startDate: z.string().optional(),
+  endDate: z.string().optional(),
+  dueDate: z.string().optional(),
+  status: z.enum(['ACTIVE', 'CLOSED']).optional().default('ACTIVE'),
+});
+
 export const updateCycleSchema = z.object({
   name:      z.string().min(1, 'Cycle name is required').max(100).optional(),
   frequency: z.enum(['ANNUAL', 'QUARTERLY', 'MONTHLY']).optional(),
-  startDate: z.string().datetime({ offset: true }).optional(),
-  endDate:   z.string().datetime({ offset: true }).optional(),
+  year:      z.coerce.number().int().min(2000).max(2100).optional(),
+  month:     z.string().min(1).max(30).optional(),
+  startDate: z.string().optional(),
+  endDate:   z.string().optional(),
+  dueDate:   z.string().optional(),
   status:    z.enum(['ACTIVE', 'CLOSED']).optional(),
 }).refine(data => Object.keys(data).length > 0, {
   message: 'At least one field must be provided',
 });
 
+export const createParameterSchema = z.object({
+  cycleId:  z.string().min(1, 'Cycle ID is required').optional(),
+  name:     z.string().min(1, 'Parameter name is required').max(100),
+  order:    z.coerce.number().int().min(1).max(100).optional(),
+  isActive: z.boolean().optional(),
+});
+
 export const updateParameterSchema = z.object({
   name:     z.string().min(1, 'Parameter name is required').max(100).optional(),
-  order:    z.number().int().min(1).max(20).optional(),
+  order:    z.coerce.number().int().min(1).max(100).optional(),
   isActive: z.boolean().optional(),
 }).refine(data => Object.keys(data).length > 0, {
   message: 'At least one field must be provided',
@@ -49,6 +71,8 @@ export const selfAssessmentSchema = z.object({
 
 export const submitSelfRatingSchema = z.object({
   cycleId: z.string().optional(),
+  year: z.coerce.number().int().optional(),
+  month: z.string().optional(),
   frequency: z.enum(['ANNUAL', 'QUARTERLY', 'MONTHLY']).optional(),
   periodName: z.string().optional(),
   rating: z.number().min(1).max(5).optional(),
@@ -84,11 +108,13 @@ export const managerReviewSchema = z.object({
     .min(1, 'Rating must be at least 1')
     .max(5, 'Rating cannot exceed 5')
     .optional(),
+  submit: z.boolean().optional(),
   scores: z
     .array(
       z.object({
         parameterId:  z.string().min(1, 'Parameter ID is required'),
-        managerScore: z.number().int().min(1).max(5),
+        managerScore: z.number().int().min(1).max(5).optional(),
+        score:        z.number().int().min(1).max(5).optional(),
       })
     )
     .optional(),
@@ -129,6 +155,11 @@ export const hrAuditSchema = z.object({
 
 export const peerNominationSchema = z.object({
   reviewerId: z.string().min(1, 'Reviewer ID is required'),
+  revieweeId: z.string().optional(),
+  cycleId:    z.string().optional(),
+  year:       z.coerce.number().int().min(2000).max(2100).optional(),
+  month:      z.string().optional(),
+  reNotify:   z.boolean().optional(),
 });
 
 // ── Peer Feedback Submission ──────────────────────────────────────────────────
@@ -191,12 +222,30 @@ export const listAppraisalsQuerySchema = z.object({
   search: z.string().max(200).optional(),
   frequency: z.enum(['ANNUAL', 'QUARTERLY', 'MONTHLY']).optional(),
   status: z.enum(['DRAFT', 'SUBMITTED', 'MANAGER_REVIEWED', 'COMPLETED']).optional(),
+  department: z.string().max(200).optional(),
+  cycleId: z.string().optional(),
+});
+
+export const cycleSummaryQuerySchema = z.object({
+  department: z.string().max(200).optional(),
 });
 
 export const activeCycleQuerySchema = z.object({
   frequency: z.enum(['ANNUAL', 'QUARTERLY', 'MONTHLY']).optional(),
   period: z.string().max(100).optional(),
   cycleId: z.string().optional(),
+  year: z.coerce.number().int().min(2000).max(2100).optional(),
+  month: z.string().max(50).optional(),
+});
+
+export const listCyclesQuerySchema = z.object({
+  year: z.coerce.number().int().min(2000).max(2100).optional(),
+  frequency: z.enum(['ANNUAL', 'QUARTERLY', 'MONTHLY']).optional(),
+  status: z.enum(['ACTIVE', 'CLOSED']).optional(),
+});
+
+export const listParametersQuerySchema = z.object({
+  cycleId: z.string().min(1, 'Cycle ID must not be empty').optional(),
 });
 
 // ── Goal Alignment Schemas ───────────────────────────────────────────────────
@@ -204,6 +253,8 @@ export const activeCycleQuerySchema = z.object({
 export const syncGoalsToAppraisalSchema = z.object({
   reviewId: z.string().min(1).optional(),
   cycleId: z.string().min(1).optional(),
+  year: z.coerce.number().int().min(2000).max(2100).optional(),
+  month: z.string().optional(),
   frequency: z.enum(['ANNUAL', 'QUARTERLY', 'MONTHLY']).optional().default('MONTHLY'),
   periodName: z.string().max(100).optional(),
 });
@@ -217,8 +268,51 @@ export const myGoalsQuerySchema = z.object({
   category: z.string().max(100).optional(),
 });
 
+// ── Route Parameter ID Schemas ───────────────────────────────────────────────
+
 export const reviewIdParamSchema = z.object({
   id: z.string().min(1, 'Review ID is required').max(100),
 });
 
+export const cycleIdParamSchema = z.object({
+  id: z.string().min(1, 'Cycle ID is required').max(100),
+});
 
+export const parameterIdParamSchema = z.object({
+  id: z.string().min(1, 'Parameter ID is required').max(100),
+});
+
+export const employeeIdParamSchema = z.object({
+  employeeId: z.string().min(1, 'Employee ID is required').max(100),
+});
+
+export const nominationIdParamSchema = z.object({
+  id: z.string().min(1, 'Nomination ID is required').max(100),
+});
+
+export const directReportsQuerySchema = z.object({
+  search: z.string().max(100).optional(),
+  department: z.string().max(100).optional(),
+});
+
+export const peerNominationsQuerySchema = z.object({
+  cycleId: z.string().max(100).optional(),
+  year: z.coerce.number().int().min(2000).max(2100).optional(),
+  month: z.string().max(50).optional(),
+  employeeId: z.string().max(100).optional(),
+  revieweeId: z.string().max(100).optional(),
+});
+
+export const peerFeedbackQuerySchema = z.object({
+  cycleId: z.string().max(100).optional(),
+});
+
+export const cmdPeerFeedbackQuerySchema = z.object({
+  cycleId: z.string().max(100).optional(),
+});
+
+export const hrAuditQuerySchema = z.object({
+  cycleId: z.string().max(100).optional(),
+  year: z.coerce.number().int().min(2000).max(2100).optional(),
+  month: z.string().max(50).optional(),
+});

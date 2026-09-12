@@ -1,5 +1,6 @@
 import swaggerJsdoc from 'swagger-jsdoc';
 import swaggerUi from 'swagger-ui-express';
+import { swaggerExtensions } from './swaggerExtensions.js';
 
 const options = {
   definition: {
@@ -37,6 +38,7 @@ const options = {
       { name: 'Reports & Analytics', description: 'Enterprise performance and HR analytics summary' },
       { name: 'Policies & Compliance', description: 'Corporate policies, electronic signatures, versioning, reminders, and auditable compliance registry' },
       { name: 'Uploads', description: 'Secure document and file uploads' },
+      { name: 'Company Hub', description: 'Team directory and personal hub profile management' },
       { name: 'Dev', description: 'Development-only endpoints (disabled in production)' },
     ],
     components: {
@@ -60,6 +62,117 @@ const options = {
                   message: { type: 'string', example: 'String must contain at least 1 character(s)' },
                   path: { type: 'array', items: { type: 'string' }, example: ['companyName'] },
                 },
+              },
+            },
+          },
+        },
+
+        // ── Company Hub schemas ──
+        HubTeamMember: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', example: 'clxyz123' },
+            name: { type: 'string', example: 'Jane Doe' },
+            role: { type: 'string', example: 'EMPLOYEE' },
+            designation: { type: 'string', example: 'Software Engineer' },
+            department: { type: 'string', example: 'Engineering' },
+            status: { type: 'string', example: 'ACTIVE' },
+            joinDate: { type: 'string', format: 'date-time', nullable: true, example: '2024-01-15T00:00:00.000Z' },
+            hubBio: { type: 'string', example: 'Passionate about building great products.' },
+            hubBirthday: { type: 'string', nullable: true, example: 'June 15 1990' },
+            profileSnaps: { type: 'array', items: { type: 'string', format: 'uri' }, example: ['https://cdn.example.com/snap1.jpg'] },
+            initials: { type: 'string', example: 'JD' },
+          },
+        },
+        UpdateHubProfileRequest: {
+          type: 'object',
+          properties: {
+            hubBio: { type: 'string', maxLength: 500, example: 'Passionate about building great products.' },
+            hubBirthday: { type: 'string', maxLength: 50, nullable: true, example: 'June 15 1990', description: 'Social birthday display string, e.g. "June 15" or "June 15 1990"' },
+            profileSnaps: {
+              type: 'array',
+              maxItems: 10,
+              items: { type: 'string', format: 'uri' },
+              example: ['https://cdn.example.com/snap1.jpg', 'https://cdn.example.com/snap2.jpg'],
+            },
+          },
+          description: 'At least one field must be provided',
+        },
+        HubProfileResponse: {
+          type: 'object',
+          properties: {
+            message: { type: 'string', example: 'Hub profile updated successfully' },
+            profile: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', example: 'clxyz123' },
+                name: { type: 'string', example: 'Jane Doe' },
+                hubBio: { type: 'string', example: 'Passionate about building great products.' },
+                hubBirthday: { type: 'string', format: 'date', nullable: true, example: '1990-06-15' },
+                profileSnaps: { type: 'array', items: { type: 'string', format: 'uri' }, example: [] },
+              },
+            },
+          },
+        },
+        HubEvent: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', example: 'ev_123456789' },
+            tenantId: { type: 'string', example: 'tenant_abc' },
+            createdById: { type: 'string', example: 'user_xyz' },
+            postedBy: { type: 'string', example: 'Priya Menon' },
+            title: { type: 'string', example: 'Tech Innovation Hackathon' },
+            date: { type: 'string', example: 'August 05, 2026' },
+            time: { type: 'string', nullable: true, example: '09:00 AM' },
+            location: { type: 'string', nullable: true, example: 'L4 Hack Space' },
+            description: { type: 'string', example: '48-hour build cycle focusing on AI prompt caches.' },
+            isFeatured: { type: 'boolean', example: true },
+            createdAt: { type: 'string', format: 'date-time' },
+            updatedAt: { type: 'string', format: 'date-time' },
+          },
+        },
+        CreateHubEventRequest: {
+          type: 'object',
+          required: ['title', 'date', 'description'],
+          properties: {
+            title: { type: 'string', example: 'Summer Outing 2026', minLength: 3, maxLength: 120 },
+            date: { type: 'string', example: 'July 18, 2026', minLength: 1, maxLength: 60 },
+            time: { type: 'string', nullable: true, example: '10:00 AM', maxLength: 40 },
+            location: { type: 'string', nullable: true, example: 'Mountain Breeze Resort', maxLength: 150 },
+            description: { type: 'string', example: 'Guidelines and transport details for all employees...', minLength: 5, maxLength: 2000 },
+            isFeatured: { type: 'boolean', example: true },
+            postedBy: { type: 'string', nullable: true, example: 'Priya Menon (HR Lead)', maxLength: 100 },
+          },
+        },
+        UpdateHubEventRequest: {
+          type: 'object',
+          description: 'At least one field must be provided to update',
+          properties: {
+            title: { type: 'string', example: 'Summer Outing 2026 (Updated)', minLength: 3, maxLength: 120 },
+            date: { type: 'string', example: 'July 25, 2026', minLength: 1, maxLength: 60 },
+            time: { type: 'string', nullable: true, example: '11:00 AM', maxLength: 40 },
+            location: { type: 'string', nullable: true, example: 'Mountain Breeze Resort Hall B', maxLength: 150 },
+            description: { type: 'string', example: 'Updated guidelines and transport schedule...', minLength: 5, maxLength: 2000 },
+            isFeatured: { type: 'boolean', example: true },
+            postedBy: { type: 'string', nullable: true, example: 'Priya Menon (HR Lead)', maxLength: 100 },
+          },
+        },
+        HubEventsListResponse: {
+          type: 'object',
+          properties: {
+            items: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/HubEvent' },
+            },
+            pagination: {
+              type: 'object',
+              properties: {
+                page: { type: 'integer', example: 1 },
+                limit: { type: 'integer', example: 6 },
+                total: { type: 'integer', example: 12 },
+                totalPages: { type: 'integer', example: 2 },
+                hasNextPage: { type: 'boolean', example: true },
+                hasPrevPage: { type: 'boolean', example: false },
               },
             },
           },
@@ -299,6 +412,33 @@ const options = {
             user: { $ref: '#/components/schemas/Employee' },
           },
         },
+        ForgotPasswordRequest: {
+          type: 'object',
+          required: ['email'],
+          properties: {
+            email: { type: 'string', format: 'email', example: 'arjun@acmecorp.com' },
+          },
+        },
+        ForgotPasswordResponse: {
+          type: 'object',
+          properties: {
+            message: { type: 'string', example: 'If an account exists for this email address, a password reset link has been sent.' },
+          },
+        },
+        ResetPasswordRequest: {
+          type: 'object',
+          required: ['token', 'newPassword'],
+          properties: {
+            token: { type: 'string', example: '4a6b2c8d1e3f...' },
+            newPassword: { type: 'string', minLength: 8, maxLength: 128, example: 'NewStr0ngP@ss123' },
+          },
+        },
+        ResetPasswordResponse: {
+          type: 'object',
+          properties: {
+            message: { type: 'string', example: 'Password reset successfully.' },
+          },
+        },
 
         // ── Employee schemas ──
         Employee: {
@@ -529,7 +669,23 @@ const options = {
           },
         },
         
-        // ── Goal schemas ──
+        GoalAssignment: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', example: 'ga_clxyz123' },
+            tenantId: { type: 'string', example: 'tenant_abc' },
+            goalId: { type: 'string', example: 'clgoal123' },
+            employeeId: { type: 'string', example: 'emp_456' },
+            assignedById: { type: 'string', nullable: true, example: 'mgr_789' },
+            progress: { type: 'integer', example: 60, description: 'Employee-specific progress percentage (0-100)' },
+            status: { type: 'string', example: 'IN_PROGRESS', description: 'Employee-specific goal status' },
+            milestones: { type: 'integer', example: 3 },
+            completedMilestones: { type: 'integer', example: 1 },
+            createdAt: { type: 'string', format: 'date-time' },
+            updatedAt: { type: 'string', format: 'date-time' },
+            employee: { $ref: '#/components/schemas/Employee' },
+          },
+        },
         Goal: {
           type: 'object',
           properties: {
@@ -539,7 +695,7 @@ const options = {
             description: { type: 'string', example: 'Refactor goals repository module to support direct tenancy.' },
             goalType: { type: 'string', example: 'General' },
             category: { type: 'string', example: 'Project Delivery' },
-            priority: { type: 'string', enum: ['high', 'medium', 'low'], example: 'medium' },
+            priority: { type: 'string', enum: ['high', 'medium', 'low', 'critical'], example: 'medium' },
             progress: { type: 'integer', example: 45 },
             status: { type: 'string', example: 'DRAFT' },
             financialYear: { type: 'string', example: 'FY 2026-27' },
@@ -549,9 +705,14 @@ const options = {
             attachments: { type: 'array', items: { type: 'string' } },
             specialNotes: { type: 'string', example: 'Ensure that the indexes are added to tenantId.' },
             dueDate: { type: 'string', format: 'date' },
-            employeeId: { type: 'string' },
+            employeeId: { type: 'string', nullable: true },
             milestones: { type: 'integer', example: 4 },
             completedMilestones: { type: 'integer', example: 1 },
+            assignments: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/GoalAssignment' },
+              description: 'Independent relational assignments for all employees allocated to this goal',
+            },
             createdAt: { type: 'string', format: 'date-time' },
           },
         },
@@ -568,10 +729,16 @@ const options = {
             quarter: { type: 'string', example: 'Q1' },
             startDate: { type: 'string', format: 'date-time' },
             targetDate: { type: 'string', format: 'date-time' },
+            dueDate: { type: 'string', format: 'date' },
             attachments: { type: 'array', items: { type: 'string' } },
             specialNotes: { type: 'string', example: 'Ensure that the indexes are added to tenantId.' },
-            dueDate: { type: 'string', format: 'date' },
-            employeeId: { type: 'string' },
+            employeeIds: {
+              type: 'array',
+              items: { type: 'string' },
+              example: ['emp_123', 'emp_456'],
+              description: 'Array of employee IDs to assign this goal to. Validated against reporting hierarchy.',
+            },
+            employeeId: { type: 'string', description: 'Legacy single target employee ID (auto-normalized to employeeIds)' },
           },
         },
         GoalUpdateRequest: {
@@ -590,6 +757,36 @@ const options = {
             status: { type: 'string', example: 'DRAFT' },
           },
         },
+        GoalSubmitRequest: {
+          type: 'object',
+          properties: {
+            comment: { type: 'string', maxLength: 1000, example: 'Completed all tasks. Ready for manager review.' },
+            targetEmployeeId: { type: 'string', example: 'emp_123' },
+          },
+        },
+        GoalApproveRequest: {
+          type: 'object',
+          properties: {
+            comment: { type: 'string', maxLength: 1000, example: 'Approved and verified deliverables.' },
+            rating: { type: 'integer', minimum: 1, maximum: 5, example: 5 },
+            targetEmployeeId: { type: 'string', example: 'emp_123', description: 'Target assignee ID when reviewing multi-employee goals' },
+          },
+        },
+        GoalRejectRequest: {
+          type: 'object',
+          required: ['comment'],
+          properties: {
+            comment: { type: 'string', minLength: 1, maxLength: 1000, example: 'Please complete remaining integration tests.' },
+            targetEmployeeId: { type: 'string', example: 'emp_123', description: 'Target assignee ID when requesting revisions' },
+          },
+        },
+        GoalResubmitRequest: {
+          type: 'object',
+          properties: {
+            comment: { type: 'string', maxLength: 1000, example: 'Revised according to review feedback.' },
+            targetEmployeeId: { type: 'string', example: 'emp_123' },
+          },
+        },
         GoalReviewRequest: {
           type: 'object',
           required: ['action'],
@@ -597,6 +794,15 @@ const options = {
             action: { type: 'string', enum: ['APPROVE', 'REJECT'], example: 'APPROVE' },
             comment: { type: 'string', example: 'Goal deliverables successfully verified against SLAs.' },
             rating: { type: 'integer', minimum: 1, maximum: 5, example: 5 },
+            targetEmployeeId: { type: 'string', example: 'emp_123' },
+          },
+        },
+        GoalCommentCreateRequest: {
+          type: 'object',
+          required: ['comment'],
+          properties: {
+            comment: { type: 'string', minLength: 1, maxLength: 2000, example: 'Finished all unit and integration tests.' },
+            attachments: { type: 'array', items: { type: 'string' }, example: ['https://cdn.example.com/test-report.pdf'] },
           },
         },
         GoalComment: {
@@ -713,10 +919,76 @@ const options = {
           required: ['startDate', 'endDate', 'reason'],
           properties: {
             requestType: { type: 'string', enum: ['LEAVE', 'WFH'], default: 'LEAVE' },
+            leaveTypeId: { type: 'string', nullable: true, example: 'cltype12345' },
             leaveType: { type: 'string', example: 'Casual Leave' },
             startDate: { type: 'string', format: 'date', example: '2026-09-02' },
             endDate: { type: 'string', format: 'date', example: '2026-09-03' },
-            reason: { type: 'string', example: 'Family wedding out of town.' },
+            dayType: { type: 'string', enum: ['FULL', 'FIRST_HALF', 'SECOND_HALF'], default: 'FULL' },
+            reason: { type: 'string', example: 'Personal urgent affairs.' },
+            attachmentUrl: { type: 'string', nullable: true, example: '/uploads/medical-cert.pdf' },
+          },
+        },
+        LeaveType: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', example: 'cltype12345' },
+            tenantId: { type: 'string', example: 'cltenant123' },
+            name: { type: 'string', example: 'Study Leave' },
+            code: { type: 'string', example: 'STUDY' },
+            description: { type: 'string', nullable: true, example: 'Time off for certification exams' },
+            defaultDays: { type: 'number', example: 5 },
+            allocationType: { type: 'string', enum: ['ANNUAL', 'MONTHLY', 'ACCRUAL', 'LUMP_SUM'], example: 'ANNUAL' },
+            year: { type: 'integer', example: 2026 },
+            isPaid: { type: 'boolean', example: true },
+            requiresApproval: { type: 'boolean', example: true },
+            allowHalfDay: { type: 'boolean', example: true },
+            allowNegativeBalance: { type: 'boolean', example: false },
+            maxConsecutiveDays: { type: 'integer', nullable: true, example: 5 },
+            minNoticeDays: { type: 'integer', example: 2 },
+            carryForwardAllowed: { type: 'boolean', example: false },
+            maxCarryForwardDays: { type: 'integer', example: 0 },
+            encashmentAllowed: { type: 'boolean', example: false },
+            requiresDocument: { type: 'boolean', example: true },
+            documentRequiredAfterDays: { type: 'integer', example: 2 },
+            isActive: { type: 'boolean', example: true },
+            createdAt: { type: 'string', format: 'date-time' },
+            updatedAt: { type: 'string', format: 'date-time' },
+          },
+        },
+        CreateLeaveType: {
+          type: 'object',
+          required: ['name', 'code'],
+          properties: {
+            name: { type: 'string', example: 'Study Leave' },
+            code: { type: 'string', example: 'STUDY' },
+            description: { type: 'string', nullable: true },
+            defaultDays: { type: 'number', default: 0, example: 5 },
+            allocationType: { type: 'string', enum: ['ANNUAL', 'MONTHLY', 'ACCRUAL', 'LUMP_SUM'], default: 'ANNUAL' },
+            isPaid: { type: 'boolean', default: true },
+            requiresApproval: { type: 'boolean', default: true },
+            allowHalfDay: { type: 'boolean', default: true },
+            allowNegativeBalance: { type: 'boolean', default: false },
+            maxConsecutiveDays: { type: 'integer', nullable: true },
+            minNoticeDays: { type: 'integer', default: 0 },
+            carryForwardAllowed: { type: 'boolean', default: false },
+            maxCarryForwardDays: { type: 'integer', default: 0 },
+            requiresDocument: { type: 'boolean', default: false },
+            documentRequiredAfterDays: { type: 'integer', default: 2 },
+            isActive: { type: 'boolean', default: true },
+          },
+        },
+        WfhPolicy: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', example: 'clwfh12345' },
+            tenantId: { type: 'string', example: 'cltenant123' },
+            isEnabled: { type: 'boolean', example: true },
+            annualDays: { type: 'number', example: 15 },
+            requiresApproval: { type: 'boolean', example: true },
+            maxConsecutiveDays: { type: 'integer', example: 5 },
+            minNoticeDays: { type: 'integer', example: 0 },
+            monthlyLimit: { type: 'integer', nullable: true },
+            isActive: { type: 'boolean', example: true },
           },
         },
 
@@ -724,26 +996,78 @@ const options = {
         AppraisalCycle: {
           type: 'object',
           properties: {
-            id:         { type: 'string', example: 'clcycle12345' },
-            tenantId:   { type: 'string', example: 'cltenant123' },
-            name:       { type: 'string', example: 'FY 2024-2025' },
-            frequency:  { type: 'string', enum: ['ANNUAL', 'QUARTERLY', 'MONTHLY'], example: 'ANNUAL' },
-            startDate:  { type: 'string', format: 'date-time' },
-            endDate:    { type: 'string', format: 'date-time' },
-            status:     { type: 'string', enum: ['ACTIVE', 'CLOSED'], example: 'ACTIVE' },
-            parameters: { type: 'array', items: { $ref: '#/components/schemas/AppraisalParameter' } },
-            createdAt:  { type: 'string', format: 'date-time' },
-            updatedAt:  { type: 'string', format: 'date-time' },
+            id:              { type: 'string', example: 'clcycle12345' },
+            tenantId:        { type: 'string', example: 'cltenant123' },
+            name:            { type: 'string', example: 'September 2026' },
+            frequency:       { type: 'string', enum: ['ANNUAL', 'QUARTERLY', 'MONTHLY'], example: 'MONTHLY' },
+            year:            { type: 'integer', example: 2026 },
+            month:           { type: 'string', example: 'September' },
+            monthNumber:     { type: 'integer', example: 9 },
+            startDate:       { type: 'string', format: 'date-time' },
+            endDate:         { type: 'string', format: 'date-time' },
+            status:          { type: 'string', enum: ['ACTIVE', 'CLOSED'], example: 'ACTIVE' },
+            createdById:     { type: 'string', nullable: true, example: 'cluser12345' },
+            createdBy:       { type: 'object', nullable: true },
+            reviewCount:     { type: 'integer', example: 5 },
+            nominationCount: { type: 'integer', example: 2 },
+            parameters:      { type: 'array', items: { $ref: '#/components/schemas/AppraisalParameter' } },
+            createdAt:       { type: 'string', format: 'date-time' },
+            updatedAt:       { type: 'string', format: 'date-time' },
+          },
+        },
+        CreateCycleRequest: {
+          type: 'object',
+          required: ['year'],
+          properties: {
+            year:        { type: 'integer', minimum: 2000, maximum: 2100, example: 2026 },
+            month:       { type: 'string', example: 'September' },
+            monthNumber: { type: 'integer', minimum: 1, maximum: 12, example: 9 },
+            frequency:   { type: 'string', enum: ['ANNUAL', 'QUARTERLY', 'MONTHLY'], default: 'MONTHLY', example: 'MONTHLY' },
+            name:        { type: 'string', example: 'September 2026' },
+            startDate:   { type: 'string', format: 'date-time' },
+            endDate:     { type: 'string', format: 'date-time' },
+            dueDate:     { type: 'string', format: 'date-time' },
+            status:      { type: 'string', enum: ['ACTIVE', 'CLOSED'], default: 'ACTIVE', example: 'ACTIVE' },
+          },
+        },
+        AppraisalCycleListResponse: {
+          type: 'object',
+          properties: {
+            success:       { type: 'boolean', example: true },
+            count:         { type: 'integer', example: 3 },
+            distinctYears: { type: 'array', items: { type: 'integer' }, example: [2026, 2025] },
+            cycles:        { type: 'array', items: { $ref: '#/components/schemas/AppraisalCycle' } },
           },
         },
         AppraisalParameter: {
           type: 'object',
           properties: {
-            id:       { type: 'string', example: 'clparam12345' },
-            cycleId:  { type: 'string', example: 'clcycle12345' },
-            name:     { type: 'string', example: 'Technical Skills' },
-            order:    { type: 'integer', example: 1 },
-            isActive: { type: 'boolean', example: true },
+            id:        { type: 'string', example: 'clparam12345' },
+            tenantId:  { type: 'string', example: 'cltenant123' },
+            cycleId:   { type: 'string', example: 'clcycle12345' },
+            name:      { type: 'string', example: 'Technical Skills' },
+            order:     { type: 'integer', example: 1 },
+            isActive:  { type: 'boolean', example: true },
+            createdAt: { type: 'string', format: 'date-time' },
+            updatedAt: { type: 'string', format: 'date-time' },
+          },
+        },
+        CreateParameterRequest: {
+          type: 'object',
+          required: ['name'],
+          properties: {
+            name:     { type: 'string', minLength: 1, maxLength: 100, example: 'Cloud Infrastructure & DevOps' },
+            cycleId:  { type: 'string', example: 'clcycle12345', description: 'Target cycle ID. Defaults to active cycle if omitted' },
+            order:    { type: 'integer', minimum: 1, maximum: 100, example: 6 },
+            isActive: { type: 'boolean', default: true, example: true },
+          },
+        },
+        ParameterListResponse: {
+          type: 'object',
+          properties: {
+            success:    { type: 'boolean', example: true },
+            count:      { type: 'integer', example: 5 },
+            parameters: { type: 'array', items: { $ref: '#/components/schemas/AppraisalParameter' } },
           },
         },
         PerformanceReview: {
@@ -788,16 +1112,20 @@ const options = {
           properties: {
             name:      { type: 'string', example: 'FY 2025-2026' },
             frequency: { type: 'string', enum: ['ANNUAL', 'QUARTERLY', 'MONTHLY'], example: 'QUARTERLY' },
+            year:      { type: 'integer', minimum: 2000, maximum: 2100, example: 2026 },
+            month:     { type: 'string', example: 'September' },
             startDate: { type: 'string', format: 'date-time', example: '2025-04-01T00:00:00Z' },
             endDate:   { type: 'string', format: 'date-time', example: '2026-03-31T00:00:00Z' },
+            dueDate:   { type: 'string', format: 'date-time', example: '2026-03-31T00:00:00Z' },
             status:    { type: 'string', enum: ['ACTIVE', 'CLOSED'], example: 'ACTIVE' },
           },
         },
         UpdateParameterRequest: {
           type: 'object',
+          description: 'At least one field must be provided to update',
           properties: {
-            name:     { type: 'string', example: 'Leadership & Initiative' },
-            order:    { type: 'integer', minimum: 1, maximum: 20, example: 3 },
+            name:     { type: 'string', minLength: 1, maxLength: 100, example: 'Leadership & Initiative' },
+            order:    { type: 'integer', minimum: 1, maximum: 100, example: 3 },
             isActive: { type: 'boolean', example: false },
           },
         },
@@ -834,16 +1162,19 @@ const options = {
         ManagerReviewRequest: {
           type: 'object',
           properties: {
-            managerRemarks: { type: 'string', maxLength: 5000, example: 'Consistent high-quality output throughout the cycle.' },
-            managerRating:  { type: 'number', minimum: 1, maximum: 5, example: 4.5 },
+            managerRemarks:  { type: 'string', maxLength: 5000, example: 'Consistent high-quality output throughout the cycle.' },
+            managerComments: { type: 'string', maxLength: 5000, example: 'Consistent high-quality output throughout the cycle.' },
+            managerRating:   { type: 'number', minimum: 1, maximum: 5, example: 4.5 },
+            submit:          { type: 'boolean', example: true, description: 'True to finalize and mark status as MANAGER_REVIEWED' },
             scores: {
               type: 'array',
               items: {
                 type: 'object',
-                required: ['parameterId', 'managerScore'],
+                required: ['parameterId'],
                 properties: {
                   parameterId:  { type: 'string', example: 'clparam12345' },
                   managerScore: { type: 'integer', minimum: 1, maximum: 5, example: 5 },
+                  score:        { type: 'integer', minimum: 1, maximum: 5, example: 5 },
                 },
               },
             },
@@ -873,7 +1204,11 @@ const options = {
           required: ['reviewerId'],
           properties: {
             reviewerId: { type: 'string', example: 'cluser56789', description: 'The ID of the colleague you are nominating to give you feedback' },
-            revieweeId: { type: 'string', example: 'cluser12345', description: 'Optional — defaults to the requesting user' },
+            revieweeId: { type: 'string', example: 'cluser12345', description: 'Optional — defaults to the requesting user (HR/Manager can specify for direct report)' },
+            cycleId:    { type: 'string', example: 'clcycle12345', description: 'Optional target cycle ID' },
+            year:       { type: 'integer', minimum: 2000, maximum: 2100, example: 2026, description: 'Optional cycle year' },
+            month:      { type: 'string', example: 'September', description: 'Optional cycle month' },
+            reNotify:   { type: 'boolean', example: false, description: 'Optional — if true, resends notification reminder to an existing pending reviewer' },
           },
         },
         PeerFeedbackRequest: {
@@ -1249,6 +1584,247 @@ const options = {
             reminderSentAt: { type: 'string', format: 'date-time', nullable: true },
           },
         },
+
+        // ── Leaves & WFH Schemas ──
+        LeaveType: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', example: 'lt_annual123' },
+            tenantId: { type: 'string', example: 'tenant_abc' },
+            name: { type: 'string', example: 'Annual Leave' },
+            code: { type: 'string', example: 'ANNUAL' },
+            description: { type: 'string', nullable: true, example: 'Standard paid annual leave allowance' },
+            color: { type: 'string', nullable: true, example: '#6366f1' },
+            defaultDays: { type: 'number', example: 18 },
+            allocationType: { type: 'string', enum: ['ANNUAL', 'MONTHLY_ACCRUAL'], example: 'ANNUAL' },
+            year: { type: 'integer', example: 2026 },
+            isPaid: { type: 'boolean', example: true },
+            requiresApproval: { type: 'boolean', example: true },
+            allowHalfDay: { type: 'boolean', example: true },
+            allowNegativeBalance: { type: 'boolean', example: false },
+            maxConsecutiveDays: { type: 'integer', nullable: true, example: 14 },
+            minNoticeDays: { type: 'integer', example: 2 },
+            carryForwardAllowed: { type: 'boolean', example: true },
+            maxCarryForwardDays: { type: 'integer', example: 5 },
+            encashmentAllowed: { type: 'boolean', example: false },
+            requiresDocument: { type: 'boolean', example: false },
+            documentRequiredAfterDays: { type: 'integer', nullable: true, example: 2 },
+            isActive: { type: 'boolean', example: true },
+            createdAt: { type: 'string', format: 'date-time' },
+            updatedAt: { type: 'string', format: 'date-time' },
+          },
+        },
+        CreateLeaveTypeRequest: {
+          type: 'object',
+          required: ['name', 'code', 'defaultDays'],
+          properties: {
+            name: { type: 'string', example: 'Maternity Leave', minLength: 2, maxLength: 80 },
+            code: { type: 'string', example: 'MATERNITY', pattern: '^[A-Z0-9_]+$', minLength: 2, maxLength: 30 },
+            description: { type: 'string', nullable: true, example: 'Paid maternal leave for expecting mothers' },
+            color: { type: 'string', nullable: true, example: '#ec4899' },
+            defaultDays: { type: 'number', minimum: 0, example: 90 },
+            allocationType: { type: 'string', enum: ['ANNUAL', 'MONTHLY_ACCRUAL'], default: 'ANNUAL' },
+            isPaid: { type: 'boolean', default: true },
+            requiresApproval: { type: 'boolean', default: true },
+            allowHalfDay: { type: 'boolean', default: false },
+            allowNegativeBalance: { type: 'boolean', default: false },
+            maxConsecutiveDays: { type: 'integer', nullable: true, minimum: 1, example: 90 },
+            minNoticeDays: { type: 'integer', default: 15, minimum: 0 },
+            carryForwardAllowed: { type: 'boolean', default: false },
+            maxCarryForwardDays: { type: 'integer', default: 0, minimum: 0 },
+            encashmentAllowed: { type: 'boolean', default: false },
+            requiresDocument: { type: 'boolean', default: true },
+            documentRequiredAfterDays: { type: 'integer', nullable: true, minimum: 1, example: 1 },
+            isActive: { type: 'boolean', default: true },
+          },
+        },
+        UpdateLeaveTypeRequest: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', minLength: 2, maxLength: 80 },
+            description: { type: 'string', nullable: true },
+            color: { type: 'string', nullable: true },
+            defaultDays: { type: 'number', minimum: 0 },
+            allocationType: { type: 'string', enum: ['ANNUAL', 'MONTHLY_ACCRUAL'] },
+            isPaid: { type: 'boolean' },
+            requiresApproval: { type: 'boolean' },
+            allowHalfDay: { type: 'boolean' },
+            allowNegativeBalance: { type: 'boolean' },
+            maxConsecutiveDays: { type: 'integer', nullable: true, minimum: 1 },
+            minNoticeDays: { type: 'integer', minimum: 0 },
+            carryForwardAllowed: { type: 'boolean' },
+            maxCarryForwardDays: { type: 'integer', minimum: 0 },
+            encashmentAllowed: { type: 'boolean' },
+            requiresDocument: { type: 'boolean' },
+            documentRequiredAfterDays: { type: 'integer', nullable: true, minimum: 1 },
+            isActive: { type: 'boolean' },
+          },
+        },
+        LeaveTypeStatusRequest: {
+          type: 'object',
+          required: ['isActive'],
+          properties: {
+            isActive: { type: 'boolean', example: false },
+          },
+        },
+        LeaveBalanceItem: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            typeId: { type: 'string' },
+            code: { type: 'string', example: 'ANNUAL' },
+            name: { type: 'string', example: 'Annual Leave' },
+            color: { type: 'string', example: '#6366f1' },
+            allowHalfDay: { type: 'boolean', example: true },
+            requiresDocument: { type: 'boolean', example: false },
+            documentRequiredAfterDays: { type: 'integer', nullable: true, example: 2 },
+            allocated: { type: 'number', example: 18 },
+            carriedForward: { type: 'number', example: 0 },
+            adjusted: { type: 'number', example: 0 },
+            totalQuota: { type: 'number', example: 18 },
+            used: { type: 'number', example: 4 },
+            pending: { type: 'number', example: 2 },
+            available: { type: 'number', example: 12 },
+          },
+        },
+        MyLeaveBalancesResponse: {
+          type: 'object',
+          properties: {
+            year: { type: 'integer', example: 2026 },
+            leaveTypes: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/LeaveBalanceItem' },
+            },
+            wfh: {
+              type: 'object',
+              properties: {
+                allocated: { type: 'number', example: 15 },
+                adjusted: { type: 'number', example: 0 },
+                totalQuota: { type: 'number', example: 15 },
+                used: { type: 'number', example: 3 },
+                pending: { type: 'number', example: 1 },
+                available: { type: 'number', example: 11 },
+                isEnabled: { type: 'boolean', example: true },
+              },
+            },
+            summary: {
+              type: 'object',
+              properties: {
+                totalAllocated: { type: 'number', example: 36 },
+                totalUsed: { type: 'number', example: 7 },
+                totalPending: { type: 'number', example: 3 },
+                totalAvailable: { type: 'number', example: 26 },
+              },
+            },
+          },
+        },
+        AdjustBalanceRequest: {
+          type: 'object',
+          required: ['employeeId', 'days', 'operation', 'reason'],
+          properties: {
+            employeeId: { type: 'string', example: 'user_123' },
+            leaveTypeId: { type: 'string', nullable: true, example: 'lt_annual123', description: 'Leave type ID (null if adjusting WFH)' },
+            isWfh: { type: 'boolean', default: false, example: false },
+            days: { type: 'number', minimum: 0.5, example: 3 },
+            operation: { type: 'string', enum: ['ADD', 'DEDUCT'], example: 'ADD' },
+            reason: { type: 'string', example: 'Special management quota incentive for weekend hackathon support' },
+          },
+        },
+        CreateLeaveRequest: {
+          type: 'object',
+          required: ['startDate', 'endDate', 'reason'],
+          properties: {
+            leaveTypeId: { type: 'string', nullable: true, example: 'lt_sick123', description: 'Omit or null if requestType is WFH' },
+            requestType: { type: 'string', enum: ['LEAVE', 'WFH'], default: 'LEAVE', example: 'LEAVE' },
+            startDate: { type: 'string', format: 'date', example: '2026-09-15' },
+            endDate: { type: 'string', format: 'date', example: '2026-09-16' },
+            dayType: { type: 'string', enum: ['FULL', 'FIRST_HALF', 'SECOND_HALF'], default: 'FULL', example: 'FULL' },
+            reason: { type: 'string', example: 'High fever and doctor consultation', minLength: 3, maxLength: 500 },
+            attachmentUrl: { type: 'string', nullable: true, example: 'https://ueibi-storage.s3.amazonaws.com/tenants/t1/doc.pdf' },
+          },
+        },
+        LeaveRequestItem: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', example: 'lr_123456' },
+            employeeId: { type: 'string', example: 'user_123' },
+            leaveTypeId: { type: 'string', nullable: true, example: 'lt_sick123' },
+            leaveType: { $ref: '#/components/schemas/LeaveType' },
+            requestType: { type: 'string', enum: ['LEAVE', 'WFH'], example: 'LEAVE' },
+            dayType: { type: 'string', enum: ['FULL', 'FIRST_HALF', 'SECOND_HALF'], example: 'FULL' },
+            startDate: { type: 'string', format: 'date-time' },
+            endDate: { type: 'string', format: 'date-time' },
+            totalDays: { type: 'number', example: 2 },
+            reason: { type: 'string', example: 'High fever and doctor consultation' },
+            attachmentUrl: { type: 'string', nullable: true },
+            status: { type: 'string', enum: ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED'], example: 'PENDING' },
+            managerStatus: { type: 'string', enum: ['Pending', 'Approved', 'Rejected'], example: 'Pending' },
+            hrStatus: { type: 'string', enum: ['Pending', 'Approved', 'Rejected'], example: 'Pending' },
+            managerComment: { type: 'string', nullable: true },
+            hrComment: { type: 'string', nullable: true },
+            createdAt: { type: 'string', format: 'date-time' },
+            employee: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                name: { type: 'string' },
+                email: { type: 'string' },
+                department: { type: 'string', nullable: true },
+                role: { type: 'string' },
+              },
+            },
+          },
+        },
+        ApprovalActionRequest: {
+          type: 'object',
+          properties: {
+            comment: { type: 'string', example: 'Approved, take rest.' },
+          },
+        },
+        WfhPolicy: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            tenantId: { type: 'string' },
+            isEnabled: { type: 'boolean', example: true },
+            annualDays: { type: 'number', example: 15 },
+            monthlyLimit: { type: 'number', nullable: true, example: 4 },
+            requiresApproval: { type: 'boolean', example: true },
+            maxConsecutiveDays: { type: 'integer', example: 5 },
+            minNoticeDays: { type: 'integer', example: 1 },
+            createdAt: { type: 'string', format: 'date-time' },
+            updatedAt: { type: 'string', format: 'date-time' },
+          },
+        },
+        UpdateWfhPolicyRequest: {
+          type: 'object',
+          properties: {
+            isEnabled: { type: 'boolean' },
+            annualDays: { type: 'number', minimum: 0 },
+            monthlyLimit: { type: 'number', nullable: true, minimum: 1 },
+            requiresApproval: { type: 'boolean' },
+            maxConsecutiveDays: { type: 'integer', minimum: 1 },
+            minNoticeDays: { type: 'integer', minimum: 0 },
+          },
+        },
+        LeaveAuditLog: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            action: { type: 'string', example: 'CREATE_LEAVE_TYPE' },
+            performedById: { type: 'string' },
+            performedBy: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                name: { type: 'string' },
+                email: { type: 'string' },
+              },
+            },
+            details: { type: 'object' },
+            createdAt: { type: 'string', format: 'date-time' },
+          },
+        },
       },
       securitySchemes: {
         adminCookie: {
@@ -1315,6 +1891,60 @@ const options = {
             200: {
               description: 'Logged out successfully',
             },
+          },
+        },
+      },
+      '/auth/forgot-password': {
+        post: {
+          tags: ['Auth'],
+          summary: 'Request a password reset link via registered email',
+          description: 'Generates a secure, cryptographically random one-time password reset token and emails it to the user. Always returns a generic 200 response to prevent user enumeration.',
+          operationId: 'forgotPassword',
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/ForgotPasswordRequest' } } },
+          },
+          responses: {
+            200: {
+              description: 'Generic success response',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/ForgotPasswordResponse' } } },
+            },
+            400: {
+              description: 'Validation error (e.g. invalid email format)',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+            },
+            429: {
+              description: 'Rate limit exceeded',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+            },
+            500: { description: 'Internal server error' },
+          },
+        },
+      },
+      '/auth/reset-password': {
+        post: {
+          tags: ['Auth'],
+          summary: 'Reset password using a valid one-time reset token',
+          description: 'Validates the high-entropy reset token, checks that it is unexpired and unused, hashes the new password with bcrypt, marks the token as used atomically, and clears previous tokens.',
+          operationId: 'resetPassword',
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/ResetPasswordRequest' } } },
+          },
+          responses: {
+            200: {
+              description: 'Password reset successfully',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/ResetPasswordResponse' } } },
+            },
+            400: {
+              description: 'Invalid or expired token, or invalid password',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+            },
+            429: {
+              description: 'Rate limit exceeded',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+            },
+            500: { description: 'Internal server error' },
           },
         },
       },
@@ -2489,23 +3119,29 @@ const options = {
       '/goals': {
         get: {
           tags: ['Goals'],
-          summary: 'List all goals for an employee',
+          summary: 'List authorized goals with RBAC hierarchy scoping',
+          description: 'Returns goals based on caller role: EMPLOYEE sees only own goals; MANAGER sees own goals + goals assigned to reporting downline (including HR/Admin created goals) + created goals; HR/ADMIN sees tenant-wide goals.',
           operationId: 'listGoals',
           security: [{ userCookie: [] }],
           parameters: [
-            { name: 'employeeId', in: 'query', schema: { type: 'string' }, description: 'Employee ID (defaults to current user)' },
+            { name: 'employeeId', in: 'query', schema: { type: 'string' }, description: 'Employee ID filter ("all" for all team/tenant goals, or specific employee ID)' },
+            { name: 'status', in: 'query', schema: { type: 'string' }, description: 'Filter by goal status' },
+            { name: 'financialYear', in: 'query', schema: { type: 'string' }, description: 'Filter by financial year' },
+            { name: 'category', in: 'query', schema: { type: 'string' }, description: 'Filter by category' },
           ],
           responses: {
             200: {
-              description: 'Goals list retrieved',
+              description: 'Goals list retrieved successfully',
               content: { 'application/json': { schema: { type: 'object', properties: { items: { type: 'array', items: { $ref: '#/components/schemas/Goal' } } } } } },
             },
             401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden — not authorized to view target employee goals' },
           },
         },
         post: {
           tags: ['Goals'],
-          summary: 'Create a new goal',
+          summary: 'Create a new goal with atomic multi-employee assignment',
+          description: 'Creates a goal and assigns it transactionally to one or multiple employees. Validates all target employees against the manager reporting downline. If any employee is unauthorized, the entire request is rejected with 403.',
           operationId: 'createGoal',
           security: [{ userCookie: [] }],
           requestBody: {
@@ -2514,11 +3150,12 @@ const options = {
           },
           responses: {
             201: {
-              description: 'Goal created successfully',
+              description: 'Goal created and assigned successfully',
               content: { 'application/json': { schema: { $ref: '#/components/schemas/Goal' } } },
             },
-            400: { description: 'Missing title' },
+            400: { description: 'Validation failed or missing target employees', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
             401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden — one or more target employees are not in reporting hierarchy' },
           },
         },
       },
@@ -2887,6 +3524,159 @@ const options = {
           },
         },
       },
+      '/admin/leave-types': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'List all leave types with search and status filters (Admin/HR)',
+          operationId: 'adminListLeaveTypes',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'search', in: 'query', schema: { type: 'string' } },
+            { name: 'status', in: 'query', schema: { type: 'string', enum: ['ALL', 'ACTIVE', 'INACTIVE'] } },
+            { name: 'page', in: 'query', schema: { type: 'integer', default: 1 } },
+            { name: 'limit', in: 'query', schema: { type: 'integer', default: 50 } },
+          ],
+          responses: {
+            200: { description: 'Leave types retrieved successfully' },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden' },
+          },
+        },
+        post: {
+          tags: ['Leaves & WFH'],
+          summary: 'Create a dynamic leave type (Admin/HR)',
+          operationId: 'adminCreateLeaveType',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/CreateLeaveType' } } },
+          },
+          responses: {
+            201: { description: 'Leave type created successfully' },
+            400: { description: 'Validation error' },
+            409: { description: 'Code already exists' },
+          },
+        },
+      },
+      '/admin/leave-types/{id}': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'Get leave type details',
+          operationId: 'adminGetLeaveTypeById',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: { 200: { description: 'Leave type details' }, 404: { description: 'Not found' } },
+        },
+        put: {
+          tags: ['Leaves & WFH'],
+          summary: 'Update leave type configuration',
+          operationId: 'adminUpdateLeaveType',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } },
+          responses: { 200: { description: 'Leave type updated' }, 404: { description: 'Not found' } },
+        },
+        delete: {
+          tags: ['Leaves & WFH'],
+          summary: 'Safely delete leave type (only if no dependent records exist)',
+          operationId: 'adminDeleteLeaveType',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: {
+            200: { description: 'Leave type safely deleted' },
+            409: { description: 'Cannot delete: historical records depend on this leave type' },
+          },
+        },
+      },
+      '/admin/leave-types/{id}/status': {
+        patch: {
+          tags: ['Leaves & WFH'],
+          summary: 'Activate or deactivate leave type',
+          operationId: 'adminToggleLeaveTypeStatus',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { isActive: { type: 'boolean' } } } } } },
+          responses: { 200: { description: 'Status updated successfully' } },
+        },
+      },
+      '/leave-types': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'List active leave types for employee application dropdown',
+          operationId: 'listActiveLeaveTypes',
+          security: [{ userCookie: [] }],
+          responses: { 200: { description: 'Active leave types list' } },
+        },
+      },
+      '/wfh/policy': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'Get company Work From Home policy',
+          operationId: 'getWfhPolicy',
+          security: [{ userCookie: [] }],
+          responses: { 200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/WfhPolicy' } } } } },
+        },
+      },
+      '/admin/wfh/policy': {
+        put: {
+          tags: ['Leaves & WFH'],
+          summary: 'Update company Work From Home policy (Admin)',
+          operationId: 'adminUpdateWfhPolicy',
+          security: [{ userCookie: [] }],
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } },
+          responses: { 200: { description: 'WFH policy updated' } },
+        },
+      },
+      '/admin/leave-balances': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'List employee leave and WFH balances (Admin/HR)',
+          operationId: 'adminListEmployeeBalances',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'search', in: 'query', schema: { type: 'string' } },
+            { name: 'year', in: 'query', schema: { type: 'integer' } },
+          ],
+          responses: { 200: { description: 'Employee balances retrieved' } },
+        },
+      },
+      '/admin/leave-balances/adjust': {
+        post: {
+          tags: ['Leaves & WFH'],
+          summary: 'Manually adjust employee balance with audit log (Admin)',
+          operationId: 'adminAdjustEmployeeBalance',
+          security: [{ userCookie: [] }],
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } },
+          responses: { 200: { description: 'Balance adjusted successfully' } },
+        },
+      },
+      '/admin/leave-overview/stats': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'Get leave and WFH overview statistics (Admin/HR)',
+          operationId: 'adminGetLeaveStats',
+          security: [{ userCookie: [] }],
+          responses: { 200: { description: 'Statistics summary' } },
+        },
+      },
+      '/admin/leave-overview/calendar': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'Get leave calendar events (Admin/HR)',
+          operationId: 'adminGetLeaveCalendar',
+          security: [{ userCookie: [] }],
+          responses: { 200: { description: 'Calendar events list' } },
+        },
+      },
+      '/admin/leave-logs': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'Get leave and WFH audit trail (Admin/HR)',
+          operationId: 'adminGetLeaveAuditLogs',
+          security: [{ userCookie: [] }],
+          responses: { 200: { description: 'Audit trail records' } },
+        },
+      },
 
       // ── Goal Management Endpoints ──
       '/goals/categories': {
@@ -3032,9 +3822,12 @@ const options = {
           operationId: 'submitGoal',
           security: [{ userCookie: [] }],
           parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/GoalSubmitRequest' } } },
+          },
           responses: {
             200: { description: 'Goal submitted for manager review', content: { 'application/json': { schema: { $ref: '#/components/schemas/Goal' } } } },
-            400: { description: 'Incomplete tasks or invalid status' },
+            400: { description: 'Incomplete tasks or invalid status', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
             403: { description: 'Only goal assignee can submit' },
           },
         },
@@ -3047,10 +3840,11 @@ const options = {
           security: [{ userCookie: [] }],
           parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
           requestBody: {
-            content: { 'application/json': { schema: { type: 'object', properties: { comment: { type: 'string' }, rating: { type: 'integer' } } } } },
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/GoalApproveRequest' } } },
           },
           responses: {
             200: { description: 'Goal approved by manager', content: { 'application/json': { schema: { $ref: '#/components/schemas/Goal' } } } },
+            400: { description: 'Validation failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
             403: { description: 'Forbidden: not reporting manager' },
           },
         },
@@ -3064,11 +3858,11 @@ const options = {
           parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
           requestBody: {
             required: true,
-            content: { 'application/json': { schema: { type: 'object', required: ['comment'], properties: { comment: { type: 'string' } } } } },
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/GoalRejectRequest' } } },
           },
           responses: {
             200: { description: 'Goal returned for revisions', content: { 'application/json': { schema: { $ref: '#/components/schemas/Goal' } } } },
-            400: { description: 'Rejection reason is required' },
+            400: { description: 'Rejection reason is required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
           },
         },
       },
@@ -3079,8 +3873,12 @@ const options = {
           operationId: 'hrApproveGoal',
           security: [{ userCookie: [] }],
           parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/GoalApproveRequest' } } },
+          },
           responses: {
             200: { description: 'Goal finalized as COMPLETED', content: { 'application/json': { schema: { $ref: '#/components/schemas/Goal' } } } },
+            400: { description: 'Validation failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
             403: { description: 'Forbidden: HR role required' },
           },
         },
@@ -3094,10 +3892,11 @@ const options = {
           parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
           requestBody: {
             required: true,
-            content: { 'application/json': { schema: { type: 'object', required: ['comment'], properties: { comment: { type: 'string' } } } } },
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/GoalRejectRequest' } } },
           },
           responses: {
             200: { description: 'Goal returned for revisions by HR', content: { 'application/json': { schema: { $ref: '#/components/schemas/Goal' } } } },
+            400: { description: 'Rejection reason is required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
           },
         },
       },
@@ -3108,8 +3907,12 @@ const options = {
           operationId: 'resubmitGoal',
           security: [{ userCookie: [] }],
           parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/GoalResubmitRequest' } } },
+          },
           responses: {
             200: { description: 'Goal resubmitted for manager review', content: { 'application/json': { schema: { $ref: '#/components/schemas/Goal' } } } },
+            400: { description: 'Validation failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
           },
         },
       },
@@ -3132,10 +3935,28 @@ const options = {
           parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
           requestBody: {
             required: true,
-            content: { 'application/json': { schema: { type: 'object', required: ['comment'], properties: { comment: { type: 'string' }, attachments: { type: 'array', items: { type: 'string' } } } } } },
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/GoalCommentCreateRequest' } } },
           },
           responses: {
             201: { content: { 'application/json': { schema: { $ref: '#/components/schemas/GoalComment' } } } },
+            400: { description: 'Validation failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+          },
+        },
+      },
+      '/goals/{id}/comments/{cid}': {
+        delete: {
+          tags: ['Goals'],
+          summary: 'Delete a goal comment',
+          operationId: 'deleteGoalComment',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'cid', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          responses: {
+            200: { content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' } } } } } },
+            403: { description: 'Forbidden' },
+            404: { description: 'Comment not found' },
           },
         },
       },
@@ -3920,106 +4741,6 @@ const options = {
       '/appraisals/submit': {
         post: {
           tags: ['Appraisals'],
-          summary: 'Submit employee self-rating for an active appraisal cycle',
-          description: 'Submit or save employee self-assessment and ratings for the active appraisal cycle. Auto-creates review if not present.',
-          operationId: 'submitSelfRating',
-          security: [{ userCookie: [] }],
-          requestBody: {
-            required: true,
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/SubmitSelfRatingRequest' },
-                example: {
-                  rating: 4.5,
-                  comments: 'Achieved quarterly sprint targets and led microservices migration.',
-                  selfAccomplishments: 'Delivered database migration on time with zero downtime.',
-                  selfWeaknesses: 'Need to improve async documentation habits.',
-                  submit: true,
-                  scores: [
-                    { parameterId: 'clparam12345', selfScore: 4 },
-                    { parameterId: 'clparam67890', selfScore: 5 },
-                  ],
-                },
-              },
-            },
-          },
-          responses: {
-            200: {
-              description: 'Self-rating submitted successfully',
-              content: { 'application/json': { schema: { $ref: '#/components/schemas/PerformanceReview' } } },
-            },
-            400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
-            401: { description: 'Unauthorized' },
-          },
-        },
-      },
-      '/appraisals/{id}/manager-review': {
-        patch: {
-          tags: ['Appraisals'],
-          summary: 'Submit manager review and evaluation for employee appraisal',
-          description: 'Submit manager remarks and parameter scores for an employee performance review.',
-          operationId: 'submitManagerRating',
-          security: [{ userCookie: [] }],
-          parameters: [
-            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Performance Review ID' },
-          ],
-          requestBody: {
-            required: true,
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/SubmitManagerRatingRequest' },
-                example: {
-                  managerRating: 4.8,
-                  managerRemarks: 'Exceptional leadership and execution throughout the cycle. Exceeded SLA targets.',
-                  scores: [
-                    { parameterId: 'clparam12345', managerScore: 5 },
-                    { parameterId: 'clparam67890', managerScore: 4 },
-                  ],
-                },
-              },
-            },
-          },
-          responses: {
-            200: {
-              description: 'Manager review saved successfully',
-              content: { 'application/json': { schema: { $ref: '#/components/schemas/PerformanceReview' } } },
-            },
-            400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
-            403: { description: 'Access forbidden: not assigned manager' },
-            404: { description: 'Review not found' },
-          },
-        },
-      },
-      '/appraisals': {
-        get: {
-          tags: ['Appraisals'],
-          summary: 'List appraisal reviews for employee or manager direct reports',
-          description: 'Retrieve all appraisal reviews across cycles for the authenticated user.',
-          operationId: 'listAppraisals',
-          security: [{ userCookie: [] }],
-          responses: {
-            200: {
-              description: 'Appraisal reviews retrieved',
-              content: {
-                'application/json': {
-                  schema: {
-                    type: 'object',
-                    properties: {
-                      reviews: { type: 'array', items: { $ref: '#/components/schemas/PerformanceReview' } },
-                    },
-                  },
-                },
-              },
-            },
-            401: { description: 'Unauthorized' },
-          },
-        },
-      },
-
-      // ───── Appraisals & Performance Reviews ─────
-      '/appraisals/submit': {
-        post: {
-          tags: ['Appraisals'],
           summary: 'Submit employee self-rating, accomplishments, and parameter scores',
           description: 'Submits or saves draft for employee self-assessment. Links automatically to the active monthly, quarterly, or annual cycle.',
           operationId: 'submitSelfRating',
@@ -4226,16 +4947,87 @@ const options = {
         },
       },
 
+      '/appraisal-cycles': {
+        post: {
+          tags: ['Appraisals'],
+          summary: 'Create a new appraisal cycle for any year & month (HR / Admin / CMD)',
+          description: 'Creates an appraisal cycle for a designated year, month, or quarter. Automatically clones tenant evaluation parameters or seeds default skills.',
+          operationId: 'createCycle',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/CreateCycleRequest' },
+                example: {
+                  year: 2026,
+                  month: 'September',
+                  monthNumber: 9,
+                  frequency: 'MONTHLY',
+                  name: 'September 2026',
+                  status: 'ACTIVE',
+                },
+              },
+            },
+          },
+          responses: {
+            201: {
+              description: 'Cycle created successfully',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      success: { type: 'boolean', example: true },
+                      message: { type: 'string', example: 'Appraisal cycle for September 2026 created successfully.' },
+                      cycle: { $ref: '#/components/schemas/AppraisalCycle' },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+            403: { description: 'Forbidden — requires HR, Admin, Super Admin, or CMD role' },
+            409: { description: 'Cycle for this cadence/month/year already exists' },
+          },
+        },
+        get: {
+          tags: ['Appraisals'],
+          summary: 'List all appraisal cycles with year, cadence, and status filters',
+          description: 'Retrieve all appraisal cycles for the tenant with distinct years list and cycle counts.',
+          operationId: 'listCycles',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'year', in: 'query', schema: { type: 'integer', minimum: 2000, maximum: 2100 }, description: 'Filter by appraisal cycle year' },
+            { name: 'frequency', in: 'query', schema: { type: 'string', enum: ['ANNUAL', 'QUARTERLY', 'MONTHLY'] }, description: 'Filter by cycle cadence' },
+            { name: 'status', in: 'query', schema: { type: 'string', enum: ['ACTIVE', 'CLOSED'] }, description: 'Filter by cycle status' },
+          ],
+          responses: {
+            200: {
+              description: 'List of cycles and distinct years',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/AppraisalCycleListResponse' },
+                },
+              },
+            },
+            400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+            401: { description: 'Unauthorized' },
+          },
+        },
+      },
       '/appraisal-cycles/active': {
         get: {
           tags: ['Appraisals'],
-          summary: 'Get active appraisal cycle with parameters (supports dynamic cadence & month)',
+          summary: 'Get active appraisal cycle with parameters (supports dynamic cadence, year & month)',
           operationId: 'getActiveCycle',
           security: [{ userCookie: [] }],
           parameters: [
             { name: 'frequency', in: 'query', schema: { type: 'string', enum: ['MONTHLY', 'QUARTERLY', 'ANNUAL'], default: 'MONTHLY' }, description: 'Appraisal cadence' },
             { name: 'period', in: 'query', schema: { type: 'string' }, description: 'Specific month/quarter period name, e.g. "September 2026"' },
             { name: 'cycleId', in: 'query', schema: { type: 'string' }, description: 'Target cycle ID' },
+            { name: 'year', in: 'query', schema: { type: 'integer', minimum: 2000, maximum: 2100 }, description: 'Target appraisal year' },
+            { name: 'month', in: 'query', schema: { type: 'string' }, description: 'Target month name or number (e.g. "September" or "9")' },
           ],
           responses: {
             200: {
@@ -4261,6 +5053,7 @@ const options = {
                 },
               },
             },
+            400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
             401: { description: 'Unauthorized' },
           },
         },
@@ -4268,7 +5061,7 @@ const options = {
       '/appraisal-cycles/{id}': {
         patch: {
           tags: ['Appraisals'],
-          summary: 'Update cycle settings (HR / SUPER_ADMIN / CMD only)',
+          summary: 'Update cycle settings (HR / SUPER_ADMIN / CMD / ADMIN)',
           operationId: 'updateCycle',
           security: [{ userCookie: [] }],
           parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
@@ -4278,10 +5071,10 @@ const options = {
               'application/json': {
                 schema: { $ref: '#/components/schemas/UpdateCycleRequest' },
                 example: {
-                  name: 'FY 2025-2026',
-                  frequency: 'ANNUAL',
-                  startDate: '2025-04-01T00:00:00.000Z',
-                  endDate: '2026-03-31T00:00:00.000Z',
+                  name: 'September 2026',
+                  frequency: 'MONTHLY',
+                  year: 2026,
+                  month: 'September',
                   status: 'ACTIVE',
                 },
               },
@@ -4295,13 +5088,77 @@ const options = {
           },
         },
       },
+      '/appraisal-parameters': {
+        get: {
+          tags: ['Appraisals'],
+          summary: 'List evaluation skill parameters for active or specified cycle',
+          description: 'Fetches the ordered list of appraisal rating parameters (Technical Skills, Communication, etc.) for a cycle.',
+          operationId: 'listParameters',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'cycleId', in: 'query', schema: { type: 'string' }, description: 'Appraisal Cycle ID (defaults to active cycle if omitted)' },
+          ],
+          responses: {
+            200: {
+              description: 'List of evaluation parameters',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/ParameterListResponse' },
+                },
+              },
+            },
+            400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+            401: { description: 'Unauthorized' },
+          },
+        },
+        post: {
+          tags: ['Appraisals'],
+          summary: 'Create a new evaluation skill parameter (HR / Admin / CMD)',
+          description: 'Adds a custom dynamic appraisal parameter skill to the cycle with designated display order.',
+          operationId: 'createParameter',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/CreateParameterRequest' },
+                example: {
+                  name: 'Cloud Infrastructure & DevOps',
+                  order: 6,
+                  isActive: true,
+                },
+              },
+            },
+          },
+          responses: {
+            201: {
+              description: 'Parameter created successfully',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      success: { type: 'boolean', example: true },
+                      message: { type: 'string', example: 'Skill parameter "Cloud Infrastructure & DevOps" added successfully.' },
+                      parameter: { $ref: '#/components/schemas/AppraisalParameter' },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+            403: { description: 'Forbidden — requires HR, Admin, Super Admin, or CMD role' },
+            404: { description: 'Appraisal cycle not found' },
+          },
+        },
+      },
       '/appraisal-parameters/{id}': {
         patch: {
           tags: ['Appraisals'],
-          summary: 'Enable / disable or rename a rating parameter (HR / SUPER_ADMIN / CMD only)',
+          summary: 'Enable / disable, rename, or reorder a rating parameter (HR / Admin / CMD)',
           operationId: 'updateParameter',
           security: [{ userCookie: [] }],
-          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Parameter ID' }],
           requestBody: {
             required: true,
             content: {
@@ -4318,6 +5175,35 @@ const options = {
           responses: {
             200: { description: 'Updated parameter', content: { 'application/json': { schema: { $ref: '#/components/schemas/AppraisalParameter' } } } },
             400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+            403: { description: 'Forbidden' },
+            404: { description: 'Parameter not found' },
+          },
+        },
+        delete: {
+          tags: ['Appraisals'],
+          summary: 'Delete or safely soft-deactivate an evaluation parameter (HR / Admin / CMD)',
+          description: 'Hard deletes the parameter if no review scores reference it. If review scores already exist, automatically deactivates it (isActive: false) to preserve historical review data integrity.',
+          operationId: 'deleteParameter',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Parameter ID' }],
+          responses: {
+            200: {
+              description: 'Parameter deleted or deactivated',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      success: { type: 'boolean', example: true },
+                      deactivated: { type: 'boolean', example: false },
+                      message: { type: 'string', example: 'Parameter deleted successfully.' },
+                      parameter: { $ref: '#/components/schemas/AppraisalParameter' },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: 'Invalid parameter ID parameter', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
             403: { description: 'Forbidden' },
             404: { description: 'Parameter not found' },
           },
@@ -4506,11 +5392,16 @@ const options = {
           operationId: 'getEmployeeReviewForManager',
           security: [{ userCookie: [] }],
           parameters: [
-            { name: 'employeeId', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'employeeId', in: 'path', required: true, schema: { type: 'string' }, description: 'Target direct report employee ID' },
             { name: 'cycleId', in: 'query', schema: { type: 'string' }, description: 'Defaults to the active cycle' },
+            { name: 'frequency', in: 'query', schema: { type: 'string', enum: ['MONTHLY', 'QUARTERLY', 'ANNUAL'], default: 'MONTHLY' }, description: 'Appraisal cadence' },
+            { name: 'period', in: 'query', schema: { type: 'string' }, description: 'Period name string' },
+            { name: 'year', in: 'query', schema: { type: 'integer', minimum: 2000, maximum: 2100 }, description: 'Appraisal year' },
+            { name: 'month', in: 'query', schema: { type: 'string' }, description: 'Month name or number' },
           ],
           responses: {
             200: { description: 'Review and parameters', content: { 'application/json': { schema: { type: 'object', properties: { review: { $ref: '#/components/schemas/PerformanceReview' }, activeParameters: { type: 'array', items: { $ref: '#/components/schemas/AppraisalParameter' } } } } } } },
+            400: { description: 'Validation error' },
             403: { description: 'Forbidden — not the manager of this employee' },
             404: { description: 'Employee not found' },
           },
@@ -4531,6 +5422,7 @@ const options = {
                 schema: { $ref: '#/components/schemas/ManagerReviewRequest' },
                 example: {
                   managerRemarks: 'Consistent high-quality delivery throughout the cycle. Showed strong initiative during the platform migration. Needs to improve cross-team communication.',
+                  submit: true,
                   scores: [
                     { parameterId: '<activeParameters[0].id>', managerScore: 5 },
                     { parameterId: '<activeParameters[1].id>', managerScore: 4 },
@@ -4622,9 +5514,89 @@ const options = {
             },
           },
           responses: {
-            201: { description: 'Nomination created', content: { 'application/json': { schema: { $ref: '#/components/schemas/PeerNomination' } } } },
-            400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
-            409: { description: 'Nomination already exists for this cycle' },
+            201: { description: 'Nomination created successfully', content: { 'application/json': { schema: { $ref: '#/components/schemas/PeerNomination' } } } },
+            200: { description: 'Nomination reactivated or reminder notification resent', content: { 'application/json': { schema: { $ref: '#/components/schemas/PeerNomination' } } } },
+            400: { description: 'Validation error or self-nomination not allowed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+            404: { description: 'Reviewer not found in organization' },
+            409: { description: 'Nomination already exists or feedback already submitted for this cycle' },
+          },
+        },
+      },
+      '/peer-nominations/mine': {
+        get: {
+          tags: ['Appraisals'],
+          summary: 'List nominated peers for 360 feedback for the active or specified cycle',
+          description: 'Fetches peer nominations for the current user, or for a specified revieweeId/employeeId if requested by an HR/Manager/CMD user.',
+          operationId: 'getMyNominatedPeers',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'cycleId', in: 'query', schema: { type: 'string' }, description: 'Target cycle ID (optional)' },
+            { name: 'year', in: 'query', schema: { type: 'integer', minimum: 2000, maximum: 2100 }, description: 'Appraisal year' },
+            { name: 'month', in: 'query', schema: { type: 'string' }, description: 'Appraisal month' },
+            { name: 'employeeId', in: 'query', schema: { type: 'string' }, description: 'Target reviewee employee ID (for HR, Manager, CMD)' },
+            { name: 'revieweeId', in: 'query', schema: { type: 'string' }, description: 'Alias for employeeId' },
+          ],
+          responses: {
+            200: {
+              description: 'List of peer nominations created by current user',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      nominations: {
+                        type: 'array',
+                        items: {
+                          type: 'object',
+                          properties: {
+                            id: { type: 'string' },
+                            reviewerId: { type: 'string' },
+                            name: { type: 'string', example: 'Arjun Sharma' },
+                            email: { type: 'string', example: 'arjun@acmecorp.com' },
+                            designation: { type: 'string', example: 'Senior Engineer' },
+                            status: { type: 'string', enum: ['PENDING', 'COMPLETED', 'REJECTED'] },
+                            createdAt: { type: 'string', format: 'date-time' },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: 'Validation failed' },
+            401: { description: 'Unauthorized' },
+          },
+        },
+      },
+      '/peer-nominations/{id}': {
+        delete: {
+          tags: ['Appraisals'],
+          summary: 'Cancel or delete a peer feedback nomination',
+          operationId: 'deletePeerNomination',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Nomination ID to cancel' },
+          ],
+          responses: {
+            200: {
+              description: 'Nomination cancelled successfully',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      success: { type: 'boolean', example: true },
+                      message: { type: 'string', example: 'Nomination cancelled successfully' },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: 'Invalid nomination ID or cannot cancel completed nomination' },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden — not nomination owner' },
+            404: { description: 'Nomination not found' },
           },
         },
       },
@@ -4716,9 +5688,14 @@ const options = {
       '/team/direct-reports': {
         get: {
           tags: ['Appraisals'],
-          summary: 'List direct reports (Manager sees own team; HR/CMD sees all active employees)',
+          summary: 'List direct reports (Manager sees own team / downline; HR/CMD sees all active employees)',
+          description: 'Fetches direct reports with fallback to unassigned employees or department colleagues. Supports search and department filtering.',
           operationId: 'getDirectReports',
           security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'search', in: 'query', required: false, schema: { type: 'string' }, description: 'Filter by employee name, email, or designation' },
+            { name: 'department', in: 'query', required: false, schema: { type: 'string' }, description: 'Filter by employee department' },
+          ],
           responses: {
             200: {
               description: 'List of direct reports',
@@ -4733,6 +5710,8 @@ const options = {
                 },
               },
             },
+            400: { description: 'Validation failed' },
+            401: { description: 'Unauthorized' },
           },
         },
       },
@@ -4869,11 +5848,806 @@ const options = {
           },
         },
       },
+
+      // ── Company Hub paths ────────────────────────────────────────────────────
+      '/hub/team': {
+        get: {
+          tags: ['Company Hub'],
+          summary: 'Get the full team directory for the authenticated tenant',
+          operationId: 'getHubTeam',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'search', in: 'query', required: false, schema: { type: 'string', maxLength: 100 }, description: 'Search term for name, designation, or department' },
+            { name: 'department', in: 'query', required: false, schema: { type: 'string', maxLength: 100 }, description: 'Filter members by department' },
+          ],
+          responses: {
+            200: {
+              description: 'List of active team members with hub profile data',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      items: {
+                        type: 'array',
+                        items: { $ref: '#/components/schemas/HubTeamMember' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            400: {
+              description: 'Validation failed',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } },
+            },
+            401: { description: 'Unauthorized — valid session required' },
+          },
+        },
+      },
+      '/hub/me': {
+        patch: {
+          tags: ['Company Hub'],
+          summary: 'Update the authenticated user\'s own hub profile (bio, birthday, snaps)',
+          operationId: 'updateMyHubProfile',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/UpdateHubProfileRequest' },
+                examples: {
+                  updateBio: {
+                    summary: 'Update bio only',
+                    value: { hubBio: 'Passionate about building great products.' },
+                  },
+                  updateBirthday: {
+                    summary: 'Update birthday',
+                    value: { hubBirthday: '1990-06-15' },
+                  },
+                  updateProfileSnaps: {
+                    summary: 'Update profile snaps array',
+                    value: { profileSnaps: ['https://cdn.example.com/snap1.jpg', 'https://cdn.example.com/snap2.jpg'] },
+                  },
+                  updateAll: {
+                    summary: 'Update all hub profile fields',
+                    value: {
+                      hubBio: 'Passionate about building great products.',
+                      hubBirthday: '1990-06-15',
+                      profileSnaps: ['https://cdn.example.com/snap1.jpg'],
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: 'Hub profile updated successfully',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/HubProfileResponse' } } },
+            },
+            400: {
+              description: 'Validation failed — invalid fields or no fields provided',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } },
+            },
+            401: { description: 'Unauthorized — valid session required' },
+          },
+        },
+      },
+      '/hub/events': {
+        get: {
+          tags: ['Company Hub'],
+          summary: 'Get paginated corporate events with search, filtering, and sorting',
+          operationId: 'getHubEvents',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'search', in: 'query', required: false, schema: { type: 'string' }, description: 'Search term across title, description, location, or author' },
+            { name: 'filter', in: 'query', required: false, schema: { type: 'string', enum: ['all', 'featured', 'mine'], default: 'all' }, description: 'Quick filter option' },
+            { name: 'sortBy', in: 'query', required: false, schema: { type: 'string', enum: ['newest', 'oldest', 'title_asc', 'title_desc'], default: 'newest' }, description: 'Sort criteria' },
+            { name: 'page', in: 'query', required: false, schema: { type: 'integer', default: 1, minimum: 1 }, description: 'Page number' },
+            { name: 'limit', in: 'query', required: false, schema: { type: 'integer', default: 6, minimum: 1, maximum: 50 }, description: 'Items per page' },
+          ],
+          responses: {
+            200: {
+              description: 'List of corporate events with pagination metadata',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/HubEventsListResponse' } } },
+            },
+            400: {
+              description: 'Validation failed — invalid query parameters',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } },
+            },
+            401: { description: 'Unauthorized — valid session required' },
+          },
+        },
+        post: {
+          tags: ['Company Hub'],
+          summary: 'Create and publish a new corporate event announcement',
+          description: 'Restricted to HR, Managers, Leadership, CMD, and Admins.',
+          operationId: 'createHubEvent',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/CreateHubEventRequest' } } },
+          },
+          responses: {
+            201: {
+              description: 'Corporate event created successfully',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      message: { type: 'string', example: 'Event published successfully' },
+                      event: { $ref: '#/components/schemas/HubEvent' },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: 'Validation failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+            403: { description: 'Forbidden — only HR or Management can create events' },
+            401: { description: 'Unauthorized' },
+          },
+        },
+      },
+      '/hub/events/{id}': {
+        patch: {
+          tags: ['Company Hub'],
+          summary: 'Update a corporate event announcement',
+          description: 'Restricted to event author or HR/Admins.',
+          operationId: 'updateHubEvent',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Event ID' },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/UpdateHubEventRequest' },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: 'Corporate event updated successfully',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      message: { type: 'string', example: 'Event updated successfully' },
+                      event: { $ref: '#/components/schemas/HubEvent' },
+                    },
+                  },
+                },
+              },
+            },
+            400: {
+              description: 'Validation failed',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } },
+            },
+            403: { description: 'Forbidden — not authorized to edit this event' },
+            404: { description: 'Event not found' },
+            401: { description: 'Unauthorized' },
+          },
+        },
+        delete: {
+          tags: ['Company Hub'],
+          summary: 'Delete a corporate event',
+          description: 'Restricted to event author or HR/Admins.',
+          operationId: 'deleteHubEvent',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Event ID' },
+          ],
+          responses: {
+            200: {
+              description: 'Event deleted successfully',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      message: { type: 'string', example: 'Event deleted successfully' },
+                      id: { type: 'string', example: 'ev_123' },
+                    },
+                  },
+                },
+              },
+            },
+            400: {
+              description: 'Validation failed — invalid event ID parameter',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } },
+            },
+            403: { description: 'Forbidden — not authorized to delete this event' },
+            404: { description: 'Event not found' },
+            401: { description: 'Unauthorized' },
+          },
+        },
+      },
+
+      // ───── Leaves & Work From Home ─────
+      '/admin/leave-types': {
+        post: {
+          tags: ['Leaves & WFH'],
+          summary: 'Create a new dynamic leave type (HR/Admin)',
+          operationId: 'createLeaveType',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/CreateLeaveTypeRequest' } } },
+          },
+          responses: {
+            201: {
+              description: 'Leave type created successfully',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveType' } } },
+            },
+            400: { description: 'Validation failed' },
+            409: { description: 'Conflict — leave type code already exists for tenant' },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden — requires HR or Admin role' },
+          },
+        },
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'List all configured leave types for tenant (HR/Admin)',
+          operationId: 'listAdminLeaveTypes',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'includeInactive', in: 'query', schema: { type: 'boolean' }, description: 'Include inactive categories' },
+          ],
+          responses: {
+            200: {
+              description: 'List of leave types',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'array',
+                    items: { $ref: '#/components/schemas/LeaveType' },
+                  },
+                },
+              },
+            },
+            401: { description: 'Unauthorized' },
+            403: { description: 'Forbidden' },
+          },
+        },
+      },
+      '/admin/leave-types/{id}': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'Get leave type details by ID (HR/Admin)',
+          operationId: 'getAdminLeaveTypeById',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveType' } } } },
+            404: { description: 'Leave type not found' },
+          },
+        },
+        put: {
+          tags: ['Leaves & WFH'],
+          summary: 'Update leave type configuration (HR/Admin)',
+          operationId: 'updateLeaveTypePut',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/UpdateLeaveTypeRequest' } } },
+          },
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveType' } } } },
+            400: { description: 'Validation failed' },
+            404: { description: 'Leave type not found' },
+          },
+        },
+        patch: {
+          tags: ['Leaves & WFH'],
+          summary: 'Partially update leave type configuration (HR/Admin)',
+          operationId: 'updateLeaveTypePatch',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/UpdateLeaveTypeRequest' } } },
+          },
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveType' } } } },
+            400: { description: 'Validation failed' },
+            404: { description: 'Leave type not found' },
+          },
+        },
+        delete: {
+          tags: ['Leaves & WFH'],
+          summary: 'Safely delete a leave type (blocked if historical records exist)',
+          operationId: 'deleteLeaveType',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          responses: {
+            200: {
+              description: 'Deleted successfully',
+              content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, message: { type: 'string' } } } } },
+            },
+            409: { description: 'Conflict — cannot delete leave type with existing employee requests; deactivate instead' },
+            404: { description: 'Leave type not found' },
+          },
+        },
+      },
+      '/admin/leave-types/{id}/status': {
+        patch: {
+          tags: ['Leaves & WFH'],
+          summary: 'Toggle active/inactive status of a leave type',
+          operationId: 'toggleLeaveTypeStatus',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveTypeStatusRequest' } } },
+          },
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveType' } } } },
+            404: { description: 'Leave type not found' },
+          },
+        },
+      },
+      '/leave-types': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'List active leave categories for employee application dropdown',
+          operationId: 'listActiveLeaveTypes',
+          security: [{ userCookie: [] }],
+          responses: {
+            200: {
+              description: 'Active leave categories',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'array',
+                    items: { $ref: '#/components/schemas/LeaveType' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      '/leave-types/{id}': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'Get public policy details of a leave category',
+          operationId: 'getLeaveTypePublic',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveType' } } } },
+            404: { description: 'Leave type not found' },
+          },
+        },
+      },
+      '/leaves/balances': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'Get current employee dynamic leave balances and WFH quota',
+          operationId: 'getMyLeaveBalances',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'year', in: 'query', schema: { type: 'integer' }, description: 'Target year (defaults to current year)' },
+          ],
+          responses: {
+            200: {
+              description: 'Employee dynamic balance cards payload',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/MyLeaveBalancesResponse' } } },
+            },
+          },
+        },
+      },
+      '/leave-balances/me': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'Alias for current employee dynamic balances',
+          operationId: 'getMyLeaveBalancesAlias',
+          security: [{ userCookie: [] }],
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/MyLeaveBalancesResponse' } } } },
+          },
+        },
+      },
+      '/admin/leave-balances': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'List all employee leave quotas and balances across tenant (HR/Admin)',
+          operationId: 'listEmployeeBalances',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'year', in: 'query', schema: { type: 'integer' } },
+            { name: 'search', in: 'query', schema: { type: 'string' } },
+          ],
+          responses: {
+            200: {
+              description: 'Employee balance lists',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        employeeId: { type: 'string' },
+                        employee: { type: 'object' },
+                        balances: { type: 'array', items: { $ref: '#/components/schemas/LeaveBalanceItem' } },
+                        wfh: { type: 'object' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      '/admin/leave-balances/adjust': {
+        post: {
+          tags: ['Leaves & WFH'],
+          summary: 'Manually adjust an employee quota with audit log (HR/Admin)',
+          operationId: 'adjustEmployeeBalance',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/AdjustBalanceRequest' } } },
+          },
+          responses: {
+            200: {
+              description: 'Adjustment recorded successfully',
+              content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, message: { type: 'string' } } } } },
+            },
+            400: { description: 'Validation failed' },
+          },
+        },
+      },
+      '/leaves': {
+        post: {
+          tags: ['Leaves & WFH'],
+          summary: 'Submit a new leave or work from home application',
+          operationId: 'createLeaveRequest',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/CreateLeaveRequest' } } },
+          },
+          responses: {
+            201: {
+              description: 'Request submitted successfully',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveRequestItem' } } },
+            },
+            400: { description: 'Validation failed (insufficient balance, overlap, missing document, or notice rule)' },
+          },
+        },
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'List leave applications (scoped by role or parameter)',
+          operationId: 'listLeaveRequests',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'scope', in: 'query', schema: { type: 'string', enum: ['my', 'team', 'company'] }, description: 'View scope' },
+            { name: 'status', in: 'query', schema: { type: 'string' } },
+            { name: 'type', in: 'query', schema: { type: 'string' } },
+            { name: 'page', in: 'query', schema: { type: 'integer', default: 1 } },
+            { name: 'limit', in: 'query', schema: { type: 'integer', default: 20 } },
+          ],
+          responses: {
+            200: {
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      items: { type: 'array', items: { $ref: '#/components/schemas/LeaveRequestItem' } },
+                      total: { type: 'integer' },
+                      page: { type: 'integer' },
+                      limit: { type: 'integer' },
+                      totalPages: { type: 'integer' },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      '/leaves/{id}/cancel': {
+        post: {
+          tags: ['Leaves & WFH'],
+          summary: 'Cancel own pending leave application and restore quota',
+          operationId: 'cancelLeaveRequest',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          responses: {
+            200: {
+              content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, message: { type: 'string' } } } } },
+            },
+            400: { description: 'Only pending leaves can be cancelled' },
+          },
+        },
+      },
+      '/leaves/{id}/admin/approve': {
+        patch: {
+          tags: ['Leaves & WFH'],
+          summary: 'Administrator Supreme Approval (Finalizes leave and marks both manager and HR approved)',
+          operationId: 'adminApproveLeave',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          requestBody: {
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/ApprovalActionRequest' } } },
+          },
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveRequestItem' } } } },
+            403: { description: 'Forbidden — requires Administrator or HR role' },
+          },
+        },
+      },
+      '/leaves/{id}/admin/reject': {
+        patch: {
+          tags: ['Leaves & WFH'],
+          summary: 'Administrator Supreme Rejection (Rejects leave and releases pending balance)',
+          operationId: 'adminRejectLeave',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/ApprovalActionRequest' } } },
+          },
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveRequestItem' } } } },
+            403: { description: 'Forbidden — requires Administrator or HR role' },
+          },
+        },
+      },
+      '/leaves/{id}/manager/approve': {
+        patch: {
+          tags: ['Leaves & WFH'],
+          summary: 'Level 1: Manager approval of employee leave/WFH',
+          operationId: 'managerApproveLeave',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          requestBody: {
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/ApprovalActionRequest' } } },
+          },
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveRequestItem' } } } },
+          },
+        },
+      },
+      '/leaves/{id}/manager/reject': {
+        patch: {
+          tags: ['Leaves & WFH'],
+          summary: 'Level 1: Manager rejection of employee leave/WFH (releases pending balance)',
+          operationId: 'managerRejectLeave',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/ApprovalActionRequest' } } },
+          },
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveRequestItem' } } } },
+          },
+        },
+      },
+      '/leaves/{id}/hr/approve': {
+        patch: {
+          tags: ['Leaves & WFH'],
+          summary: 'Level 2: Final HR approval of employee leave/WFH (deducts from used quota)',
+          operationId: 'hrApproveLeave',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          requestBody: {
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/ApprovalActionRequest' } } },
+          },
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveRequestItem' } } } },
+          },
+        },
+      },
+      '/leaves/{id}/hr/reject': {
+        patch: {
+          tags: ['Leaves & WFH'],
+          summary: 'Level 2: Final HR rejection of employee leave/WFH (releases pending balance)',
+          operationId: 'hrRejectLeave',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/ApprovalActionRequest' } } },
+          },
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveRequestItem' } } } },
+          },
+        },
+      },
+      '/wfh/policy': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'Get current tenant WFH policy configuration',
+          operationId: 'getWfhPolicy',
+          security: [{ userCookie: [] }],
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/WfhPolicy' } } } },
+          },
+        },
+      },
+      '/admin/wfh/policy': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'Get current tenant WFH policy configuration (HR/Admin)',
+          operationId: 'getAdminWfhPolicy',
+          security: [{ userCookie: [] }],
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/WfhPolicy' } } } },
+          },
+        },
+        put: {
+          tags: ['Leaves & WFH'],
+          summary: 'Update tenant WFH policy configuration (HR/Admin)',
+          operationId: 'updateWfhPolicyPut',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/UpdateWfhPolicyRequest' } } },
+          },
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/WfhPolicy' } } } },
+          },
+        },
+        patch: {
+          tags: ['Leaves & WFH'],
+          summary: 'Partially update tenant WFH policy configuration (HR/Admin)',
+          operationId: 'updateWfhPolicyPatch',
+          security: [{ userCookie: [] }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/UpdateWfhPolicyRequest' } } },
+          },
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/WfhPolicy' } } } },
+          },
+        },
+      },
+      '/admin/leave-overview/stats': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'High-level aggregate metrics for company leave overview dashboard',
+          operationId: 'getLeaveOverviewStats',
+          security: [{ userCookie: [] }],
+          responses: {
+            200: {
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      todayOnLeaveCount: { type: 'integer' },
+                      pendingManagerCount: { type: 'integer' },
+                      pendingHrCount: { type: 'integer' },
+                      approvedThisMonth: { type: 'integer' },
+                      leaveTypeBreakdown: { type: 'array', items: { type: 'object' } },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      '/admin/leave-overview/calendar': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'Calendar feed of approved and pending leaves',
+          operationId: 'getLeaveCalendarView',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'month', in: 'query', schema: { type: 'string' } },
+            { name: 'year', in: 'query', schema: { type: 'integer' } },
+          ],
+          responses: {
+            200: {
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        id: { type: 'string' },
+                        employeeName: { type: 'string' },
+                        title: { type: 'string' },
+                        startDate: { type: 'string', format: 'date-time' },
+                        endDate: { type: 'string', format: 'date-time' },
+                        color: { type: 'string' },
+                        status: { type: 'string' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      '/admin/leave-logs': {
+        get: {
+          tags: ['Leaves & WFH'],
+          summary: 'Get chronological audit logs of all leave & policy modifications',
+          operationId: 'getLeaveAuditLogs',
+          security: [{ userCookie: [] }],
+          parameters: [
+            { name: 'action', in: 'query', schema: { type: 'string' } },
+            { name: 'limit', in: 'query', schema: { type: 'integer', default: 50 } },
+          ],
+          responses: {
+            200: {
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'array',
+                    items: { $ref: '#/components/schemas/LeaveAuditLog' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
     },
   },
   apis: [], // We defined everything inline, no JSDoc annotations needed
 
 };
+
+// Merge dynamic extensions (Departments, Gallery, Registry, Employee Stats, Exits, etc.)
+if (swaggerExtensions) {
+  if (swaggerExtensions.tags) {
+    options.definition.tags = [...(options.definition.tags || []), ...swaggerExtensions.tags];
+  }
+  if (swaggerExtensions.schemas) {
+    options.definition.components.schemas = {
+      ...(options.definition.components.schemas || {}),
+      ...swaggerExtensions.schemas,
+    };
+  }
+  if (swaggerExtensions.paths) {
+    options.definition.paths = {
+      ...(options.definition.paths || {}),
+      ...swaggerExtensions.paths,
+    };
+  }
+}
 
 export const swaggerSpec = swaggerJsdoc(options);
 export const swaggerUiServe = swaggerUi.serve;

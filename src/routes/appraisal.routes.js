@@ -1,8 +1,13 @@
 import { Router } from 'express';
 import {
+  createCycle,
+  listCycles,
   getActiveCycle,
   updateCycle,
   updateParameter,
+  createParameter,
+  deleteParameter,
+  listParameters,
   getMyReview,
   updateSelfAssessment,
   getMyGoals,
@@ -18,6 +23,7 @@ import {
   deletePeerNomination,
   getHrAuditReview,
   updateHrAuditReview,
+  getCycleSummary,
   getMyAllReviews,
   submitSelfRating,
   submitManagerRating,
@@ -43,10 +49,16 @@ router.patch('/appraisals/:id', requireAuth, requireTenant, updateReview);
 router.delete('/performance-reviews/:id', requireAuth, requireTenant, deleteReview);
 router.patch('/performance-reviews/:id', requireAuth, requireTenant, updateReview);
 
-// ── Phase 2: Cycle Settings (HR, Super Admin, CMD) ───────────────────────────
+// ── Phase 2: Cycle Settings (HR, Super Admin, CMD, Admin) ─────────────────────
+router.post('/appraisal-cycles', requireAuth, requireTenant, authorize('HR', 'SUPER_ADMIN', 'CMD', 'ADMIN'), createCycle);
+router.get('/appraisal-cycles', requireAuth, requireTenant, listCycles);
 router.get('/appraisal-cycles/active', requireAuth, requireTenant, getActiveCycle);
-router.patch('/appraisal-cycles/:id', requireAuth, requireTenant, authorize('HR', 'SUPER_ADMIN', 'CMD'), updateCycle);
-router.patch('/appraisal-parameters/:id', requireAuth, requireTenant, authorize('HR', 'SUPER_ADMIN', 'CMD'), updateParameter);
+router.patch('/appraisal-cycles/:id', requireAuth, requireTenant, authorize('HR', 'SUPER_ADMIN', 'CMD', 'ADMIN'), updateCycle);
+router.get('/appraisal-cycles/:id/summary', requireAuth, requireTenant, authorize('HR', 'SUPER_ADMIN', 'CMD', 'ADMIN'), getCycleSummary);
+router.get('/appraisal-parameters', requireAuth, requireTenant, listParameters);
+router.post('/appraisal-parameters', requireAuth, requireTenant, authorize('HR', 'SUPER_ADMIN', 'CMD', 'ADMIN'), createParameter);
+router.patch('/appraisal-parameters/:id', requireAuth, requireTenant, authorize('HR', 'SUPER_ADMIN', 'CMD', 'ADMIN'), updateParameter);
+router.delete('/appraisal-parameters/:id', requireAuth, requireTenant, authorize('HR', 'SUPER_ADMIN', 'CMD', 'ADMIN'), deleteParameter);
 
 // ── Phase 3: Self Assessment (Employee & above) ──────────────────────────────
 router.get('/performance-reviews/mine', requireAuth, requireTenant, getMyReview);

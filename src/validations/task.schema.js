@@ -1,19 +1,54 @@
 import { z } from 'zod';
+import { TASK_STATUSES } from '../lib/workflowStatus.js';
 
-export const dependencySchema = z.object({
-  type: z.enum(['pre', 'post']),
-  concernedPersonId: z.string().min(1, "Concerned person ID is required"),
-  concernedPersonName: z.string().optional(),
-  concernedManagerId: z.string().optional(),
-  concernedManagerName: z.string().optional(),
-  title: z.string().min(1, "Dependency title is required"),
-  description: z.string().nullable().optional(),
-  dueDate: z.string().min(1, "Due date is required"),
-  status: z.string().optional(),
-  createdTaskId: z.string().optional(),
-  isManuallyHeldByOwnManager: z.boolean().optional(),
-  manualHoldRequested: z.boolean().optional(),
-}).passthrough();
+const taskStatusSchema = z.enum(TASK_STATUSES);
+const weightSchema = z.preprocess(
+  (v) => (v !== undefined && v !== null && v !== '' ? Number(v) : v),
+  z.number().int().min(1, 'Weight must be at least 1').max(100, 'Weight cannot exceed 100').nullable().optional()
+);
+const progressSchema = z.preprocess(
+  (v) => {
+    if (v === undefined || v === null || v === '') return v;
+    const n = Number(v);
+    return Number.isNaN(n) ? n : Math.min(100, Math.max(0, n));
+  },
+  z.number().min(0).max(100).nullable().optional()
+);
+
+export const dependencySchema = z.preprocess(
+  (val) => {
+    if (typeof val === 'string') {
+      try {
+        return JSON.parse(val);
+      } catch {
+        return val;
+      }
+    }
+    return val;
+  },
+  z.object({
+    id: z.string().nullable().optional(),
+    type: z.preprocess(
+      (val) => typeof val === 'string' ? val.toLowerCase() : val,
+      z.enum(['pre', 'post']).or(z.string())
+    ).optional().default('pre'),
+    concernedPersonId: z.string().nullable().optional(),
+    assigneeId: z.string().nullable().optional(),
+    concernedPersonName: z.string().nullable().optional(),
+    concernedManagerId: z.string().nullable().optional(),
+    concernedManagerName: z.string().nullable().optional(),
+    title: z.string().nullable().optional(),
+    depTitle: z.string().nullable().optional(),
+    description: z.string().nullable().optional(),
+    dueDate: z.string().nullable().optional(),
+    status: z.string().nullable().optional(),
+    createdTaskId: z.string().nullable().optional(),
+    depTaskId: z.string().nullable().optional(),
+    escalated: z.boolean().nullable().optional(),
+    isManuallyHeldByOwnManager: z.boolean().nullable().optional(),
+    manualHoldRequested: z.boolean().nullable().optional(),
+  }).passthrough()
+);
 
 export const createTaskSchema = z.object({
   title: z.string().min(1, "Task title is required"),
@@ -25,13 +60,13 @@ export const createTaskSchema = z.object({
   goalId: z.string().nullable().optional(),
   isPrivate: z.boolean().optional(),
   isStandalone: z.boolean().optional(),
-  weight: z.number().optional(),
+  weight: weightSchema,
   description: z.string().nullable().optional(),
   employeeId: z.string().nullable().optional(),
   dependency: dependencySchema.nullable().optional(),
   isDependencyOf: z.string().nullable().optional(),
-  status: z.string().optional(),
-  progress: z.number().optional(),
+  status: taskStatusSchema.optional(),
+  progress: progressSchema,
 }).passthrough();
 
 export const updateTaskSchema = z.object({
@@ -44,16 +79,21 @@ export const updateTaskSchema = z.object({
   goalId: z.string().nullable().optional(),
   isPrivate: z.boolean().optional(),
   isStandalone: z.boolean().optional(),
-  weight: z.number().optional(),
+  weight: weightSchema,
   description: z.string().nullable().optional(),
   employeeId: z.string().nullable().optional(),
   dependency: dependencySchema.nullable().optional(),
   isDependencyOf: z.string().nullable().optional(),
-  status: z.string().optional(),
-  progress: z.number().optional(),
+  status: taskStatusSchema.optional(),
+  progress: progressSchema,
 }).passthrough();
 
 export const createTaskCommentSchema = z.object({
   comment: z.string().max(2000, "Comment cannot exceed 2000 characters").optional().default(''),
 }).passthrough();
+
+export const updateTaskStatusSchema = z.object({
+  status: taskStatusSchema,
+  progress: progressSchema,
+});
 

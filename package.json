@@ -16,6 +16,7 @@
     "list-companies": "node list-companies.js",
     "reset-password": "node reset-password.js",
     "seed-users": "node seed-users.js",
+    "seed-appraisal": "node prisma/seed-appraisal.js",
     "check-users": "node check-users.js",
     "test:appraisal": "node test-appraisal.js"
   },
@@ -29,6 +30,8 @@
     "express-rate-limit": "^8.6.0",
     "helmet": "^8.0.0",
     "jsonwebtoken": "^9.0.3",
+    "kafkajs": "^2.2.4",
+    "mongoose": "^9.9.5",
     "morgan": "^1.10.0",
     "multer": "^2.2.0",
     "nodemailer": "^9.0.3",
