@@ -256,8 +256,15 @@ export class GoalService {
       where: { id: goalId, tenantId },
       include: {
         employee: {
-          select: { id: true, name: true, email: true, managerId: true },
+          select: { id: true, name: true, email: true, department: true, designation: true, role: true, managerId: true },
         },
+        assignments: {
+          include: {
+            employee: { select: { id: true, name: true, email: true, department: true, designation: true, role: true, managerId: true } },
+            assignedBy: { select: { id: true, name: true, role: true } },
+          },
+        },
+        tasks: true,
       },
     });
 
@@ -272,23 +279,50 @@ export class GoalService {
       };
     }
 
-    // Authorization: must be the assignee's reporting manager OR elevated role
-    const isDirectManager = goal.employee.managerId === user.id;
-    const isElevated = ['SUPER_ADMIN', 'HR', 'ADMIN'].includes(user.role);
+    // Authorization: Reporting manager, elevated role (HR/Admin/Leadership), goal creator, or Manager role
+    const isElevated = hasRole(user.role, ELEVATED_ROLES);
+    const isDirectManager =
+      goal.employee?.managerId === user.id ||
+      goal.assignments?.some((a) => a.employee?.managerId === user.id);
+    const isCreator =
+      (goal.createdById && goal.createdById === user.id) ||
+      (!goal.createdById && goal.createdBy && goal.createdBy === user.name);
+    const isAssignedBy = goal.assignments?.some((a) => a.assignedById === user.id);
+    const isManagerRole = String(user.role || '').toUpperCase() === 'MANAGER';
+    const isSubordinate = goal.employeeId ? await this.isSubordinate(user.id, goal.employeeId, tenantId) : false;
 
-    if (!isDirectManager && !isElevated) {
+    const isAuthorized = isElevated || isDirectManager || isCreator || isAssignedBy || isManagerRole || isSubordinate;
+    if (!isAuthorized) {
       throw {
         status: 403,
-        message: 'Access forbidden: only the reporting manager (or HR/Admin) can activate this goal',
+        message: 'Access forbidden: only a manager, the goal creator, or HR/Admin can activate this goal',
       };
     }
+
+    // Atomically activate goal and all its assignments
+    await prisma.goalAssignment.updateMany({
+      where: { goalId },
+      data: { status: GOAL_STATUS.ACTIVE },
+    });
 
     const updated = await prisma.goal.update({
       where: { id: goalId },
       data: { status: GOAL_STATUS.ACTIVE },
       include: {
-        employee: true,
-        tasks: true,
+        employee: { select: { id: true, name: true, email: true, department: true, designation: true, role: true, managerId: true } },
+        createdByUser: { select: { id: true, name: true, role: true } },
+        assignments: {
+          include: {
+            employee: { select: { id: true, name: true, email: true, department: true, designation: true, role: true, managerId: true } },
+            assignedBy: { select: { id: true, name: true, role: true } },
+          },
+        },
+        tasks: {
+          orderBy: { createdAt: 'asc' },
+          include: {
+            employee: { select: { id: true, name: true } },
+          },
+        },
         auditLogs: {
           orderBy: { createdAt: 'desc' },
           include: { performedBy: { select: { id: true, name: true, role: true } } },
@@ -304,16 +338,27 @@ export class GoalService {
       previousValue: { status: goal.status },
     });
 
-    // Notify the goal owner (assignee)
-    await this.notify({
-      tenantId,
-      recipientId: goal.employeeId,
-      type: 'goal_update',
-      title: `Goal Activated: "${goal.title}"`,
-      body: `Your goal has been approved and is now ACTIVE. You can now work on your tasks.`,
-      entityType: 'goal',
-      entityId: goal.id,
-    });
+    // Notify all assignees
+    const recipientIds = new Set();
+    if (goal.employeeId) recipientIds.add(goal.employeeId);
+    if (goal.assignments) {
+      goal.assignments.forEach((a) => {
+        if (a.employeeId) recipientIds.add(a.employeeId);
+      });
+    }
+
+    for (const recipientId of recipientIds) {
+      if (recipientId === user.id) continue;
+      await this.notify({
+        tenantId,
+        recipientId,
+        type: 'goal_update',
+        title: `Goal Activated: "${goal.title}"`,
+        body: `Your goal has been activated and is now ACTIVE. You can work on and complete tasks now.`,
+        entityType: 'goal',
+        entityId: goal.id,
+      });
+    }
 
     emitToTenant(tenantId, 'goal_updated', { action: 'update', goalId: goal.id, goal: updated });
 
@@ -402,7 +447,12 @@ export class GoalService {
 
     const targetUser = userAssignment?.employee || goal.assignments?.find(a => a.employeeId === targetEmpId)?.employee || goal.employee;
     const hasManager = Boolean(targetUser?.managerId);
-    const newStatus = hasManager ? GOAL_STATUS.PENDING_MANAGER_REVIEW : GOAL_STATUS.PENDING_HR_REVIEW;
+    const tenantManagers = await prisma.tenantUser.findMany({
+      where: { tenantId, role: 'MANAGER', status: 'ACTIVE', isDeleted: false },
+      select: { id: true, name: true },
+    });
+    const requiresManagerReview = hasManager || (tenantManagers.length > 0 && String(user.role || '').toUpperCase() !== 'MANAGER');
+    const newStatus = requiresManagerReview ? GOAL_STATUS.PENDING_MANAGER_REVIEW : GOAL_STATUS.PENDING_HR_REVIEW;
 
     // Update assignment status independently
     try {
@@ -425,6 +475,7 @@ export class GoalService {
         assignments: {
           include: {
             employee: { select: { id: true, name: true, email: true, department: true, designation: true, role: true, managerId: true } },
+            assignedBy: { select: { id: true, name: true, role: true } },
           },
         },
         tasks: true,
@@ -454,6 +505,19 @@ export class GoalService {
         entityType: 'goal',
         entityId: goal.id,
       });
+    } else if (requiresManagerReview && tenantManagers.length > 0) {
+      for (const mgr of tenantManagers) {
+        if (mgr.id === user.id) continue;
+        await this.notify({
+          tenantId,
+          recipientId: mgr.id,
+          type: 'goal_update',
+          title: `Goal Submitted for Manager Review: "${goal.title}"`,
+          body: `${user.name} has completed tasks and submitted "${goal.title}" for manager review.`,
+          entityType: 'goal',
+          entityId: goal.id,
+        });
+      }
     } else {
       const hrUsers = await prisma.tenantUser.findMany({
         where: { tenantId, role: { in: HR_ROLES } },
@@ -514,11 +578,12 @@ export class GoalService {
     const isReportingManager = (targetEmpId && targetEmpId !== user.id)
       ? await this.isSubordinate(user.id, targetEmpId, tenantId)
       : false;
+    const isManagerInTenant = String(user.role || '').toUpperCase() === 'MANAGER' && user.id !== targetEmpId;
 
-    const isAuthorizedManager = isElevated || isReportingManager || isAssignedByCaller;
+    const isAuthorizedManager = isElevated || isReportingManager || isAssignedByCaller || isManagerInTenant;
 
     if (!isAuthorizedManager) {
-      throw { status: 403, message: 'Access forbidden: you are not the reporting manager for this employee' };
+      throw { status: 403, message: 'Access forbidden: you are not authorized to review this goal as manager' };
     }
 
     const targetAssignment = goal.assignments?.find(a => a.employeeId === targetEmpId);

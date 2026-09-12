@@ -111,6 +111,22 @@ export async function getAssignableUsers(req, res, next) {
         downline.push(selfUser);
       }
 
+      // If downline only contains self (no subordinates mapped via managerId yet),
+      // allow Manager to manage members in their department or active tenant employees
+      if (role === 'MANAGER' && downline.length <= 1) {
+        const deptUsers = req.user.department
+          ? allUsers.filter(u => u.department === req.user.department)
+          : [];
+        const fallbackUsers = deptUsers.length > 1
+          ? deptUsers
+          : allUsers.filter(u => !['SUPER_ADMIN', 'ADMIN'].includes(u.role));
+        fallbackUsers.forEach(u => {
+          if (!downline.some(d => d.id === u.id)) {
+            downline.push(u);
+          }
+        });
+      }
+
       downline.sort((a, b) => a.name.localeCompare(b.name));
       return res.json({ users: downline });
     }
@@ -244,12 +260,20 @@ export async function createGoal(req, res, next) {
         });
       }
 
-      if (req.user.role === 'MANAGER' || !isElevated) {
-        const isSubordinate = await checkIsSubordinate(req.user.id, targetId, req.tenantId);
-        if (!isSubordinate) {
-          const unauthorizedUser = targetUsers.find(u => u.id === targetId);
+      if (!isElevated) {
+        if (req.user.role === 'MANAGER') {
+          const isSubordinate = await checkIsSubordinate(req.user.id, targetId, req.tenantId);
+          const targetUser = targetUsers.find(u => u.id === targetId);
+          const isSameDept = req.user.department && targetUser?.department === req.user.department;
+          const hasNoExplicitManager = !targetUser?.managerId;
+          if (!isSubordinate && !isSameDept && !hasNoExplicitManager) {
+            return res.status(403).json({
+              error: `Access forbidden: employee "${targetUser?.name || targetId}" is not in your reporting downline or department`,
+            });
+          }
+        } else {
           return res.status(403).json({
-            error: `Access forbidden: employee "${unauthorizedUser?.name || targetId}" is not in your reporting downline`,
+            error: 'Access forbidden: you do not have permission to assign goals to other employees',
           });
         }
       }
@@ -429,9 +453,15 @@ export async function listGoals(req, res, next) {
       }
 
       if (employeeId !== req.user.id && !isElevated) {
-        const isSubordinate = await checkIsSubordinate(req.user.id, employeeId, req.tenantId);
-        if (!isSubordinate) {
-          return res.status(403).json({ error: 'Access forbidden: user is not your subordinate' });
+        if (req.user.role === 'MANAGER') {
+          const isSubordinate = await checkIsSubordinate(req.user.id, employeeId, req.tenantId);
+          const isSameDept = req.user.department && targetUser?.department === req.user.department;
+          const hasNoExplicitManager = !targetUser?.managerId;
+          if (!isSubordinate && !isSameDept && !hasNoExplicitManager) {
+            return res.status(403).json({ error: 'Access forbidden: user is not in your team or department' });
+          }
+        } else {
+          return res.status(403).json({ error: 'Access forbidden: you cannot view other employees boards' });
         }
       }
       where.OR = [
@@ -451,9 +481,12 @@ export async function listGoals(req, res, next) {
         // 1. Goals assigned to self
         // 2. Goals assigned to downline employees (including HR/Admin created goals!)
         // 3. Goals created by self
+        // 4. Goals in their department
+        // 5. Goals anywhere in tenant awaiting manager activation or review
+        // 6. When employeeId === 'all', all non-private tenant goals
         const allTenantUsers = await prisma.tenantUser.findMany({
           where: { tenantId: req.tenantId, status: 'ACTIVE', isDeleted: false },
-          select: { id: true, managerId: true },
+          select: { id: true, managerId: true, department: true },
         });
 
         const directReportsMap = {};
@@ -481,12 +514,42 @@ export async function listGoals(req, res, next) {
 
         const allowedUserIds = [req.user.id, ...downlineIds];
 
-        where.OR = [
+        const managerOrConditions = [
           { employeeId: { in: allowedUserIds } },
           { assignments: { some: { employeeId: { in: allowedUserIds } } } },
           { createdById: req.user.id },
           { createdBy: req.user.name }, // legacy rows without createdById
+          {
+            status: {
+              in: [
+                GOAL_STATUS.PENDING_APPROVAL,
+                GOAL_STATUS.PENDING_MANAGER_REVIEW,
+                'submitted',
+                'PENDING_APPROVAL',
+                'PENDING_MANAGER_REVIEW',
+              ],
+            },
+          },
         ];
+
+        if (req.user.department) {
+          const deptUserIds = allTenantUsers
+            .filter(u => u.department === req.user.department)
+            .map(u => u.id);
+          if (deptUserIds.length > 0) {
+            managerOrConditions.push({ employeeId: { in: deptUserIds } });
+            managerOrConditions.push({ assignments: { some: { employeeId: { in: deptUserIds } } } });
+          }
+        }
+
+        if (!employeeId || employeeId === 'all' || scope === 'team') {
+          managerOrConditions.push({
+            tenantId: req.tenantId,
+            goalType: { notIn: ['Private', 'Personal'] },
+          });
+        }
+
+        where.OR = managerOrConditions;
       } else if (isElevated) {
         // HR/Admin: If employeeId is not specified and not 'all', default to own or tenant
         if (!employeeId) {
