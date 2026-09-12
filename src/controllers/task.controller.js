@@ -10,7 +10,7 @@ import { TASK_STATUSES } from '../lib/workflowStatus.js';
 // ─── Helper: resolve & authorise target employee ───────────────────────────
 // Returns the TenantUser record that will own the task.
 // Verifies the employee belongs to the SAME tenant as the requesting user.
-async function resolveTargetEmployee(requestingUser, tenantId, employeeId, parentTask = null) {
+async function resolveTargetEmployee(requestingUser, tenantId, employeeId, parentTask = null, goalId = null) {
   // If no employeeId supplied → default to the requesting user themselves
   if (!employeeId) {
     return { id: requestingUser.id };
@@ -30,14 +30,13 @@ async function resolveTargetEmployee(requestingUser, tenantId, employeeId, paren
     throw { status: 403, message: 'Access forbidden: target employee not found in your organisation' };
   }
 
-  // Elevated roles can assign across the org freely
+  // Tier 4: Elevated roles can assign across the org freely
   if (hasRole(requestingUser.role, ELEVATED_ROLES)) {
     return targetUser;
   }
 
   // Peer dependency: you may spin off a companion task on a colleague ONLY when
-  // it hangs off a real parent task that YOU own (or manage). The parent task is
-  // resolved & authorised by the caller and passed in here.
+  // it hangs off a real parent task that YOU own (or manage).
   if (parentTask) {
     const ownsParent = parentTask.employeeId === requestingUser.id
       || await goalService.isSubordinate(requestingUser.id, parentTask.employeeId, tenantId);
@@ -47,11 +46,50 @@ async function resolveTargetEmployee(requestingUser, tenantId, employeeId, paren
     throw { status: 403, message: 'Access forbidden: you can only raise a dependency from a task you own' };
   }
 
-  // Assigning a task to another employee (goal-linked or not) requires being a
-  // manager somewhere up that employee's reporting chain. Adding a task for
-  // *yourself* on a shared goal is already handled by the self fast-path above.
-  if (await goalService.isSubordinate(requestingUser.id, employeeId, tenantId)) {
-    return targetUser;
+  const callerRole = String(requestingUser.role || '').toUpperCase();
+  const targetRole = String(targetUser.role || '').toUpperCase();
+  const elevatedRoleList = ['SUPER_ADMIN', 'ADMIN', 'HR', 'CMD', 'DIRECTOR', 'OWNER', 'LEADERSHIP'];
+
+  // Regular EMPLOYEE: Cannot assign main tasks to other people (especially higher roles)
+  if (callerRole === 'EMPLOYEE' || !['MANAGER', ...elevatedRoleList].includes(callerRole)) {
+    throw {
+      status: 403,
+      message: 'Access forbidden: employees can only assign tasks to themselves. To request support from a colleague, use the dependency option.',
+    };
+  }
+
+  // MANAGER:
+  if (callerRole === 'MANAGER') {
+    // Cannot assign tasks to peer managers or higher authority roles (HR, Admin, etc.)
+    if (elevatedRoleList.includes(targetRole) || targetRole === 'MANAGER') {
+      throw {
+        status: 403,
+        message: `Access forbidden: managers cannot assign tasks to peer or higher authority roles (${targetRole})`,
+      };
+    }
+
+    // 1. Direct or indirect downline subordinate:
+    if (await goalService.isSubordinate(requestingUser.id, employeeId, tenantId)) {
+      return targetUser;
+    }
+
+    // 2. Co-assigned on the goal:
+    if (goalId) {
+      const coAssigned = await prisma.goalAssignment.findFirst({
+        where: { goalId, employeeId, tenantId },
+      });
+      if (coAssigned) {
+        return targetUser;
+      }
+    }
+
+    // 3. Same department or target employee has no explicit manager set:
+    if (requestingUser.department && targetUser.department === requestingUser.department) {
+      return targetUser;
+    }
+    if (!targetUser.managerId) {
+      return targetUser;
+    }
   }
 
   throw { status: 403, message: 'Access forbidden: you are not authorised to assign tasks to this employee' };
@@ -128,7 +166,7 @@ export async function createTask(req, res, next) {
     // 4b. Resolve and authorise the target employee (cross-tenant guard inside)
     let target;
     try {
-      target = await resolveTargetEmployee(req.user, tenantId, employeeId, parentTask);
+      target = await resolveTargetEmployee(req.user, tenantId, employeeId, parentTask, goalId);
     } catch (e) {
       return res.status(e.status || 500).json({ success: false, message: e.message });
     }
@@ -428,7 +466,7 @@ export async function updateTask(req, res, next) {
         if (existing.isDependencyOf) {
           existingParent = await prisma.task.findFirst({ where: { id: existing.isDependencyOf, tenantId } });
         }
-        await resolveTargetEmployee(req.user, tenantId, employeeId, existingParent);
+        await resolveTargetEmployee(req.user, tenantId, employeeId, existingParent, existing.goalId);
       } catch (e) {
         return res.status(e.status || 500).json({ success: false, message: e.message });
       }
