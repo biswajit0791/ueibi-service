@@ -111,7 +111,8 @@ model TenantUser {
   bankDetails                BankDetails?
   workHistory                WorkHistory[]
   exitDetails                ExitDetails?
-  goals                      Goal[]
+  goals                      Goal[]                   @relation("GoalAssignee")
+  createdGoals               Goal[]                   @relation("GoalCreatedBy")
   goalAssignments            GoalAssignment[]         @relation("UserGoalAssignments")
   assignedGoalRecords        GoalAssignment[]         @relation("AssignedGoals")
   tasks                      Task[]
@@ -363,12 +364,12 @@ model Goal {
   goalType            String?          @default("General") // General | Private
   category            String?
   priority            String? // low | medium | high | critical
-  createdBy           String? // creator display name (legacy; kept for display)
-  createdById         String? // creator user id — used for authorization
-  progress            Int              @default(0)
-  // Lifecycle: DRAFT → IN_PROGRESS → READY_FOR_SUBMISSION → PENDING_MANAGER_REVIEW
-  //   → PENDING_HR_REVIEW → COMPLETED  (CHANGES_REQUESTED / REJECTED route back)
-  status              String           @default("DRAFT")
+  createdBy           String?        // Legacy: creator name string (kept for backward compat)
+  createdById         String?        // FK to TenantUser who created this goal (null = legacy record)
+  createdByUser       TenantUser?    @relation("GoalCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  approvalMode        String?        // MANAGER_APPROVAL | AUTO_APPROVE | null (null = employee self-created)
+  progress            Int            @default(0)
+  status              String         @default("DRAFT") // DRAFT | PENDING_APPROVAL | ACTIVE | PENDING_MANAGER_REVIEW | PENDING_HR_REVIEW | CHANGES_REQUESTED | COMPLETED
   financialYear       String?
   quarter             String?
   startDate           DateTime?
@@ -377,9 +378,9 @@ model Goal {
   specialNotes        String?          @db.Text
   dueDate             DateTime?
   employeeId          String?
-  employee            TenantUser?      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  milestones          Int              @default(0)
-  completedMilestones Int              @default(0)
+  employee            TenantUser?    @relation("GoalAssignee", fields: [employeeId], references: [id], onDelete: Cascade)
+  milestones          Int            @default(0)
+  completedMilestones Int            @default(0)
   tasks               Task[]
   comments            GoalComment[]
   auditLogs           GoalAuditLog[]

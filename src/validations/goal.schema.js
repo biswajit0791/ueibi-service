@@ -6,7 +6,7 @@ export const createGoalSchema = z.object({
   category: z.string().max(100).nullable().optional(),
   goalType: z.string().max(100).nullable().optional(),
   priority: z.preprocess(
-    (val) => typeof val === 'string' ? val.toLowerCase() : val,
+    (val) => (typeof val === 'string' ? val.toLowerCase() : val),
     z.enum(['low', 'medium', 'high', 'critical'])
   ).optional().default('medium'),
   financialYear: z.string().max(50).nullable().optional(),
@@ -18,10 +18,21 @@ export const createGoalSchema = z.object({
   specialNotes: z.string().max(2000, "Special notes cannot exceed 2000 characters").nullable().optional(),
   employeeId: z.string().optional(),
   employeeIds: z.array(z.string().min(1, "Employee ID cannot be empty")).max(200).optional(),
-}).refine(
-  (data) => (data.employeeIds && data.employeeIds.length > 0) || Boolean(data.employeeId),
-  { message: "At least one target employee must be selected", path: ["employeeIds"] }
-);
+  /**
+   * approvalMode is only meaningful when a manager assigns a goal to another employee.
+   *
+   * MANAGER_APPROVAL  → goal starts as PENDING_APPROVAL; the assignee's reporting
+   *                     manager (or HR/Admin) must activate it → ACTIVE before
+   *                     tasks become workable.
+   *
+   * AUTO_APPROVE      → goal starts as ACTIVE immediately; tasks are workable
+   *                     right away.
+   *
+   * null / omitted    → employee self-created goal; starts as DRAFT (existing
+   *                     legacy behaviour is preserved).
+   */
+  approvalMode: z.enum(['MANAGER_APPROVAL', 'AUTO_APPROVE']).nullable().optional(),
+}).passthrough();
 
 // NOTE: `status` is deliberately NOT accepted here. Advancing the review
 // workflow must go through the dedicated /submit, /approve, /reject,
@@ -34,7 +45,7 @@ export const updateGoalSchema = z.object({
   category: z.string().max(100).nullable().optional(),
   goalType: z.string().max(100).nullable().optional(),
   priority: z.preprocess(
-    (val) => typeof val === 'string' ? val.toLowerCase() : val,
+    (val) => (typeof val === 'string' ? val.toLowerCase() : val),
     z.enum(['low', 'medium', 'high', 'critical'])
   ).optional(),
   financialYear: z.string().max(50).nullable().optional(),
@@ -80,14 +91,26 @@ export const goalReviewSchema = z.object({
   rating: z.number().min(1, "Rating must be between 1 and 5").max(5, "Rating must be between 1 and 5").optional(),
   employeeId: z.string().optional(),
   targetEmployeeId: z.string().optional(),
-}).passthrough().refine((data) => {
-  if (data.action === 'REJECT' && (!data.comment || data.comment.trim().length === 0)) {
-    return false;
+}).passthrough().refine(
+  (data) => {
+    if (data.action === 'REJECT' && (!data.comment || data.comment.trim().length === 0)) {
+      return false;
+    }
+    return true;
+  },
+  {
+    message: 'Rejection comment is required when requesting changes or rejecting a goal',
+    path: ['comment'],
   }
-  return true;
-}, {
-  message: "Rejection comment is required when requesting changes or rejecting a goal",
-  path: ["comment"],
+);
+
+/**
+ * Schema for POST /goals/:id/activate-approve
+ * Transitions a PENDING_APPROVAL goal → ACTIVE.
+ * Only the goal-owner's reporting manager (or HR / Admin) can call this.
+ */
+export const activateApproveSchema = z.object({
+  comment: z.string().max(500).optional(),
 });
 
 export const goalCommentSchema = z.object({

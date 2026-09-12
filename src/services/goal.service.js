@@ -25,6 +25,35 @@ export const GOAL_TYPES = [
 
 export const GOAL_PRIORITIES = ['low', 'medium', 'high', 'critical'];
 
+// ── Status constants ────────────────────────────────────────────────────────
+// Employee self-created flow:   DRAFT → PENDING_MANAGER_REVIEW → PENDING_HR_REVIEW → COMPLETED
+// Manager + MANAGER_APPROVAL:  PENDING_APPROVAL → ACTIVE → (tasks) → PENDING_MANAGER_REVIEW → PENDING_HR_REVIEW → COMPLETED
+// Manager + AUTO_APPROVE:      ACTIVE → (tasks) → PENDING_MANAGER_REVIEW → PENDING_HR_REVIEW → COMPLETED
+export const GOAL_STATUS = {
+  DRAFT: 'DRAFT',
+  PENDING_APPROVAL: 'PENDING_APPROVAL',
+  ACTIVE: 'ACTIVE',
+  PENDING_MANAGER_REVIEW: 'PENDING_MANAGER_REVIEW',
+  PENDING_HR_REVIEW: 'PENDING_HR_REVIEW',
+  CHANGES_REQUESTED: 'CHANGES_REQUESTED',
+  COMPLETED: 'COMPLETED',
+  // Legacy aliases (preserved for backward compat with existing records)
+  REJECTED: 'rejected',
+  SUBMITTED: 'submitted',
+  READY_FOR_SUBMISSION: 'READY_FOR_SUBMISSION',
+  IN_PROGRESS: 'in_progress',
+};
+
+// Statuses that allow employees to work on tasks
+export const WORKABLE_STATUSES = new Set([
+  'DRAFT',
+  'ACTIVE',
+  'READY_FOR_SUBMISSION',
+  'CHANGES_REQUESTED',
+  'in_progress',
+  'rejected',
+]);
+
 export class GoalService {
   /**
    * Helper: Push notification and real-time Socket.IO event.
@@ -211,8 +240,98 @@ export class GoalService {
     return overallProgress;
   }
 
+  // ─── WORKFLOW ACTION: Activate/Approve a PENDING_APPROVAL goal ─────────────
   /**
-   * Submits a goal for manager review.
+   * Transitions a manager-created goal from PENDING_APPROVAL → ACTIVE.
+   *
+   * Who can call this:
+   *  - The goal-owner's direct reporting manager
+   *  - HR / SUPER_ADMIN / ADMIN
+   *
+   * Flow: MANAGER + MANAGER_APPROVAL mode
+   *   Goal created → PENDING_APPROVAL → [this action] → ACTIVE
+   */
+  async activateGoal({ tenantId, goalId, user, comment }) {
+    const goal = await prisma.goal.findFirst({
+      where: { id: goalId, tenantId },
+      include: {
+        employee: {
+          select: { id: true, name: true, email: true, managerId: true },
+        },
+      },
+    });
+
+    if (!goal) {
+      throw { status: 404, message: 'Goal not found' };
+    }
+
+    if (goal.status !== GOAL_STATUS.PENDING_APPROVAL) {
+      throw {
+        status: 400,
+        message: `Goal cannot be activated from current status: "${goal.status}". Only PENDING_APPROVAL goals can be activated.`,
+      };
+    }
+
+    // Authorization: must be the assignee's reporting manager OR elevated role
+    const isDirectManager = goal.employee.managerId === user.id;
+    const isElevated = ['SUPER_ADMIN', 'HR', 'ADMIN'].includes(user.role);
+
+    if (!isDirectManager && !isElevated) {
+      throw {
+        status: 403,
+        message: 'Access forbidden: only the reporting manager (or HR/Admin) can activate this goal',
+      };
+    }
+
+    const updated = await prisma.goal.update({
+      where: { id: goalId },
+      data: { status: GOAL_STATUS.ACTIVE },
+      include: {
+        employee: true,
+        tasks: true,
+        auditLogs: {
+          orderBy: { createdAt: 'desc' },
+          include: { performedBy: { select: { id: true, name: true, role: true } } },
+        },
+      },
+    });
+
+    await this.logAudit({
+      goalId,
+      performedById: user.id,
+      action: 'GOAL_ACTIVATED',
+      details: `${user.name} activated goal "${goal.title}". Goal is now ACTIVE — tasks are workable.${comment ? ` Note: "${comment}"` : ''}`,
+      previousValue: { status: goal.status },
+    });
+
+    // Notify the goal owner (assignee)
+    await this.notify({
+      tenantId,
+      recipientId: goal.employeeId,
+      type: 'goal_update',
+      title: `Goal Activated: "${goal.title}"`,
+      body: `Your goal has been approved and is now ACTIVE. You can now work on your tasks.`,
+      entityType: 'goal',
+      entityId: goal.id,
+    });
+
+    emitToTenant(tenantId, 'goal_updated', { action: 'update', goalId: goal.id, goal: updated });
+
+    return updated;
+  }
+
+  // ─── WORKFLOW ACTION: Submit goal for manager/HR review ────────────────────
+  /**
+   * Employee submits completed goal for review.
+   *
+   * Allowed from:
+   *  - DRAFT                (employee self-created → existing flow)
+   *  - ACTIVE               (manager-created goal, tasks all done)
+   *  - READY_FOR_SUBMISSION (legacy alias)
+   *  - CHANGES_REQUESTED    (after corrections)
+   *  - in_progress / rejected (legacy aliases)
+   *
+   * Result: PENDING_MANAGER_REVIEW (if has manager) or PENDING_HR_REVIEW
    */
   async submitGoal({ tenantId, goalId, user }) {
     const goal = await prisma.goal.findFirst({
@@ -244,10 +363,26 @@ export class GoalService {
       throw { status: 403, message: 'Access forbidden: only the goal assignee can submit this goal for review' };
     }
 
+    // PENDING_APPROVAL goals cannot be submitted — must be activated first
+    if (goal.status === GOAL_STATUS.PENDING_APPROVAL) {
+      throw {
+        status: 400,
+        message: 'This goal is awaiting manager activation. It cannot be submitted until it becomes ACTIVE.',
+      };
+    }
+
     const targetEmpId = userAssignment?.employeeId || goal.employeeId || goal.assignments?.[0]?.employeeId || user.id;
     const currentStatus = (userAssignment ? userAssignment.status : goal.status) || 'DRAFT';
-    const allowedStatuses = ['DRAFT', 'READY_FOR_SUBMISSION', 'CHANGES_REQUESTED', 'IN_PROGRESS', 'REJECTED'];
-    if (!allowedStatuses.includes(String(currentStatus).toUpperCase())) {
+    const allowedStatuses = [
+      GOAL_STATUS.DRAFT,
+      GOAL_STATUS.ACTIVE,
+      GOAL_STATUS.READY_FOR_SUBMISSION,
+      GOAL_STATUS.CHANGES_REQUESTED,
+      GOAL_STATUS.IN_PROGRESS,
+      GOAL_STATUS.REJECTED,
+      'DRAFT', 'ACTIVE', 'READY_FOR_SUBMISSION', 'CHANGES_REQUESTED', 'IN_PROGRESS', 'REJECTED'
+    ];
+    if (!allowedStatuses.includes(currentStatus)) {
       throw { status: 400, message: `Goal cannot be submitted from current status: "${currentStatus}"` };
     }
 
@@ -266,9 +401,8 @@ export class GoalService {
     }
 
     const targetUser = userAssignment?.employee || goal.assignments?.find(a => a.employeeId === targetEmpId)?.employee || goal.employee;
-    const isEmployeeRole = user.role === 'EMPLOYEE' || targetUser?.role === 'EMPLOYEE';
     const hasManager = Boolean(targetUser?.managerId);
-    const newStatus = (isEmployeeRole || hasManager) ? 'PENDING_MANAGER_REVIEW' : 'PENDING_HR_REVIEW';
+    const newStatus = hasManager ? GOAL_STATUS.PENDING_MANAGER_REVIEW : GOAL_STATUS.PENDING_HR_REVIEW;
 
     // Update assignment status independently
     try {
@@ -285,10 +419,7 @@ export class GoalService {
 
     const updated = await prisma.goal.update({
       where: { id: goalId },
-      data: {
-        status: newStatus,
-        progress: 100,
-      },
+      data: { status: newStatus, progress: 100 },
       include: {
         employee: true,
         assignments: {
@@ -297,7 +428,10 @@ export class GoalService {
           },
         },
         tasks: true,
-        auditLogs: { orderBy: { createdAt: 'desc' }, include: { performedBy: { select: { id: true, name: true, role: true } } } },
+        auditLogs: {
+          orderBy: { createdAt: 'desc' },
+          include: { performedBy: { select: { id: true, name: true, role: true } } },
+        },
       },
     });
 
@@ -338,17 +472,18 @@ export class GoalService {
       }
     }
 
-    emitToTenant(tenantId, 'goal_updated', {
-      action: 'update',
-      goalId: goal.id,
-      goal: updated,
-    });
+    emitToTenant(tenantId, 'goal_updated', { action: 'update', goalId: goal.id, goal: updated });
 
     return updated;
   }
 
+  // ─── WORKFLOW ACTION: Manager reviews submitted goal ───────────────────────
   /**
    * Manager reviews a goal (Approve or Request Changes).
+   * This is the POST-SUBMISSION review (not the initial activation).
+   *
+   * APPROVE → PENDING_HR_REVIEW
+   * REJECT  → CHANGES_REQUESTED
    */
   async managerReview({ tenantId, goalId, user, action, comment, rating, targetEmployeeId = null }) {
     const goal = await prisma.goal.findFirst({
@@ -386,8 +521,17 @@ export class GoalService {
       throw { status: 403, message: 'Access forbidden: you are not the reporting manager for this employee' };
     }
 
+    const targetAssignment = goal.assignments?.find(a => a.employeeId === targetEmpId);
+    const currentStatus = targetAssignment?.status || goal.status;
+    if (
+      currentStatus !== GOAL_STATUS.PENDING_MANAGER_REVIEW &&
+      currentStatus !== 'submitted' &&
+      currentStatus !== 'PENDING_MANAGER_REVIEW'
+    ) {
+      throw { status: 400, message: `Goal is not currently awaiting manager review (Status: ${currentStatus})` };
+    }
     const isApprove = action === 'APPROVE';
-    const newStatus = isApprove ? 'PENDING_HR_REVIEW' : 'CHANGES_REQUESTED';
+    const newStatus = isApprove ? GOAL_STATUS.PENDING_HR_REVIEW : GOAL_STATUS.CHANGES_REQUESTED;
 
     // Update assignment status independently
     if (targetEmpId) {
@@ -415,7 +559,10 @@ export class GoalService {
           },
         },
         tasks: true,
-        auditLogs: { orderBy: { createdAt: 'desc' }, include: { performedBy: { select: { id: true, name: true, role: true } } } },
+        auditLogs: {
+          orderBy: { createdAt: 'desc' },
+          include: { performedBy: { select: { id: true, name: true, role: true } } },
+        },
       },
     });
 
@@ -444,7 +591,7 @@ export class GoalService {
       });
     }
 
-    // If Manager Approved, notify HR
+    // If Manager Approved → notify HR
     if (isApprove) {
       const hrUsers = await prisma.tenantUser.findMany({
         where: { tenantId, role: { in: HR_ROLES } },
@@ -463,17 +610,17 @@ export class GoalService {
       }
     }
 
-    emitToTenant(tenantId, 'goal_updated', {
-      action: 'update',
-      goalId: goal.id,
-      goal: updated,
-    });
+    emitToTenant(tenantId, 'goal_updated', { action: 'update', goalId: goal.id, goal: updated });
 
     return updated;
   }
 
+  // ─── WORKFLOW ACTION: HR final review ─────────────────────────────────────
   /**
-   * HR final review for a goal (Approve -> COMPLETED, or Request Changes).
+   * HR final review for a goal.
+   *
+   * APPROVE → COMPLETED
+   * REJECT  → CHANGES_REQUESTED
    */
   async hrReview({ tenantId, goalId, user, action, comment, rating, targetEmployeeId = null }) {
     const goal = await prisma.goal.findFirst({
@@ -499,8 +646,19 @@ export class GoalService {
     }
 
     const targetEmpId = targetEmployeeId || goal.employeeId || goal.assignments?.[0]?.employeeId;
+    const targetAssignment = goal.assignments?.find(a => a.employeeId === targetEmpId);
+    const currentStatus = targetAssignment?.status || goal.status;
+    if (
+      currentStatus !== GOAL_STATUS.PENDING_HR_REVIEW &&
+      currentStatus !== GOAL_STATUS.PENDING_MANAGER_REVIEW &&
+      currentStatus !== 'submitted' &&
+      currentStatus !== 'PENDING_HR_REVIEW' &&
+      currentStatus !== 'PENDING_MANAGER_REVIEW'
+    ) {
+      throw { status: 400, message: `Goal is not currently in a reviewable state (Status: ${currentStatus})` };
+    }
     const isApprove = action === 'APPROVE';
-    const newStatus = isApprove ? 'COMPLETED' : 'CHANGES_REQUESTED';
+    const newStatus = isApprove ? GOAL_STATUS.COMPLETED : GOAL_STATUS.CHANGES_REQUESTED;
 
     // Update assignment status independently
     if (targetEmpId) {
@@ -532,7 +690,10 @@ export class GoalService {
           },
         },
         tasks: true,
-        auditLogs: { orderBy: { createdAt: 'desc' }, include: { performedBy: { select: { id: true, name: true, role: true } } } },
+        auditLogs: {
+          orderBy: { createdAt: 'desc' },
+          include: { performedBy: { select: { id: true, name: true, role: true } } },
+        },
       },
     });
 
@@ -561,17 +722,17 @@ export class GoalService {
       });
     }
 
-    emitToTenant(tenantId, 'goal_updated', {
-      action: 'update',
-      goalId: goal.id,
-      goal: updated,
-    });
+    emitToTenant(tenantId, 'goal_updated', { action: 'update', goalId: goal.id, goal: updated });
 
     return updated;
   }
 
+  // ─── WORKFLOW ACTION: Resubmit after changes requested ────────────────────
   /**
-   * Resubmits a goal after revisions are made.
+   * Employee resubmits goal after corrections.
+   *
+   * Allowed from: CHANGES_REQUESTED | rejected (legacy alias)
+   * Result: PENDING_MANAGER_REVIEW (if has manager) or PENDING_HR_REVIEW
    */
   async resubmitGoal({ tenantId, goalId, user, comment }) {
     const goal = await prisma.goal.findFirst({
@@ -599,9 +760,20 @@ export class GoalService {
       throw { status: 403, message: 'Access forbidden: only the goal assignee can resubmit this goal' };
     }
 
+    const targetAssignment = userAssignment;
+    const currentStatus = targetAssignment?.status || goal.status;
+    if (
+      currentStatus !== GOAL_STATUS.CHANGES_REQUESTED &&
+      currentStatus !== GOAL_STATUS.REJECTED &&
+      currentStatus !== 'CHANGES_REQUESTED' &&
+      currentStatus !== 'REJECTED'
+    ) {
+      throw { status: 400, message: `Goal is not in a revision state (Status: ${currentStatus})` };
+    }
+
     const targetUser = userAssignment?.employee || goal.employee;
     const hasManager = Boolean(targetUser?.managerId);
-    const newStatus = hasManager ? 'PENDING_MANAGER_REVIEW' : 'PENDING_HR_REVIEW';
+    const newStatus = hasManager ? GOAL_STATUS.PENDING_MANAGER_REVIEW : GOAL_STATUS.PENDING_HR_REVIEW;
 
     // Update assignment status independently
     try {
@@ -615,9 +787,7 @@ export class GoalService {
 
     const updated = await prisma.goal.update({
       where: { id: goalId },
-      data: {
-        status: newStatus,
-      },
+      data: { status: newStatus },
       include: {
         employee: true,
         assignments: {
@@ -626,7 +796,10 @@ export class GoalService {
           },
         },
         tasks: true,
-        auditLogs: { orderBy: { createdAt: 'desc' }, include: { performedBy: { select: { id: true, name: true, role: true } } } },
+        auditLogs: {
+          orderBy: { createdAt: 'desc' },
+          include: { performedBy: { select: { id: true, name: true, role: true } } },
+        },
       },
     });
 
@@ -651,11 +824,7 @@ export class GoalService {
       });
     }
 
-    emitToTenant(tenantId, 'goal_updated', {
-      action: 'update',
-      goalId: goal.id,
-      goal: updated,
-    });
+    emitToTenant(tenantId, 'goal_updated', { action: 'update', goalId: goal.id, goal: updated });
 
     return updated;
   }

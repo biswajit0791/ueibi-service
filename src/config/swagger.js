@@ -447,7 +447,12 @@ const options = {
             id: { type: 'string', example: 'clxyz1234567890' },
             email: { type: 'string', format: 'email', example: 'arjun@acmecorp.com' },
             name: { type: 'string', example: 'Arjun Sharma' },
-            role: { type: 'string', enum: ['SUPER_ADMIN', 'HR', 'FINANCE', 'MANAGER', 'EMPLOYEE', 'STUDENT', 'MENTOR'], example: 'EMPLOYEE' },
+            role: {
+              type: 'string',
+              enum: ['SUPER_ADMIN', 'ADMIN', 'CMD', 'HR', 'FINANCE', 'MANAGER', 'EMPLOYEE', 'STUDENT', 'MENTOR'],
+              example: 'EMPLOYEE',
+              description: 'User role within the tenant. Matches the UserRole enum in the database.',
+            },
             status: { type: 'string', enum: ['INVITED', 'ACTIVE', 'EXITED'], example: 'ACTIVE' },
             mustChangePassword: { type: 'boolean', example: false },
             tenantId: { type: 'string', example: 'cltenant123' },
@@ -462,15 +467,57 @@ const options = {
             joinDate: { type: 'string', format: 'date' },
           },
         },
+        // Returned by POST /employees when the caller's role is not
+        // authorised to assign the requested target role (HTTP 403).
+        RoleAuthorizationError: {
+          type: 'object',
+          properties: {
+            error: {
+              type: 'string',
+              example: 'Forbidden: HR cannot assign role ADMIN',
+            },
+            allowedRoles: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Roles the caller is actually permitted to assign.',
+              example: ['MANAGER', 'EMPLOYEE'],
+            },
+          },
+        },
         InviteEmployeeRequest: {
           type: 'object',
           required: ['email', 'name'],
+          description:
+            'Creates a new tenant user with INVITED status and sends a temporary-password email.\n\n' +
+            '**Server-side role validation (authoritative — cannot be bypassed by the frontend):**\n\n' +
+            '| Caller role | Assignable roles |\n' +
+            '|---|---|\n' +
+            '| `SUPER_ADMIN` | Any role |\n' +
+            '| `ADMIN` | `HR`, `MANAGER`, `EMPLOYEE` |\n' +
+            '| `HR` | `MANAGER`, `EMPLOYEE` |\n' +
+            '| `MANAGER` | `EMPLOYEE` |\n' +
+            '| `EMPLOYEE` | *(none — route blocked)* |\n\n' +
+            'Omitting `role` defaults to `EMPLOYEE` (backward compatible).',
           properties: {
-            email: { type: 'string', format: 'email', example: 'new hire@acmecorp.com' },
+            email: { type: 'string', format: 'email', example: 'ravi@acmecorp.com' },
             name: { type: 'string', example: 'Ravi Teja' },
-            role: { type: 'string', enum: ['HR', 'FINANCE', 'MANAGER', 'EMPLOYEE'], example: 'EMPLOYEE' },
+            role: {
+              type: 'string',
+              enum: ['SUPER_ADMIN', 'ADMIN', 'CMD', 'HR', 'FINANCE', 'MANAGER', 'EMPLOYEE', 'STUDENT', 'MENTOR'],
+              default: 'EMPLOYEE',
+              example: 'EMPLOYEE',
+              description:
+                'Role to assign to the new user. **The backend validates that the calling user\'s role ' +
+                'is permitted to assign this target role** (see table above). ' +
+                'An invalid or unauthorised role returns 400 / 403 respectively.',
+            },
             designation: { type: 'string', example: 'Backend Engineer' },
             department: { type: 'string', example: 'Engineering' },
+            joinDate: { type: 'string', format: 'date', example: '2026-09-15', description: 'ISO date string for the employee\'s joining date.' },
+            phone: { type: 'string', example: '9876543210' },
+            pan: { type: 'string', example: 'ABCDE1234F', description: 'PAN card number (stored in uppercase).' },
+            dob: { type: 'string', example: '1994', description: 'Birth year (YYYY). Stored as DateTime midnight on Jan 1 of that year.' },
+            feedbackRemarks: { type: 'string', example: 'Referred by design team.' },
           },
         },
         OnboardEmployeeRequest: {
@@ -1921,8 +1968,20 @@ const options = {
       '/employees': {
         post: {
           tags: ['Employees'],
-          summary: 'Invite a new employee (creates pending profile + generates temp password)',
-          description: 'Requires SUPER_ADMIN, ADMIN, or HR role. Verifies that the tenant has not reached their purchased license limit.',
+          summary: 'Invite a new employee — with hierarchical role assignment',
+          description:
+            'Creates a new `TenantUser` with `INVITED` status and sends a temporary-password email.\n\n' +
+            '**Authorised callers:** `SUPER_ADMIN`, `ADMIN`, `HR`, `MANAGER`\n\n' +
+            '**Role-creation hierarchy (enforced server-side):**\n\n' +
+            '| Caller | Can assign |\n' +
+            '|---|---|\n' +
+            '| `SUPER_ADMIN` | Any role |\n' +
+            '| `ADMIN` | `HR`, `MANAGER`, `EMPLOYEE` |\n' +
+            '| `HR` | `MANAGER`, `EMPLOYEE` |\n' +
+            '| `MANAGER` | `EMPLOYEE` only |\n\n' +
+            'If `role` is omitted the server defaults to `EMPLOYEE` (backward compatible).\n\n' +
+            'Privilege-escalation attempts return **403** even if the frontend is modified or bypassed.\n\n' +
+            '**Tenant isolation:** the new user is always created in the caller\'s tenant (derived from JWT). Cross-tenant creation is impossible.',
           operationId: 'inviteEmployee',
           security: [{ userCookie: [] }],
           requestBody: {
@@ -1934,9 +1993,19 @@ const options = {
               description: 'Employee invited successfully',
               content: { 'application/json': { schema: { type: 'object', properties: { message: { type: 'string' }, user: { $ref: '#/components/schemas/Employee' } } } } },
             },
-            400: { description: 'License limit reached or invalid request body' },
-            401: { description: 'Unauthorized' },
-            409: { description: 'User already exists' },
+            400: {
+              description: 'License limit reached, missing required fields, or invalid role value',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+            },
+            401: { description: 'Unauthorized — no valid session token' },
+            403: {
+              description: 'Forbidden — caller is not permitted to assign the requested role (privilege escalation blocked)',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/RoleAuthorizationError' } } },
+            },
+            409: {
+              description: 'Conflict — a user with this email already exists',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+            },
           },
         },
         get: {

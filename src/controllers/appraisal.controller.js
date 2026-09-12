@@ -1199,11 +1199,14 @@ export async function getMyGoals(req, res, next) {
     });
 
     const totalGoals = userGoalMetrics.length;
+    // Only count goals that have gone through the full workflow and been HR-approved.
+    // ACTIVE, PENDING_APPROVAL, PENDING_MANAGER_REVIEW, PENDING_HR_REVIEW, CHANGES_REQUESTED
+    // are all in-flight and must NOT be counted as finalized performance inputs.
     const completedGoals = userGoalMetrics.filter(
-      g => g.status === 'COMPLETED' || g.status === 'Completed' || g.progress >= 100
+      g => g.status === 'COMPLETED' || g.status === 'Completed'
     ).length;
     const inProgressGoals = userGoalMetrics.filter(
-      g => g.status !== 'COMPLETED' && g.status !== 'Completed' && g.progress < 100
+      g => g.status !== 'COMPLETED' && g.status !== 'Completed'
     ).length;
     const totalProgressSum = userGoalMetrics.reduce((acc, g) => acc + (g.progress || 0), 0);
     const averageProgress = totalGoals > 0 ? Math.round(totalProgressSum / totalGoals) : 0;

@@ -3,12 +3,13 @@ import {
   createGoalSchema,
   updateGoalSchema,
   goalReviewSchema,
+  activateApproveSchema,
   goalSubmitSchema,
   goalApproveSchema,
   goalRejectSchema,
   goalResubmitSchema,
 } from '../validations/goal.schema.js';
-import { goalService, GOAL_CATEGORIES, GOAL_TYPES, GOAL_PRIORITIES } from '../services/goal.service.js';
+import { goalService, GOAL_CATEGORIES, GOAL_TYPES, GOAL_PRIORITIES, GOAL_STATUS } from '../services/goal.service.js';
 import { ELEVATED_ROLES, hasRole } from '../lib/roles.js';
 import { getCurrentFinancialYear, getCurrentQuarter } from '../lib/financialYear.js';
 import { GOAL_EDITABLE_STATUSES } from '../lib/workflowStatus.js';
@@ -19,6 +20,8 @@ import { GOAL_EDITABLE_STATUSES } from '../lib/workflowStatus.js';
 async function checkIsSubordinate(managerId, targetId, tenantId) {
   return goalService.isSubordinate(managerId, targetId, tenantId);
 }
+
+// ── Metadata Endpoints ─────────────────────────────────────────────────────
 
 export async function getGoalCategories(req, res) {
   res.json({ categories: GOAL_CATEGORIES });
@@ -32,6 +35,15 @@ export async function getGoalPriorities(req, res) {
   res.json({ priorities: GOAL_PRIORITIES });
 }
 
+/**
+ * GET /goals/assignable-users
+ *
+ * Returns the list of employees this user is allowed to assign goals to.
+ *
+ * EMPLOYEE / non-managers  → only self
+ * MANAGER                  → self + full reporting downline (recursive)
+ * SUPER_ADMIN / ADMIN / HR → all active users in tenant
+ */
 export async function getAssignableUsers(req, res, next) {
   try {
     const role = req.user.role;
@@ -111,27 +123,49 @@ export async function getAssignableUsers(req, res, next) {
   }
 }
 
+// ── Goal CRUD ──────────────────────────────────────────────────────────────
+
+/**
+ * POST /goals
+ *
+ * Creates a new goal with the correct initial status based on:
+ *
+ *   A. EMPLOYEE self-assignment (employeeId == caller or omitted):
+ *      status = DRAFT  (existing behaviour preserved)
+ *      approvalMode not stored
+ *
+ *   B. MANAGER assigns to another employee with MANAGER_APPROVAL:
+ *      status = PENDING_APPROVAL
+ *      Reporting manager must call activate-approve before tasks start.
+ *
+ *   C. MANAGER assigns to another employee with AUTO_APPROVE:
+ *      status = ACTIVE  (tasks immediately workable)
+ *
+ * In all cases, createdById is stored for proper audit trail.
+ */
 export async function createGoal(req, res, next) {
   try {
     const parsed = createGoalSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
-    const { 
-      title, 
-      description, 
-      category, 
-      goalType, 
-      priority, 
-      financialYear, 
-      quarter, 
-      startDate, 
-      targetDate, 
+
+    const {
+      title,
+      description,
+      category,
+      goalType,
+      priority,
+      financialYear,
+      quarter,
+      startDate,
+      targetDate,
       dueDate,
-      attachments, 
-      specialNotes, 
+      attachments,
+      specialNotes,
       employeeId,
       employeeIds: rawEmployeeIds,
+      approvalMode,
     } = parsed.data;
 
     if (!title || !title.trim()) {
@@ -153,6 +187,8 @@ export async function createGoal(req, res, next) {
     if (targetEmployeeIds.length === 0) {
       return res.status(400).json({ error: 'Please select at least one employee for goal assignment' });
     }
+
+    const isSelfAssigned = targetEmployeeIds.length === 1 && targetEmployeeIds[0] === req.user.id;
 
     // Verify all target employees exist in tenant and are active
     const targetUsers = await prisma.tenantUser.findMany({
@@ -197,6 +233,25 @@ export async function createGoal(req, res, next) {
       }
     }
 
+    // ── Determine initial status ───────────────────────────────────────────
+    // Self-assigned goals always start as DRAFT (existing behaviour preserved).
+    // Manager-created goals use approvalMode to set the initial status.
+    let initialStatus;
+    let effectiveApprovalMode = null;
+
+    if (isSelfAssigned) {
+      // Flow A: Employee self-created → DRAFT
+      initialStatus = GOAL_STATUS.DRAFT;
+    } else if (approvalMode === 'AUTO_APPROVE') {
+      // Flow C: Manager + AUTO_APPROVE → ACTIVE immediately
+      initialStatus = GOAL_STATUS.ACTIVE;
+      effectiveApprovalMode = 'AUTO_APPROVE';
+    } else {
+      // Flow B: Manager + MANAGER_APPROVAL (default for manager-created) → PENDING_APPROVAL
+      initialStatus = GOAL_STATUS.PENDING_APPROVAL;
+      effectiveApprovalMode = 'MANAGER_APPROVAL';
+    }
+
     // Execute atomic creation in transaction
     const { goal, assignments } = await prisma.$transaction(async (tx) => {
       const createdGoal = await tx.goal.create({
@@ -217,7 +272,8 @@ export async function createGoal(req, res, next) {
           employeeId: targetEmployeeIds[0],
           createdBy: req.user.name,
           createdById: req.user.id,
-          status: 'DRAFT',
+          approvalMode: effectiveApprovalMode,
+          status: initialStatus,
         },
       });
 
@@ -230,7 +286,7 @@ export async function createGoal(req, res, next) {
               employeeId: empId,
               assignedById: req.user.id,
               progress: 0,
-              status: 'DRAFT',
+              status: initialStatus,
               milestones: 0,
               completedMilestones: 0,
             },
@@ -241,30 +297,66 @@ export async function createGoal(req, res, next) {
         )
       );
 
+      let auditDetails = `${req.user.name} created goal "${createdGoal.title}"`;
+      if (!isSelfAssigned) {
+        auditDetails += ` and assigned it to ${targetEmployeeIds.length} employee(s)`;
+        auditDetails += ` (approval mode: ${effectiveApprovalMode})`;
+      }
+      auditDetails += `.`;
+
       await tx.goalAuditLog.create({
         data: {
           goalId: createdGoal.id,
           performedById: req.user.id,
           action: 'GOAL_CREATED',
-          details: `${req.user.name} created goal "${createdGoal.title}" and assigned to ${targetEmployeeIds.length} employee(s).`,
+          details: auditDetails,
         },
       });
 
       return { goal: createdGoal, assignments: createdAssignments };
     });
 
-    // Notify assigned employees
-    for (const empId of targetEmployeeIds) {
-      if (empId !== req.user.id) {
-        await goalService.notify({
-          tenantId: req.tenantId,
-          recipientId: empId,
-          type: 'goal_update',
-          title: `New Goal Assigned: "${goal.title}"`,
-          body: `${req.user.name} assigned goal "${goal.title}" to you.`,
-          entityType: 'goal',
-          entityId: goal.id,
-        });
+    // ── Notifications ──────────────────────────────────────────────────────
+    if (!isSelfAssigned) {
+      for (const targetUser of targetUsers) {
+        if (targetUser.id === req.user.id) continue;
+
+        if (initialStatus === GOAL_STATUS.PENDING_APPROVAL) {
+          // Notify assignee that a goal was created for them (pending activation)
+          await goalService.notify({
+            tenantId: req.tenantId,
+            recipientId: targetUser.id,
+            type: 'goal_update',
+            title: `New Goal Assigned: "${goal.title}"`,
+            body: `${req.user.name} created a goal for you. It is awaiting manager approval before you can begin.`,
+            entityType: 'goal',
+            entityId: goal.id,
+          });
+
+          // Notify the assignee's reporting manager to activate the goal
+          if (targetUser.managerId && targetUser.managerId !== req.user.id) {
+            await goalService.notify({
+              tenantId: req.tenantId,
+              recipientId: targetUser.managerId,
+              type: 'goal_update',
+              title: `Goal Activation Required: "${goal.title}"`,
+              body: `${req.user.name} created a goal for ${targetUser.name} that requires your approval to activate.`,
+              entityType: 'goal',
+              entityId: goal.id,
+            });
+          }
+        } else if (initialStatus === GOAL_STATUS.ACTIVE) {
+          // AUTO_APPROVE: notify assignee that the goal is immediately active
+          await goalService.notify({
+            tenantId: req.tenantId,
+            recipientId: targetUser.id,
+            type: 'goal_update',
+            title: `New Goal Activated: "${goal.title}"`,
+            body: `${req.user.name} created and auto-approved a goal for you. You can start working on tasks now.`,
+            entityType: 'goal',
+            entityId: goal.id,
+          });
+        }
       }
     }
 
@@ -272,6 +364,7 @@ export async function createGoal(req, res, next) {
       where: { id: goal.id },
       include: {
         employee: { select: { id: true, name: true, email: true, department: true, designation: true, role: true, managerId: true } },
+        createdByUser: { select: { id: true, name: true, role: true } },
         assignments: {
           include: {
             employee: { select: { id: true, name: true, email: true, department: true, designation: true, role: true, managerId: true } },
@@ -288,6 +381,9 @@ export async function createGoal(req, res, next) {
   }
 }
 
+/**
+ * GET /goals
+ */
 export async function listGoals(req, res, next) {
   try {
     const { employeeId, status, financialYear, category, scope } = req.query;
@@ -316,7 +412,6 @@ export async function listGoals(req, res, next) {
           return res.status(403).json({ error: 'Access forbidden: user is not your subordinate' });
         }
       }
-
       where.OR = [
         { employeeId: employeeId },
         { assignments: { some: { employeeId: employeeId } } },
@@ -400,6 +495,9 @@ export async function listGoals(req, res, next) {
           employee: {
             select: { id: true, name: true, email: true, department: true, designation: true, managerId: true },
           },
+          createdByUser: {
+            select: { id: true, name: true, role: true },
+          },
           assignments: {
             include: {
               employee: {
@@ -443,6 +541,9 @@ export async function listGoals(req, res, next) {
   }
 }
 
+/**
+ * GET /goals/:id
+ */
 export async function getGoalById(req, res, next) {
   try {
     const { id } = req.params;
@@ -452,6 +553,9 @@ export async function getGoalById(req, res, next) {
       include: {
         employee: {
           select: { id: true, name: true, email: true, department: true, designation: true, managerId: true },
+        },
+        createdByUser: {
+          select: { id: true, name: true, role: true },
         },
         assignments: {
           include: {
@@ -494,6 +598,9 @@ export async function getGoalById(req, res, next) {
   }
 }
 
+/**
+ * PATCH /goals/:id
+ */
 export async function updateGoal(req, res, next) {
   try {
     const { id } = req.params;
@@ -525,30 +632,39 @@ export async function updateGoal(req, res, next) {
       });
     }
 
+    // Prevent direct status manipulation through the generic update endpoint.
+    // Status changes must go through dedicated workflow action endpoints.
+    const { status: _ignoredStatus, ...safeData } = parsed.data;
+
     const updated = await prisma.goal.update({
       where: { id },
       data: {
-        ...(parsed.data.title ? { title: parsed.data.title.trim() } : {}),
-        ...(parsed.data.description !== undefined ? { description: parsed.data.description } : {}),
-        ...(parsed.data.category ? { category: parsed.data.category } : {}),
-        ...(parsed.data.goalType ? { goalType: parsed.data.goalType } : {}),
-        ...(parsed.data.priority ? { priority: parsed.data.priority } : {}),
-        ...(parsed.data.financialYear ? { financialYear: parsed.data.financialYear } : {}),
-        ...(parsed.data.quarter ? { quarter: parsed.data.quarter } : {}),
-        ...(parsed.data.startDate ? { startDate: new Date(parsed.data.startDate) } : {}),
-        ...(parsed.data.targetDate ? { targetDate: new Date(parsed.data.targetDate) } : {}),
-        ...(parsed.data.attachments ? { attachments: parsed.data.attachments } : {}),
-        ...(parsed.data.specialNotes !== undefined ? { specialNotes: parsed.data.specialNotes } : {}),
+        ...(safeData.title ? { title: safeData.title.trim() } : {}),
+        ...(safeData.description !== undefined ? { description: safeData.description } : {}),
+        ...(safeData.category ? { category: safeData.category } : {}),
+        ...(safeData.goalType ? { goalType: safeData.goalType } : {}),
+        ...(safeData.priority ? { priority: safeData.priority } : {}),
+        ...(safeData.financialYear ? { financialYear: safeData.financialYear } : {}),
+        ...(safeData.quarter ? { quarter: safeData.quarter } : {}),
+        ...(safeData.startDate ? { startDate: new Date(safeData.startDate) } : {}),
+        ...(safeData.targetDate ? { targetDate: new Date(safeData.targetDate) } : {}),
+        ...(safeData.dueDate ? { dueDate: new Date(safeData.dueDate) } : {}),
+        ...(safeData.attachments ? { attachments: safeData.attachments } : {}),
+        ...(safeData.specialNotes !== undefined ? { specialNotes: safeData.specialNotes } : {}),
       },
       include: {
         employee: true,
+        createdByUser: { select: { id: true, name: true, role: true } },
         assignments: {
           include: {
             employee: { select: { id: true, name: true, email: true, department: true, designation: true, role: true, managerId: true } },
           },
         },
         tasks: true,
-        auditLogs: { orderBy: { createdAt: 'desc' }, include: { performedBy: { select: { id: true, name: true, role: true } } } },
+        auditLogs: {
+          orderBy: { createdAt: 'desc' },
+          include: { performedBy: { select: { id: true, name: true, role: true } } },
+        },
       },
     });
 
@@ -565,6 +681,9 @@ export async function updateGoal(req, res, next) {
   }
 }
 
+/**
+ * DELETE /goals/:id
+ */
 export async function deleteGoal(req, res, next) {
   try {
     const { id } = req.params;
@@ -583,7 +702,7 @@ export async function deleteGoal(req, res, next) {
       || (!goal.createdById && goal.createdBy === req.user.name);
     let isAuthorizedManager = false;
     if (!isElevated && !isCreator) {
-      for (const a of goal.assignments) {
+      for (const a of (goal.assignments || [])) {
         if (await checkIsSubordinate(req.user.id, a.employeeId, req.tenantId)) {
           isAuthorizedManager = true;
           break;
@@ -622,6 +741,46 @@ export async function deleteGoal(req, res, next) {
 
 // ── Workflow Action Handlers ───────────────────────────────────────────────
 
+/**
+ * POST /goals/:id/activate-approve
+ *
+ * Transitions a PENDING_APPROVAL goal → ACTIVE.
+ *
+ * Who can call:
+ *  - The goal-owner's reporting manager
+ *  - HR / SUPER_ADMIN / ADMIN
+ *
+ * This is the initial activation step for MANAGER + MANAGER_APPROVAL goals.
+ * It is NOT the same as the post-submission manager review (/approve).
+ */
+export async function activateApproveGoal(req, res, next) {
+  try {
+    const { id } = req.params;
+    const parsed = activateApproveSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    }
+    const result = await goalService.activateGoal({
+      tenantId: req.tenantId,
+      goalId: id,
+      user: req.user,
+      comment: parsed.data.comment,
+    });
+    res.json(result);
+  } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    next(err);
+  }
+}
+
+/**
+ * POST /goals/:id/submit
+ *
+ * Employee submits a completed goal for manager/HR review.
+ * Allowed from: DRAFT (self-created) | ACTIVE (manager-created) | CHANGES_REQUESTED
+ */
 export async function submitGoal(req, res, next) {
   try {
     const { id } = req.params;
@@ -643,6 +802,12 @@ export async function submitGoal(req, res, next) {
   }
 }
 
+/**
+ * POST /goals/:id/approve
+ *
+ * Manager approves a submitted goal → PENDING_HR_REVIEW.
+ * This is the POST-SUBMISSION review, not the initial activation.
+ */
 export async function managerApproveGoal(req, res, next) {
   try {
     const { id } = req.params;
@@ -669,6 +834,11 @@ export async function managerApproveGoal(req, res, next) {
   }
 }
 
+/**
+ * POST /goals/:id/reject
+ *
+ * Manager requests changes on a submitted goal → CHANGES_REQUESTED.
+ */
 export async function managerRejectGoal(req, res, next) {
   try {
     const { id } = req.params;
@@ -694,6 +864,11 @@ export async function managerRejectGoal(req, res, next) {
   }
 }
 
+/**
+ * POST /goals/:id/hr-approve
+ *
+ * HR approves final goal → COMPLETED.
+ */
 export async function hrApproveGoal(req, res, next) {
   try {
     const { id } = req.params;
@@ -720,6 +895,11 @@ export async function hrApproveGoal(req, res, next) {
   }
 }
 
+/**
+ * POST /goals/:id/hr-reject
+ *
+ * HR requests changes → CHANGES_REQUESTED.
+ */
 export async function hrRejectGoal(req, res, next) {
   try {
     const { id } = req.params;
@@ -745,6 +925,11 @@ export async function hrRejectGoal(req, res, next) {
   }
 }
 
+/**
+ * POST /goals/:id/resubmit
+ *
+ * Employee resubmits after CHANGES_REQUESTED.
+ */
 export async function resubmitGoal(req, res, next) {
   try {
     const { id } = req.params;
