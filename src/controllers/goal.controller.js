@@ -154,15 +154,16 @@ export async function getAssignableUsers(req, res, next) {
  *
  * Creates a new goal with the correct initial status based on:
  *
- *   A. EMPLOYEE self-assignment (employeeId == caller or omitted):
+ *   A. Self-assignment (employeeId == caller or omitted, any role):
  *      status = DRAFT  (existing behaviour preserved)
  *      approvalMode not stored
  *
- *   B. MANAGER assigns to another employee with MANAGER_APPROVAL:
+ *   B. Elevated role (ADMIN/HR/CMD/SUPER_ADMIN) or MANAGER assigns to another
+ *      employee with MANAGER_APPROVAL:
  *      status = PENDING_APPROVAL
  *      Reporting manager must call activate-approve before tasks start.
  *
- *   C. MANAGER assigns to another employee with AUTO_APPROVE:
+ *   C. Elevated role or MANAGER assigns to another employee with AUTO_APPROVE:
  *      status = ACTIVE  (tasks immediately workable)
  *
  * In all cases, createdById is stored for proper audit trail.
@@ -289,19 +290,20 @@ export async function createGoal(req, res, next) {
 
     // ── Determine initial status ───────────────────────────────────────────
     // Self-assigned goals always start as DRAFT (existing behaviour preserved).
-    // Manager-created goals use approvalMode to set the initial status.
+    // Goals assigned to others by MANAGER or elevated roles (ADMIN/HR/CMD/SUPER_ADMIN)
+    // use approvalMode to set the initial status.
     let initialStatus;
     let effectiveApprovalMode = null;
 
     if (isSelfAssigned) {
-      // Flow A: Employee self-created → DRAFT
+      // Flow A: Self-assigned (any role) → DRAFT
       initialStatus = GOAL_STATUS.DRAFT;
     } else if (approvalMode === 'AUTO_APPROVE') {
-      // Flow C: Manager + AUTO_APPROVE → ACTIVE immediately
+      // Flow C: Elevated role or Manager + AUTO_APPROVE → ACTIVE immediately
       initialStatus = GOAL_STATUS.ACTIVE;
       effectiveApprovalMode = 'AUTO_APPROVE';
     } else {
-      // Flow B: Manager + MANAGER_APPROVAL (default for manager-created) → PENDING_APPROVAL
+      // Flow B: Elevated role or Manager + MANAGER_APPROVAL (default) → PENDING_APPROVAL
       initialStatus = GOAL_STATUS.PENDING_APPROVAL;
       effectiveApprovalMode = 'MANAGER_APPROVAL';
     }
