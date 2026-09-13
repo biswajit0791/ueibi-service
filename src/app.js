@@ -2,6 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
+import path from 'node:path';
+import fs from 'node:fs';
 import { env } from './config/env.js';
 import healthRoutes from './routes/health.routes.js';
 import registrationRoutes from './routes/registration.routes.js';
@@ -41,12 +43,29 @@ app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(express.json());
 app.use(morgan(env.nodeEnv === 'development' ? 'dev' : 'combined'));
 
-// Serve uploads static directory with cross-origin access
-app.use('/uploads', (req, res, next) => {
+// Ensure persistent uploads and corporate-gallery directories exist
+const uploadsDir = path.resolve(process.env.UPLOAD_DIR || './uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+const corporateGalleryDir = path.join(uploadsDir, 'corporate-gallery');
+if (!fs.existsSync(corporateGalleryDir)) {
+  fs.mkdirSync(corporateGalleryDir, { recursive: true });
+}
+
+const serveUploads = (req, res, next) => {
   res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
   res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
   next();
-}, express.static('uploads'));
+};
+
+// Serve uploads static directory with cross-origin access on /uploads and /api/uploads
+app.use('/uploads', serveUploads, express.static(uploadsDir));
+app.use('/api/uploads', serveUploads, express.static(uploadsDir));
 
 // Root
 app.get('/', (req, res) => res.json({ message: 'UEIBI server running on port 4000' }));

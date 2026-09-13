@@ -119,26 +119,41 @@ export async function createGalleryPost(req, res, next) {
 
     const parsed = createGalleryPostSchema.safeParse(req.body || {});
     if (!parsed.success) {
+      if (req.file?.path) {
+        try { fs.unlinkSync(req.file.path); } catch { /* non-fatal */ }
+      }
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
     const { title, category } = parsed.data;
 
-    const imageUrl = `/uploads/${req.file.filename}`;
+    const imageUrl = `/uploads/corporate-gallery/${req.file.filename}`;
 
-    const post = await prisma.galleryPost.create({
-      data: { tenantId, uploadedById: user.id, title, category, imageUrl },
-      include: {
-        uploadedBy: { select: { id: true, name: true } },
-        likes: { select: { userId: true } },
-        comments: { include: { author: { select: { id: true, name: true } } } },
-      },
-    });
+    let post;
+    try {
+      post = await prisma.galleryPost.create({
+        data: { tenantId, uploadedById: user.id, title, category, imageUrl },
+        include: {
+          uploadedBy: { select: { id: true, name: true } },
+          likes: { select: { userId: true } },
+          comments: { include: { author: { select: { id: true, name: true } } } },
+        },
+      });
+    } catch (dbErr) {
+      // Clean up newly uploaded file if database insert fails
+      if (req.file?.path) {
+        try { fs.unlinkSync(req.file.path); } catch { /* non-fatal */ }
+      }
+      throw dbErr;
+    }
 
     const serialized = serializePost(post, user.id);
     emitToTenant(tenantId, 'gallery_post_created', { post: serialized });
 
     res.status(201).json({ message: 'Gallery post created', post: serialized });
   } catch (err) {
+    if (req.file?.path) {
+      try { fs.unlinkSync(req.file.path); } catch { /* non-fatal */ }
+    }
     next(err);
   }
 }
@@ -151,7 +166,7 @@ export async function updateGalleryPost(req, res, next) {
 
     const paramParsed = galleryIdParamSchema.safeParse(req.params);
     if (!paramParsed.success) {
-      if (req.file) {
+      if (req.file?.path) {
         try { fs.unlinkSync(req.file.path); } catch { /* non-fatal */ }
       }
       return res.status(400).json({ error: 'Invalid post ID', details: paramParsed.error.issues });
@@ -160,7 +175,7 @@ export async function updateGalleryPost(req, res, next) {
 
     const post = await prisma.galleryPost.findFirst({ where: { id, tenantId, isActive: true } });
     if (!post) {
-      if (req.file) {
+      if (req.file?.path) {
         try { fs.unlinkSync(req.file.path); } catch { /* non-fatal */ }
       }
       return res.status(404).json({ error: 'Post not found' });
@@ -169,7 +184,7 @@ export async function updateGalleryPost(req, res, next) {
     const privilegedRoles = ['HR', 'CMD', 'ADMIN', 'SUPER_ADMIN'];
     const isAuthor = post.uploadedById === user.id;
     if (!isAuthor && !privilegedRoles.includes(user.role)) {
-      if (req.file) {
+      if (req.file?.path) {
         try { fs.unlinkSync(req.file.path); } catch { /* non-fatal */ }
       }
       return res.status(403).json({ error: 'Forbidden: You cannot edit this post' });
@@ -177,7 +192,7 @@ export async function updateGalleryPost(req, res, next) {
 
     const parsed = updateGalleryPostSchema.safeParse(req.body || {});
     if (!parsed.success) {
-      if (req.file) {
+      if (req.file?.path) {
         try { fs.unlinkSync(req.file.path); } catch { /* non-fatal */ }
       }
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
@@ -187,40 +202,61 @@ export async function updateGalleryPost(req, res, next) {
     if (parsed.data.title !== undefined) updateData.title = parsed.data.title;
     if (parsed.data.category !== undefined) updateData.category = parsed.data.category;
 
+    let oldFilePathToDelete = null;
     if (req.file) {
       const oldImageUrl = post.imageUrl;
-      updateData.imageUrl = `/uploads/${req.file.filename}`;
-      try {
-        if (oldImageUrl && oldImageUrl.startsWith('/uploads/')) {
-          const oldFilePath = path.join('./uploads', path.basename(oldImageUrl));
-          if (fs.existsSync(oldFilePath)) fs.unlinkSync(oldFilePath);
+      updateData.imageUrl = `/uploads/corporate-gallery/${req.file.filename}`;
+      // Safely check old file path inside uploads folder
+      if (oldImageUrl && oldImageUrl.startsWith('/uploads/')) {
+        const uploadBase = path.resolve(process.env.UPLOAD_DIR || './uploads');
+        const relativePath = oldImageUrl.replace(/^\/uploads\//, '');
+        const resolvedOld = path.resolve(uploadBase, relativePath);
+        if (resolvedOld.startsWith(uploadBase) && resolvedOld !== uploadBase && fs.existsSync(resolvedOld)) {
+          oldFilePathToDelete = resolvedOld;
         }
-      } catch { /* non-fatal */ }
+      }
     }
 
     if (Object.keys(updateData).length === 0) {
+      if (req.file?.path) {
+        try { fs.unlinkSync(req.file.path); } catch { /* non-fatal */ }
+      }
       return res.status(400).json({ error: 'At least one field (title, category, or image) must be provided to update' });
     }
 
-    const updated = await prisma.galleryPost.update({
-      where: { id },
-      data: updateData,
-      include: {
-        uploadedBy: { select: { id: true, name: true } },
-        likes: { select: { userId: true } },
-        comments: {
-          orderBy: { createdAt: 'asc' },
-          include: { author: { select: { id: true, name: true } } },
+    let updated;
+    try {
+      updated = await prisma.galleryPost.update({
+        where: { id },
+        data: updateData,
+        include: {
+          uploadedBy: { select: { id: true, name: true } },
+          likes: { select: { userId: true } },
+          comments: {
+            orderBy: { createdAt: 'asc' },
+            include: { author: { select: { id: true, name: true } } },
+          },
         },
-      },
-    });
+      });
+    } catch (dbErr) {
+      // If DB update failed, delete the newly uploaded replacement file
+      if (req.file?.path) {
+        try { fs.unlinkSync(req.file.path); } catch { /* non-fatal */ }
+      }
+      throw dbErr;
+    }
+
+    // Safely remove old image only after successful DB update
+    if (oldFilePathToDelete) {
+      try { fs.unlinkSync(oldFilePathToDelete); } catch { /* non-fatal */ }
+    }
 
     const serialized = serializePost(updated, user.id);
     emitToTenant(tenantId, 'gallery_post_updated', { post: serialized });
 
     res.json({ message: 'Gallery post updated successfully', post: serialized });
   } catch (err) {
-    if (req.file) {
+    if (req.file?.path) {
       try { fs.unlinkSync(req.file.path); } catch { /* non-fatal */ }
     }
     next(err);
@@ -250,10 +286,15 @@ export async function deleteGalleryPost(req, res, next) {
 
     await prisma.galleryPost.update({ where: { id }, data: { isActive: false } });
 
+    // Safely delete associated image if within uploads directory
     try {
       if (post.imageUrl && post.imageUrl.startsWith('/uploads/')) {
-        const filePath = path.join('./uploads', path.basename(post.imageUrl));
-        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        const uploadBase = path.resolve(process.env.UPLOAD_DIR || './uploads');
+        const relativePath = post.imageUrl.replace(/^\/uploads\//, '');
+        const resolvedPath = path.resolve(uploadBase, relativePath);
+        if (resolvedPath.startsWith(uploadBase) && resolvedPath !== uploadBase && fs.existsSync(resolvedPath)) {
+          fs.unlinkSync(resolvedPath);
+        }
       }
     } catch { /* non-fatal */ }
 
