@@ -252,11 +252,9 @@ export async function createTask(req, res, next) {
 export async function listTasks(req, res, next) {
   try {
     const tenantId = req.tenantId;
+    const targetEmployeeId = req.query.employeeId || req.user.id;
     const callerRole = String(req.user.role || '').toUpperCase();
     const isElevated = hasRole(req.user.role, ELEVATED_ROLES);
-    const targetEmployeeId = req.query.employeeId === 'personal'
-      ? req.user.id
-      : (req.query.employeeId || ((callerRole === 'MANAGER' || isElevated) ? 'all' : req.user.id));
 
     // Regular employee can only ever view their own tasks
     if (callerRole === 'EMPLOYEE' && !isElevated) {
@@ -276,11 +274,7 @@ export async function listTasks(req, res, next) {
     }
 
     if (targetEmployeeId === 'all') {
-      let where = { tenantId };
-      if (req.query.fy) {
-        where.financialYear = req.query.fy;
-      }
-
+      let whereClause = { tenantId };
       if (!isElevated) {
         // Manager: own tasks, tasks of downline subordinates, same-dept employees with role EMPLOYEE,
         // and companion dependency tasks that hang off one of those tasks.
@@ -311,16 +305,14 @@ export async function listTasks(req, res, next) {
         }
 
         const allowedIdList = [...allowedIds];
-        const otherSubordinateIds = allowedIdList.filter(id => id !== req.user.id);
         // Companion ("dependency") tasks are visible when their parent task is
         // owned by someone in the downline — NOT tenant-wide as before.
         const visibleParents = await prisma.task.findMany({
           where: { tenantId, employeeId: { in: allowedIdList } },
           select: { id: true },
         });
-        where.OR = [
-          { employeeId: req.user.id },
-          ...(otherSubordinateIds.length > 0 ? [{ employeeId: { in: otherSubordinateIds }, isPrivate: false }] : []),
+        whereClause.OR = [
+          { employeeId: { in: allowedIdList } },
           { isDependencyOf: { in: visibleParents.map((t) => t.id) } },
         ];
       }
