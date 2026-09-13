@@ -32,16 +32,6 @@ export async function loadTaskForUser(taskId, user, tenantId) {
     return task;
   }
 
-  if (String(user.role || '').toUpperCase() === 'MANAGER' && task.employeeId) {
-    const owner = await prisma.tenantUser.findFirst({
-      where: { id: task.employeeId, tenantId, isDeleted: false },
-      select: { department: true, role: true },
-    });
-    if (owner && user.department && owner.department === user.department && ['EMPLOYEE', 'STUDENT'].includes(String(owner.role || '').toUpperCase())) {
-      return task;
-    }
-  }
-
   if (task.isDependencyOf) {
     const parent = await prisma.task.findFirst({ where: { id: task.isDependencyOf, tenantId } });
     if (parent) {
