@@ -7,6 +7,7 @@ const ENTITY_FOLDER = {
   TRAINING_RECORD: 'training-records',
   ACHIEVEMENT: 'achievements',
   INCIDENT: 'incidents',
+  DISPUTE: 'disputes',
 };
 
 export const entityAttachmentService = {
