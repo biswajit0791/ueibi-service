@@ -60,9 +60,9 @@ export async function getTeamDirectory(req, res, next) {
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
-    const { search, department, band, financialYear, page, limit } = parsed.data;
+    const { search, department, band, financialYear, includeSelf, page, limit } = parsed.data;
 
-    const { where } = buildTeamScopeWhere(req.user, req.tenantId, { search, department });
+    const { where } = buildTeamScopeWhere(req.user, req.tenantId, { search, department, includeSelf });
 
     if (band) {
       where.band = { equals: band, mode: 'insensitive' };

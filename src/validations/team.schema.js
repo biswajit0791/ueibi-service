@@ -5,6 +5,7 @@ export const teamDirectoryQuerySchema = z.object({
   department: z.string().max(200).optional(),
   band: z.string().max(50).optional(),
   financialYear: z.string().max(20).optional(),
+  includeSelf: z.coerce.boolean().optional().default(false),
   page: z.coerce.number().int().min(1).optional().default(1),
   limit: z.coerce.number().int().min(1).max(100).optional().default(20),
 });
