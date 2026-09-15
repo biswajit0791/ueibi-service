@@ -14,6 +14,10 @@ const panSchema = z
 
 const ratingSchema = z.coerce.number().int().min(1, "Rating must be between 1 and 10").max(10, "Rating must be between 1 and 10");
 
+export const employeeIdOnlyParamSchema = z.object({
+  id: z.string().min(1),
+});
+
 export const inviteEmployeeSchema = z.object({
   email: z.string().trim().toLowerCase().email("A valid email address is required"),
   name: z.string().trim().min(2, "Name must be at least 2 characters"),

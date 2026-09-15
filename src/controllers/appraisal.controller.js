@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma.js';
 import { AppraisalNotificationService } from '../services/appraisalNotification.service.js';
 import { goalService } from '../services/goal.service.js';
+import { buildTeamScopeWhere, buildExplicitReportsWhere } from '../services/teamScope.service.js';
 import { ELEVATED_ROLES, HR_ROLES, MANAGER_OR_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
 
 /**
@@ -9,7 +10,7 @@ import { ELEVATED_ROLES, HR_ROLES, MANAGER_OR_ELEVATED_ROLES, hasRole } from '..
  * (The old code also treated "employee has no manager" as "any MANAGER may
  * review" — that fallback is deliberately gone.)
  */
-async function canManagerReview(user, employee, tenantId) {
+export async function canManagerReview(user, employee, tenantId) {
   if (hasRole(user.role, ELEVATED_ROLES)) return true;
   if (!employee || employee.id === user.id) return false;
   if (employee.managerId === user.id) return true;
@@ -1361,6 +1362,17 @@ export async function syncGoalsToAppraisal(req, res, next) {
 // PHASE 5: DIRECT REPORT REVIEWS (MANAGER)
 // ─────────────────────────────────────────────────────────────────────────────
 
+const DIRECT_REPORT_SELECT = {
+  id: true,
+  name: true,
+  email: true,
+  designation: true,
+  department: true,
+  empType: true,
+  role: true,
+  managerId: true,
+};
+
 export async function getDirectReports(req, res, next) {
   try {
     const parsedQuery = directReportsQuerySchema.safeParse(req.query);
@@ -1369,96 +1381,25 @@ export async function getDirectReports(req, res, next) {
     }
     const { search, department } = parsedQuery.data;
 
-    const userRole = (req.user.role || '').toUpperCase();
-    const isHrOrAdmin = hasRole(userRole, ELEVATED_ROLES);
+    const { where, isHrOrAdmin } = buildTeamScopeWhere(req.user, req.tenantId, { search, department });
 
-    let where;
-    if (isHrOrAdmin) {
-      where = {
-        tenantId: req.tenantId,
-        isDeleted: false,
-        status: { in: ['ACTIVE', 'INVITED'] },
-        id: { not: req.user.id },
-      };
-    } else {
+    if (!isHrOrAdmin) {
       // First check if manager has direct reports explicitly assigned with managerId
       const explicitReports = await prisma.tenantUser.findMany({
-        where: {
-          tenantId: req.tenantId,
-          managerId: req.user.id,
-          isDeleted: false,
-          status: { in: ['ACTIVE', 'INVITED'] },
-          id: { not: req.user.id },
-          ...(department ? { department: { equals: department, mode: 'insensitive' } } : {}),
-          ...(search && search.trim() ? {
-            OR: [
-              { name: { contains: search.trim(), mode: 'insensitive' } },
-              { email: { contains: search.trim(), mode: 'insensitive' } },
-              { designation: { contains: search.trim(), mode: 'insensitive' } },
-            ],
-          } : {}),
-        },
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          designation: true,
-          department: true,
-          empType: true,
-          role: true,
-          managerId: true,
-        },
+        where: buildExplicitReportsWhere(req.user, req.tenantId, { search, department }),
+        select: DIRECT_REPORT_SELECT,
         orderBy: { name: 'asc' },
       });
 
       if (explicitReports.length > 0) {
         return res.json({ directReports: explicitReports });
       }
-
-      // Fallback: If no explicit direct reports assigned, include employees in tenant without a manager or in department
-      where = {
-        tenantId: req.tenantId,
-        isDeleted: false,
-        status: { in: ['ACTIVE', 'INVITED'] },
-        id: { not: req.user.id },
-        OR: [
-          { managerId: req.user.id },
-          { managerId: null },
-          { role: { in: ['EMPLOYEE', 'STUDENT', 'MENTOR'] } },
-          ...(req.user.department ? [{ department: req.user.department }] : []),
-        ],
-      };
-    }
-
-    if (department) {
-      where.department = { equals: department, mode: 'insensitive' };
-    }
-    if (search && search.trim()) {
-      const s = search.trim();
-      where.AND = [
-        ...(where.AND || []),
-        {
-          OR: [
-            { name: { contains: s, mode: 'insensitive' } },
-            { email: { contains: s, mode: 'insensitive' } },
-            { designation: { contains: s, mode: 'insensitive' } },
-          ],
-        },
-      ];
+      // Fall through to the broader buildTeamScopeWhere fallback below.
     }
 
     const directReports = await prisma.tenantUser.findMany({
       where,
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        designation: true,
-        department: true,
-        empType: true,
-        role: true,
-        managerId: true,
-      },
+      select: DIRECT_REPORT_SELECT,
       orderBy: { name: 'asc' },
     });
 
@@ -2001,6 +1942,33 @@ export async function submitPeerFeedback(req, res, next) {
   }
 }
 
+/**
+ * Shared by getReceivedPeerFeedback, getCmdPeerFeedbackForEmployee, and
+ * team.controller.js — maps COMPLETED peer nominations (with their feedback
+ * + reviewer included) into the flat feedback-item shape all three return.
+ */
+export function mapNominationsToFeedbackItems(nominations) {
+  const items = nominations
+    .filter((n) => n.feedback)
+    .map((n) => ({
+      id: n.feedback.id,
+      nominationId: n.id,
+      rating: Number(n.feedback.rating),
+      strengths: n.feedback.strengths,
+      growthAreas: n.feedback.growthAreas,
+      createdAt: n.feedback.createdAt,
+      reviewerId: n.reviewerId,
+      reviewer: n.reviewer,
+    }));
+
+  const count = items.length;
+  const averageRating = count > 0
+    ? (items.reduce((acc, curr) => acc + curr.rating, 0) / count).toFixed(1)
+    : '0.0';
+
+  return { items, count, averageRating };
+}
+
 export async function getReceivedPeerFeedback(req, res, next) {
   try {
     const parsedQuery = peerFeedbackQuerySchema.safeParse(req.query);
@@ -2031,25 +1999,9 @@ export async function getReceivedPeerFeedback(req, res, next) {
       orderBy: { createdAt: 'desc' },
     });
 
-    const items = nominations
-      .filter((n) => n.feedback)
-      .map((n) => ({
-        id: n.feedback.id,
-        nominationId: n.id,
-        rating: Number(n.feedback.rating),
-        strengths: n.feedback.strengths,
-        growthAreas: n.feedback.growthAreas,
-        createdAt: n.feedback.createdAt,
-        reviewerId: n.reviewerId,
-        reviewer: n.reviewer,
-      }));
-
     // Reviewer identity is shown to the recipient by design (not anonymized) —
     // see the "Nominate a Peer" flow, which no longer promises anonymity.
-    const count = items.length;
-    const averageRating = count > 0
-      ? (items.reduce((acc, curr) => acc + curr.rating, 0) / count).toFixed(1)
-      : '0.0';
+    const { items, count, averageRating } = mapNominationsToFeedbackItems(nominations);
 
     res.json({
       count,
@@ -2093,23 +2045,7 @@ export async function getCmdPeerFeedbackForEmployee(req, res, next) {
       orderBy: { createdAt: 'desc' },
     });
 
-    const items = nominations
-      .filter((n) => n.feedback)
-      .map((n) => ({
-        id: n.feedback.id,
-        nominationId: n.id,
-        rating: Number(n.feedback.rating),
-        strengths: n.feedback.strengths,
-        growthAreas: n.feedback.growthAreas,
-        createdAt: n.feedback.createdAt,
-        reviewerId: n.reviewerId,
-        reviewer: n.reviewer,
-      }));
-
-    const count = items.length;
-    const averageRating = count > 0
-      ? (items.reduce((acc, curr) => acc + curr.rating, 0) / count).toFixed(1)
-      : '0.0';
+    const { items, count, averageRating } = mapNominationsToFeedbackItems(nominations);
 
     res.json({
       count,
