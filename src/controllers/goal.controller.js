@@ -10,7 +10,7 @@ import {
   goalResubmitSchema,
 } from '../validations/goal.schema.js';
 import { goalService, GOAL_CATEGORIES, GOAL_TYPES, GOAL_PRIORITIES, GOAL_STATUS } from '../services/goal.service.js';
-import { ELEVATED_ROLES, hasRole } from '../lib/roles.js';
+import { ELEVATED_ROLES, SUPER_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
 import { getCurrentFinancialYear, getCurrentQuarter } from '../lib/financialYear.js';
 import { GOAL_EDITABLE_STATUSES } from '../lib/workflowStatus.js';
 
@@ -755,7 +755,7 @@ export async function updateGoal(req, res, next) {
 
     // Prevent direct status manipulation through the generic update endpoint.
     // Status changes must go through dedicated workflow action endpoints.
-    const { status: _ignoredStatus, ...safeData } = parsed.data;
+    const { status: _ignoredStatus, addEmployeeIds, ...safeData } = parsed.data;
 
     const updated = await prisma.goal.update({
       where: { id },
@@ -789,6 +789,88 @@ export async function updateGoal(req, res, next) {
       },
     });
 
+    // ── Add new assignees (elevated roles only) ─────────────────────────────
+    if (addEmployeeIds && addEmployeeIds.length > 0) {
+      if (!hasRole(req.user.role, ELEVATED_ROLES)) {
+        return res.status(403).json({ error: 'Only HR / Admin can add new assignees to an existing goal.' });
+      }
+
+      // Determine which employees are not already assigned
+      const existingAssigneeIds = new Set(
+        existing.assignments.map((a) => a.employeeId)
+      );
+      if (existing.employeeId) existingAssigneeIds.add(existing.employeeId);
+
+      const newIds = addEmployeeIds.filter((empId) => !existingAssigneeIds.has(empId));
+
+      if (newIds.length > 0) {
+        // Validate that all supplied IDs belong to this tenant
+        const validUsers = await prisma.tenantUser.findMany({
+          where: { id: { in: newIds }, tenantId: req.tenantId, isDeleted: false },
+          select: { id: true, name: true, role: true },
+        });
+
+        // HR can only add non-super-elevated users.
+        // ADMIN / SUPER_ADMIN can add anyone.
+        const callerIsAdmin = hasRole(req.user.role, ['SUPER_ADMIN', 'ADMIN']);
+        const filteredUsers = callerIsAdmin
+          ? validUsers
+          : validUsers.filter((u) => !hasRole(u.role, SUPER_ELEVATED_ROLES));
+
+        const blockedUsers = validUsers.filter((u) => !filteredUsers.some((f) => f.id === u.id));
+        if (blockedUsers.length > 0) {
+          const blockedNames = blockedUsers.map((u) => `${u.name} (${u.role})`).join(', ');
+          return res.status(403).json({
+            error: `Only SUPER_ADMIN or ADMIN can assign goals to: ${blockedNames}.`,
+          });
+        }
+
+        const validIds = filteredUsers.map((u) => u.id);
+
+        // Upsert new GoalAssignment rows
+        await Promise.all(
+          validIds.map((empId) =>
+            prisma.goalAssignment.upsert({
+              where: { goalId_employeeId: { goalId: id, employeeId: empId } },
+              update: {},   // already exists — leave untouched
+              create: {
+                tenantId: req.tenantId,
+                goalId: id,
+                employeeId: empId,
+                assignedById: req.user.id,
+                progress: 0,
+                status: existing.status,
+                milestones: 0,
+                completedMilestones: 0,
+              },
+            })
+          )
+        );
+
+        const addedNames = validUsers.map((u) => u.name).join(', ');
+        await goalService.logAudit({
+          goalId: id,
+          performedById: req.user.id,
+          action: 'GOAL_UPDATED',
+          details: `${req.user.name} added new assignee(s) to the goal: ${addedNames}.`,
+        });
+
+        // Notify newly added employees
+        for (const user of validUsers) {
+          if (user.id === req.user.id) continue;
+          await goalService.notify({
+            tenantId: req.tenantId,
+            recipientId: user.id,
+            type: 'goal_update',
+            title: `Goal Assigned: "${updated.title}"`,
+            body: `${req.user.name} has assigned you to the goal "${updated.title}".`,
+            entityType: 'goal',
+            entityId: id,
+          });
+        }
+      }
+    }
+
     await goalService.logAudit({
       goalId: id,
       performedById: req.user.id,
@@ -796,7 +878,26 @@ export async function updateGoal(req, res, next) {
       details: `${req.user.name} updated goal details.`,
     });
 
-    res.json(updated);
+    // Re-fetch to return the fully up-to-date goal (including any new assignments)
+    const finalGoal = await prisma.goal.findUnique({
+      where: { id },
+      include: {
+        employee: true,
+        createdByUser: { select: { id: true, name: true, role: true } },
+        assignments: {
+          include: {
+            employee: { select: { id: true, name: true, email: true, department: true, designation: true, role: true, managerId: true } },
+          },
+        },
+        tasks: true,
+        auditLogs: {
+          orderBy: { createdAt: 'desc' },
+          include: { performedBy: { select: { id: true, name: true, role: true } } },
+        },
+      },
+    });
+
+    res.json(finalGoal);
   } catch (err) {
     next(err);
   }

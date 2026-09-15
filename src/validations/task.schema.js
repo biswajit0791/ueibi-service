@@ -63,6 +63,7 @@ export const createTaskSchema = z.object({
   weight: weightSchema,
   description: z.string().nullable().optional(),
   employeeId: z.string().nullable().optional(),
+  employeeIds: z.array(z.string()).optional(),
   dependency: dependencySchema.nullable().optional(),
   isDependencyOf: z.string().nullable().optional(),
   status: taskStatusSchema.optional(),
