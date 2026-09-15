@@ -24,6 +24,8 @@ import policyRoutes from './routes/policy.routes.js';
 import hubRoutes from './routes/hub.routes.js';
 import galleryRoutes from './routes/gallery.routes.js';
 import departmentRoutes from './routes/department.routes.js';
+import mediaRoutes from './routes/media.routes.js';
+import messageRoutes from './routes/message.routes.js';
 import { notFound } from './middleware/notFound.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
@@ -81,6 +83,8 @@ apiRouter.use(policyRoutes);
 apiRouter.use(hubRoutes);
 apiRouter.use(galleryRoutes);
 apiRouter.use(departmentRoutes);
+apiRouter.use(mediaRoutes);
+apiRouter.use(messageRoutes);
 if (env.nodeEnv !== 'production') {
   apiRouter.use(devRoutes);
 }

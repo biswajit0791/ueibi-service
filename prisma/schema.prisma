@@ -1191,3 +1191,22 @@ model Department {
   @@index([tenantId, isActive])
   @@map("departments")
 }
+
+// ── Chat Messages ──────────────────────────────────────────────────────────
+model Message {
+  id         String   @id @default(cuid())
+  senderId   String
+  text       String   @db.Text
+  mediaUrl   String?
+  mediaType  String?
+  fileName   String?
+  fileSize   Int?
+  isDeleted  Boolean  @default(false)
+  deletedFor String[] @default([])
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([senderId])
+  @@index([createdAt])
+  @@map("messages")
+}
