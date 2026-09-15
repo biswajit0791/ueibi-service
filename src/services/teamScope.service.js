@@ -12,7 +12,7 @@
  */
 import { ELEVATED_ROLES, hasRole } from '../lib/roles.js';
 
-export function buildTeamScopeWhere(user, tenantId, { search, department } = {}) {
+export function buildTeamScopeWhere(user, tenantId, { search, department, includeSelf = false } = {}) {
   const userRole = (user.role || '').toUpperCase();
   const isHrOrAdmin = hasRole(userRole, ELEVATED_ROLES);
 
@@ -22,14 +22,14 @@ export function buildTeamScopeWhere(user, tenantId, { search, department } = {})
       tenantId,
       isDeleted: false,
       status: { in: ['ACTIVE', 'INVITED'] },
-      id: { not: user.id },
+      ...(includeSelf ? {} : { id: { not: user.id } }),
     };
   } else {
     where = {
       tenantId,
       isDeleted: false,
       status: { in: ['ACTIVE', 'INVITED'] },
-      id: { not: user.id },
+      ...(includeSelf ? {} : { id: { not: user.id } }),
       OR: [
         { managerId: user.id },
         { managerId: null },

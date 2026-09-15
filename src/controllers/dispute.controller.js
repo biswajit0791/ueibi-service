@@ -25,8 +25,11 @@ const DISPUTE_INCLUDE = {
 /**
  * Loads a tenant-scoped dispute and enforces view access: elevated
  * (HR/Admin/CMD/Super Admin) see everything; everyone else only sees
- * tickets they raised or that are about them. Unauthorized access returns
- * 404 rather than 403 so ticket existence isn't leaked to outsiders.
+ * tickets they raised, that are about them, or that are assigned to them
+ * (assignment isn't restricted to elevated roles server-side, so an assigned
+ * non-elevated employee must still be able to open the ticket they were
+ * handed). Unauthorized access returns 404 rather than 403 so ticket
+ * existence isn't leaked to outsiders.
  */
 async function loadDisputeOrFail(req, res, id) {
   const dispute = await prisma.dispute.findFirst({
@@ -37,7 +40,7 @@ async function loadDisputeOrFail(req, res, id) {
     res.status(404).json({ error: 'Dispute not found' });
     return null;
   }
-  const allowed = isElevated(req.user.role) || dispute.raisedById === req.user.id || dispute.subjectEmployeeId === req.user.id;
+  const allowed = isElevated(req.user.role) || dispute.raisedById === req.user.id || dispute.subjectEmployeeId === req.user.id || dispute.assignedToId === req.user.id;
   if (!allowed) {
     res.status(404).json({ error: 'Dispute not found' });
     return null;
@@ -78,7 +81,7 @@ export async function listDisputes(req, res, next) {
 
     const where = isElevated(req.user.role)
       ? { tenantId: req.tenantId }
-      : { tenantId: req.tenantId, OR: [{ raisedById: req.user.id }, { subjectEmployeeId: req.user.id }] };
+      : { tenantId: req.tenantId, OR: [{ raisedById: req.user.id }, { subjectEmployeeId: req.user.id }, { assignedToId: req.user.id }] };
 
     if (status) where.status = status;
     if (priority) where.priority = priority;

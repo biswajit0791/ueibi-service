@@ -1241,6 +1241,7 @@ export const swaggerExtensions = {
           { name: 'department', in: 'query', schema: { type: 'string', maxLength: 200 } },
           { name: 'band', in: 'query', schema: { type: 'string', maxLength: 50 } },
           { name: 'financialYear', in: 'query', schema: { type: 'string', maxLength: 20 }, description: 'e.g. "FY 2026-2027" — excludes employees who joined after this fiscal year ends' },
+          { name: 'includeSelf', in: 'query', schema: { type: 'boolean', default: false }, description: 'Include the requester themselves in results. Default false (browsing "my team"); set true when reusing this endpoint as a general employee picker, e.g. Dispute Center\'s "Assign to" field, where self-assignment must be possible.' },
           { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1, default: 1 } },
           { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } },
         ],
@@ -1438,7 +1439,7 @@ export const swaggerExtensions = {
       get: {
         tags: ['Disputes'],
         summary: 'List dispute tickets',
-        description: 'Regular users see only tickets they raised or that are about them; HR/Admin/CMD/Super Admin see every ticket in the tenant.',
+        description: 'Regular users see only tickets they raised, that are about them, or that are assigned to them; HR/Admin/CMD/Super Admin see every ticket in the tenant.',
         operationId: 'listDisputes',
         security: [{ userCookie: [] }, { bearerAuth: [] }],
         parameters: [
@@ -1512,7 +1513,7 @@ export const swaggerExtensions = {
       post: {
         tags: ['Disputes'],
         summary: 'Reply to a dispute ticket',
-        description: 'Available to the raiser, the subject employee, or any elevated user — matches ticket visibility.',
+        description: 'Available to the raiser, the subject employee, the assignee, or any elevated user — matches ticket visibility.',
         operationId: 'createDisputeMessage',
         security: [{ userCookie: [] }, { bearerAuth: [] }],
         parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
