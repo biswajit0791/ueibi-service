@@ -29,6 +29,10 @@ export const swaggerExtensions = {
       name: 'Team',
       description: 'Team Directory and Employee Detail: server-side filtered team listing, per-employee projects, 360 feedback, appraisal audit, training/certifications (with file attachments), and the achievements/incidents journal',
     },
+    {
+      name: 'Disputes',
+      description: 'Dispute Center: employee support/grievance tickets with a chat-style resolution log, supporting-evidence attachments, and HR/Admin assignment & status workflow',
+    },
   ],
 
   schemas: {
@@ -449,6 +453,63 @@ export const swaggerExtensions = {
         originalName: { type: 'string', example: 'certificate.pdf' },
         mimeType: { type: 'string', example: 'application/pdf' },
         size: { type: 'integer', example: 245678 },
+      },
+    },
+    Dispute: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        ticketNumber: { type: 'string', example: 'TKT-1002' },
+        subject: { type: 'string', example: 'Notice Period Discrepancy' },
+        description: { type: 'string' },
+        category: { type: 'string', example: 'Review Dispute' },
+        priority: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH'] },
+        status: { type: 'string', enum: ['OPEN', 'IN_PROGRESS', 'RESOLVED'] },
+        raisedBy: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, email: { type: 'string' }, designation: { type: 'string', nullable: true } } },
+        subjectEmployee: { type: 'object', nullable: true, properties: { id: { type: 'string' }, name: { type: 'string' }, email: { type: 'string' }, designation: { type: 'string', nullable: true } } },
+        assignedTo: { type: 'object', nullable: true, properties: { id: { type: 'string' }, name: { type: 'string' }, email: { type: 'string' }, designation: { type: 'string', nullable: true } } },
+        resolvedAt: { type: 'string', format: 'date-time', nullable: true },
+        resolutionNotes: { type: 'string', nullable: true },
+        createdAt: { type: 'string', format: 'date-time' },
+        updatedAt: { type: 'string', format: 'date-time' },
+      },
+    },
+    DisputeMessage: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        disputeId: { type: 'string' },
+        body: { type: 'string' },
+        sender: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, email: { type: 'string' } } },
+        createdAt: { type: 'string', format: 'date-time' },
+      },
+    },
+    CreateDisputeRequest: {
+      type: 'object',
+      required: ['subject', 'description'],
+      properties: {
+        subject: { type: 'string', minLength: 1, maxLength: 200 },
+        description: { type: 'string', minLength: 1, maxLength: 5000 },
+        category: { type: 'string', maxLength: 100, example: 'Review Dispute' },
+        priority: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH'], default: 'MEDIUM' },
+        subjectEmployeeId: { type: 'string', description: 'Elevated roles (HR/Admin/CMD/Super Admin) only — file on behalf of another tenant employee. Regular users always target themselves regardless of this field.' },
+      },
+    },
+    UpdateDisputeRequest: {
+      type: 'object',
+      description: 'At least one field required. HR/Admin/CMD/Super Admin only.',
+      properties: {
+        status: { type: 'string', enum: ['OPEN', 'IN_PROGRESS', 'RESOLVED'] },
+        priority: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH'] },
+        assignedToId: { type: 'string', nullable: true },
+        resolutionNotes: { type: 'string', maxLength: 5000 },
+      },
+    },
+    CreateDisputeMessageRequest: {
+      type: 'object',
+      required: ['body'],
+      properties: {
+        body: { type: 'string', minLength: 1, maxLength: 5000 },
       },
     },
   },
@@ -1366,6 +1427,135 @@ export const swaggerExtensions = {
           200: { description: 'File stream', content: { 'application/pdf': {}, 'image/jpeg': {}, 'image/png': {} } },
           403: { description: 'Forbidden' },
           404: { description: 'Record or attachment not found' },
+        },
+      },
+    },
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // DISPUTES: TICKETS, CHAT LOG, ATTACHMENTS
+    // ═══════════════════════════════════════════════════════════════════════════
+    '/disputes': {
+      get: {
+        tags: ['Disputes'],
+        summary: 'List dispute tickets',
+        description: 'Regular users see only tickets they raised or that are about them; HR/Admin/CMD/Super Admin see every ticket in the tenant.',
+        operationId: 'listDisputes',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [
+          { name: 'status', in: 'query', schema: { type: 'string', enum: ['OPEN', 'IN_PROGRESS', 'RESOLVED'] } },
+          { name: 'category', in: 'query', schema: { type: 'string', maxLength: 100 } },
+          { name: 'priority', in: 'query', schema: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH'] } },
+          { name: 'search', in: 'query', schema: { type: 'string', maxLength: 200 }, description: 'Matches subject, description, or ticket number' },
+          { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1, default: 1 } },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } },
+        ],
+        responses: {
+          200: {
+            description: 'Paginated dispute list',
+            content: { 'application/json': { schema: { type: 'object', properties: { items: { type: 'array', items: { $ref: '#/components/schemas/Dispute' } }, pagination: { type: 'object', properties: { page: { type: 'integer' }, limit: { type: 'integer' }, total: { type: 'integer' }, totalPages: { type: 'integer' } } } } } } },
+          },
+          400: { description: 'Validation failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+        },
+      },
+      post: {
+        tags: ['Disputes'],
+        summary: 'Raise a new dispute ticket',
+        description: 'Any authenticated tenant user may file a ticket. Regular users can only target themselves as subjectEmployeeId; HR/Admin/CMD/Super Admin may file on behalf of another employee. Accepts an optional multipart evidence file (field name "file"; PDF/JPEG/PNG, 10MB max) alongside JSON fields, or JSON-only with no file.',
+        operationId: 'createDispute',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/CreateDisputeRequest' } },
+            'multipart/form-data': { schema: { allOf: [{ $ref: '#/components/schemas/CreateDisputeRequest' }, { type: 'object', properties: { file: { type: 'string', format: 'binary' } } }] } },
+          },
+        },
+        responses: {
+          201: { description: 'Ticket created', content: { 'application/json': { schema: { type: 'object', properties: { dispute: { $ref: '#/components/schemas/Dispute' } } } } } },
+          400: { description: 'Validation failed, disallowed MIME type, or invalid subjectEmployeeId', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+        },
+      },
+    },
+    '/disputes/{id}': {
+      get: {
+        tags: ['Disputes'],
+        summary: 'Get one dispute ticket with its chat log and attachments',
+        operationId: 'getDisputeDetail',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: {
+            description: 'Dispute detail',
+            content: { 'application/json': { schema: { type: 'object', properties: { dispute: { $ref: '#/components/schemas/Dispute' }, messages: { type: 'array', items: { $ref: '#/components/schemas/DisputeMessage' } }, attachments: { type: 'array', items: { $ref: '#/components/schemas/EntityAttachment' } } } } } },
+          },
+          400: { description: 'Invalid parameters', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+          404: { description: 'Dispute not found, or not visible to the caller' },
+        },
+      },
+      patch: {
+        tags: ['Disputes'],
+        summary: 'Update status, priority, assignment, or resolution notes',
+        description: 'HR/Admin/CMD/Super Admin only — the raiser can view and reply, but cannot close or reassign their own ticket.',
+        operationId: 'updateDispute',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/UpdateDisputeRequest' } } } },
+        responses: {
+          200: { description: 'Updated dispute', content: { 'application/json': { schema: { type: 'object', properties: { dispute: { $ref: '#/components/schemas/Dispute' } } } } } },
+          400: { description: 'Validation failed, or invalid assignedToId', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+          403: { description: 'Forbidden — HR/Admin/CMD/Super Admin only' },
+          404: { description: 'Dispute not found' },
+        },
+      },
+    },
+    '/disputes/{id}/messages': {
+      post: {
+        tags: ['Disputes'],
+        summary: 'Reply to a dispute ticket',
+        description: 'Available to the raiser, the subject employee, or any elevated user — matches ticket visibility.',
+        operationId: 'createDisputeMessage',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/CreateDisputeMessageRequest' } } } },
+        responses: {
+          201: { description: 'Reply posted', content: { 'application/json': { schema: { type: 'object', properties: { message: { $ref: '#/components/schemas/DisputeMessage' } } } } } },
+          400: { description: 'Validation failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+          404: { description: 'Dispute not found, or not visible to the caller' },
+        },
+      },
+    },
+    '/disputes/{id}/attachment': {
+      post: {
+        tags: ['Disputes'],
+        summary: 'Attach supporting evidence to a dispute ticket',
+        description: 'multipart/form-data upload (field name "file"). PDF, JPEG, or PNG only, 10MB max.',
+        operationId: 'uploadDisputeAttachment',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: { 'multipart/form-data': { schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } }, required: ['file'] } } },
+        },
+        responses: {
+          201: { description: 'Attachment stored', content: { 'application/json': { schema: { type: 'object', properties: { attachment: { $ref: '#/components/schemas/EntityAttachment' } } } } } },
+          400: { description: 'Missing file or disallowed MIME type' },
+          404: { description: 'Dispute not found, or not visible to the caller' },
+        },
+      },
+    },
+    '/disputes/{id}/attachment/{attachmentId}': {
+      get: {
+        tags: ['Disputes'],
+        summary: 'Download/stream a protected dispute attachment',
+        operationId: 'downloadDisputeAttachment',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [
+          { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'attachmentId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          200: { description: 'File stream', content: { 'application/pdf': {}, 'image/jpeg': {}, 'image/png': {} } },
+          404: { description: 'Dispute or attachment not found, or not visible to the caller' },
         },
       },
     },
