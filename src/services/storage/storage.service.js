@@ -36,11 +36,12 @@ export class StorageService {
   }
 
   /**
-   * Stores a file attachment with tenant & task isolation.
+   * Stores a file attachment with tenant & entity isolation. `taskId` is a
+   * back-compat alias for `{ entityType: 'tasks', entityId: taskId }`.
    */
-  async save({ tenantId, taskId, buffer, originalName, mimeType, size }) {
+  async save({ tenantId, taskId, entityType, entityId, buffer, originalName, mimeType, size }) {
     this.validateFile({ buffer, originalName, size, mimeType });
-    return this.provider.save({ tenantId, taskId, buffer, originalName, mimeType, size });
+    return this.provider.save({ tenantId, taskId, entityType, entityId, buffer, originalName, mimeType, size });
   }
 
   /**

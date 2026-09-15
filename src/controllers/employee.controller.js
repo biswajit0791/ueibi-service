@@ -15,6 +15,7 @@ import {
   exitEmployeeSchema,
   bulkExEmployeeSchema,
   bulkNonJoinerSchema,
+  employeeIdOnlyParamSchema,
 } from '../validations/employee.schema.js';
 import { env } from '../config/env.js';
 import { canCreateRole, getAllowedRoles } from '../lib/roleHierarchy.js';
@@ -489,6 +490,87 @@ export async function listEmployees(req, res, next) {
     });
 
     res.json({ items });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getEmployee(req, res, next) {
+  try {
+    const parsedParams = employeeIdOnlyParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid employee ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
+    const isPrivileged = ['SUPER_ADMIN', 'ADMIN', 'HR'].includes(req.user.role);
+
+    const select = isPrivileged
+      ? {
+          id: true,
+          email: true,
+          name: true,
+          role: true,
+          status: true,
+          department: true,
+          designation: true,
+          band: true,
+          managerId: true,
+          joinDate: true,
+          createdAt: true,
+          phone: true,
+          pan: true,
+          aadhaar: true,
+          dob: true,
+          gender: true,
+          bloodGroup: true,
+          personalEmail: true,
+          emergencyContact: true,
+          uan: true,
+          esic: true,
+          docs: true,
+          bankDetails: {
+            select: {
+              bankName: true,
+              accountNumber: true,
+              ifscCode: true,
+              branchName: true,
+            },
+          },
+          workHistory: {
+            select: {
+              id: true,
+              companyName: true,
+              designation: true,
+              startDate: true,
+              endDate: true,
+              reasonForExit: true,
+            },
+          },
+        }
+      : {
+          id: true,
+          email: true,
+          name: true,
+          role: true,
+          status: true,
+          department: true,
+          designation: true,
+          band: true,
+          managerId: true,
+          joinDate: true,
+          createdAt: true,
+        };
+
+    const employee = await prisma.tenantUser.findFirst({
+      where: { id, tenantId: req.tenantId, isDeleted: false },
+      select,
+    });
+
+    if (!employee) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+
+    res.json({ employee });
   } catch (err) {
     next(err);
   }

@@ -33,11 +33,16 @@ export class LocalStorageProvider {
   }
 
   /**
-   * Saves a file into uploads/tenants/<tenantId>/tasks/<taskId>/<storedName>
+   * Saves a file into uploads/tenants/<tenantId>/<entityType>/<entityId>/<storedName>.
+   * `taskId` is kept as a back-compat alias for the original task-only shape
+   * (comment.service.js's existing callers) — it's equivalent to passing
+   * entityType: 'tasks', entityId: taskId, and produces the exact same path.
    */
-  async save({ tenantId, taskId, buffer, originalName, mimeType, size }) {
-    if (!tenantId || !taskId) {
-      throw { status: 400, message: 'Tenant ID and Task ID are required for file storage' };
+  async save({ tenantId, taskId, entityType, entityId, buffer, originalName, mimeType, size }) {
+    const resolvedType = entityType || (taskId ? 'tasks' : null);
+    const resolvedId = entityId || taskId;
+    if (!tenantId || !resolvedType || !resolvedId) {
+      throw { status: 400, message: 'Tenant ID, entity type, and entity ID are required for file storage' };
     }
 
     const cleanOriginal = originalName ? path.basename(originalName) : 'attachment';
@@ -45,7 +50,7 @@ export class LocalStorageProvider {
     const uniquePrefix = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}`;
     const storedName = `${uniquePrefix}-${sanitized}`;
 
-    const relativeDir = path.join('tenants', tenantId, 'tasks', taskId);
+    const relativeDir = path.join('tenants', tenantId, resolvedType, resolvedId);
     const absoluteDir = path.resolve(this.baseDir, relativeDir);
 
     if (!fs.existsSync(absoluteDir)) {
@@ -56,7 +61,7 @@ export class LocalStorageProvider {
     await fs.promises.writeFile(absoluteFilePath, buffer);
 
     const actualSize = size || (buffer ? buffer.length : 0);
-    const storageKey = path.join('tenants', tenantId, 'tasks', taskId, storedName).replace(/\\/g, '/');
+    const storageKey = path.join('tenants', tenantId, resolvedType, resolvedId, storedName).replace(/\\/g, '/');
 
     return {
       originalName: cleanOriginal,

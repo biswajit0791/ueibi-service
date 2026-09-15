@@ -25,6 +25,10 @@ export const swaggerExtensions = {
       name: 'Registry',
       description: 'Cross-tenant background check and employment verification registry',
     },
+    {
+      name: 'Team',
+      description: 'Team Directory and Employee Detail: server-side filtered team listing, per-employee projects, 360 feedback, appraisal audit, training/certifications (with file attachments), and the achievements/incidents journal',
+    },
   ],
 
   schemas: {
@@ -269,6 +273,182 @@ export const swaggerExtensions = {
             },
           },
         },
+      },
+    },
+
+    // ── Team Directory & Employee Detail schemas ──
+    TeamDirectoryItem: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        name: { type: 'string' },
+        email: { type: 'string' },
+        role: { type: 'string', example: 'EMPLOYEE' },
+        status: { type: 'string', enum: ['INVITED', 'ACTIVE', 'EXITED'] },
+        department: { type: 'string', nullable: true },
+        designation: { type: 'string', nullable: true },
+        band: { type: 'string', nullable: true, example: 'L4' },
+        empType: { type: 'string', example: 'PERMANENT' },
+        managerId: { type: 'string', nullable: true },
+        joinDate: { type: 'string', format: 'date-time', nullable: true },
+      },
+    },
+    TeamDirectoryResponse: {
+      type: 'object',
+      properties: {
+        items: { type: 'array', items: { $ref: '#/components/schemas/TeamDirectoryItem' } },
+        pagination: {
+          type: 'object',
+          properties: {
+            page: { type: 'integer', example: 1 },
+            limit: { type: 'integer', example: 20 },
+            total: { type: 'integer', example: 42 },
+            totalPages: { type: 'integer', example: 3 },
+          },
+        },
+      },
+    },
+    TeamMemberDetailResponse: {
+      type: 'object',
+      description: 'Aggregate payload powering the Team Member Detail drilldown for one financial year.',
+      properties: {
+        employee: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            name: { type: 'string' },
+            email: { type: 'string' },
+            phone: { type: 'string', nullable: true },
+            role: { type: 'string' },
+            status: { type: 'string' },
+            department: { type: 'string', nullable: true },
+            designation: { type: 'string', nullable: true },
+            band: { type: 'string', nullable: true },
+            managerId: { type: 'string', nullable: true },
+            joinDate: { type: 'string', format: 'date-time', nullable: true },
+            manager: { type: 'object', nullable: true, properties: { id: { type: 'string' }, name: { type: 'string' }, email: { type: 'string' } } },
+          },
+        },
+        financialYear: { type: 'string', example: 'FY 2026-2027' },
+        projects: { type: 'array', items: { type: 'object' } },
+        feedback: {
+          type: 'object',
+          properties: { count: { type: 'integer' }, averageRating: { type: 'string' }, items: { type: 'array', items: { type: 'object' } } },
+        },
+        appraisal: { type: 'object', nullable: true },
+        training: { type: 'array', items: { $ref: '#/components/schemas/TrainingRecord' } },
+        journal: { type: 'array', items: { type: 'object' }, description: 'Merged achievement + incident entries, sorted newest first' },
+        advancement: { type: 'object', properties: { available: { type: 'boolean', example: false } }, description: 'Not implemented yet — always { available: false }' },
+      },
+    },
+    TrainingRecord: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        name: { type: 'string', example: 'AWS Certified Solutions Architect' },
+        source: { type: 'string', enum: ['SELF_SUBMITTED', 'COMPANY_MANDATED'] },
+        mandatedBy: { type: 'string', nullable: true },
+        status: { type: 'string', enum: ['IN_PROGRESS', 'COMPLETED'] },
+        approvalStatus: { type: 'string', enum: ['PENDING', 'APPROVED', 'REJECTED'] },
+        score: { type: 'string', nullable: true, example: '92%' },
+        durationHours: { type: 'integer', nullable: true },
+        startedAt: { type: 'string', format: 'date-time', nullable: true },
+        completedAt: { type: 'string', format: 'date-time', nullable: true },
+        attachments: { type: 'array', items: { $ref: '#/components/schemas/EntityAttachment' } },
+      },
+    },
+    CreateTrainingRecordRequest: {
+      type: 'object',
+      required: ['name'],
+      properties: {
+        name: { type: 'string', minLength: 1, maxLength: 200 },
+        mandatedBy: { type: 'string', maxLength: 100 },
+        status: { type: 'string', enum: ['IN_PROGRESS', 'COMPLETED'] },
+        score: { type: 'string', maxLength: 50 },
+        durationHours: { type: 'integer', minimum: 0, maximum: 10000 },
+        startedAt: { type: 'string', format: 'date' },
+        completedAt: { type: 'string', format: 'date' },
+        financialYear: { type: 'string', maxLength: 20, example: 'FY 2026-2027' },
+      },
+    },
+    UpdateTrainingRecordRequest: {
+      type: 'object',
+      description: 'At least one field required. approvalStatus may only be set by HR/Admin/Super Admin/CMD.',
+      properties: {
+        name: { type: 'string', maxLength: 200 },
+        status: { type: 'string', enum: ['IN_PROGRESS', 'COMPLETED'] },
+        approvalStatus: { type: 'string', enum: ['PENDING', 'APPROVED', 'REJECTED'] },
+        score: { type: 'string', maxLength: 50 },
+        durationHours: { type: 'integer', minimum: 0, maximum: 10000 },
+        startedAt: { type: 'string', format: 'date' },
+        completedAt: { type: 'string', format: 'date' },
+      },
+    },
+    Achievement: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        title: { type: 'string' },
+        description: { type: 'string' },
+        category: { type: 'string', nullable: true },
+        occurredOn: { type: 'string', format: 'date-time' },
+        financialYear: { type: 'string', nullable: true },
+        createdById: { type: 'string' },
+      },
+    },
+    CreateAchievementRequest: {
+      type: 'object',
+      required: ['title', 'description', 'occurredOn'],
+      properties: {
+        title: { type: 'string', minLength: 1, maxLength: 200 },
+        description: { type: 'string', minLength: 1, maxLength: 5000 },
+        category: { type: 'string', maxLength: 100, example: 'Technical' },
+        occurredOn: { type: 'string', format: 'date' },
+        financialYear: { type: 'string', maxLength: 20 },
+      },
+    },
+    Incident: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        title: { type: 'string' },
+        description: { type: 'string' },
+        severity: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] },
+        status: { type: 'string', enum: ['OPEN', 'RESOLVED', 'ESCALATED'] },
+        occurredOn: { type: 'string', format: 'date-time' },
+        resolutionNotes: { type: 'string', nullable: true },
+        reportedById: { type: 'string' },
+      },
+    },
+    CreateIncidentRequest: {
+      type: 'object',
+      required: ['title', 'description', 'occurredOn'],
+      properties: {
+        title: { type: 'string', minLength: 1, maxLength: 200 },
+        description: { type: 'string', minLength: 1, maxLength: 5000 },
+        severity: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'], default: 'LOW' },
+        occurredOn: { type: 'string', format: 'date' },
+        financialYear: { type: 'string', maxLength: 20 },
+      },
+    },
+    UpdateIncidentRequest: {
+      type: 'object',
+      description: 'At least one field required.',
+      properties: {
+        title: { type: 'string', maxLength: 200 },
+        description: { type: 'string', maxLength: 5000 },
+        severity: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] },
+        status: { type: 'string', enum: ['OPEN', 'RESOLVED', 'ESCALATED'] },
+        resolutionNotes: { type: 'string', maxLength: 5000 },
+      },
+    },
+    EntityAttachment: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        originalName: { type: 'string', example: 'certificate.pdf' },
+        mimeType: { type: 'string', example: 'application/pdf' },
+        size: { type: 'integer', example: 245678 },
       },
     },
   },
@@ -966,6 +1146,226 @@ export const swaggerExtensions = {
               },
             },
           },
+        },
+      },
+    },
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // TEAM: DIRECTORY, EMPLOYEE DETAIL, TRAINING/CERTIFICATIONS, JOURNAL
+    // ═══════════════════════════════════════════════════════════════════════════
+    '/employees/{id}': {
+      get: {
+        tags: ['Employees'],
+        summary: 'Get a single employee\'s full profile',
+        description: 'Tenant-scoped single-employee lookup. Privileged roles (SUPER_ADMIN/ADMIN/HR) receive the full PII field set (phone, PAN, Aadhaar, bank details, work history); all other authenticated roles receive a reduced public-safe field set.',
+        operationId: 'getEmployee',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'Employee profile', content: { 'application/json': { schema: { type: 'object', properties: { employee: { $ref: '#/components/schemas/Employee' } } } } } },
+          400: { description: 'Invalid employee ID parameter', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+          404: { description: 'Employee not found' },
+        },
+      },
+    },
+    '/team/directory': {
+      get: {
+        tags: ['Team'],
+        summary: 'Server-side filtered, paginated team listing',
+        description: 'HR/Admin/Super Admin/CMD see every active/invited employee in the tenant; a MANAGER sees their reporting scope (explicit reports, or a broader same-tenant fallback if none are assigned). Excludes the requester themselves.',
+        operationId: 'getTeamDirectory',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [
+          { name: 'search', in: 'query', schema: { type: 'string', maxLength: 200 }, description: 'Matches name, email, or designation' },
+          { name: 'department', in: 'query', schema: { type: 'string', maxLength: 200 } },
+          { name: 'band', in: 'query', schema: { type: 'string', maxLength: 50 } },
+          { name: 'financialYear', in: 'query', schema: { type: 'string', maxLength: 20 }, description: 'e.g. "FY 2026-2027" — excludes employees who joined after this fiscal year ends' },
+          { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1, default: 1 } },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } },
+        ],
+        responses: {
+          200: { description: 'Paginated team list', content: { 'application/json': { schema: { $ref: '#/components/schemas/TeamDirectoryResponse' } } } },
+          400: { description: 'Validation failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+        },
+      },
+    },
+    '/team/{employeeId}/detail': {
+      get: {
+        tags: ['Team'],
+        summary: 'Get one employee\'s full performance detail for a financial year',
+        description: 'Powers the Team Member Detail drilldown: profile header, projects, 360 feedback, appraisal audit, training/certifications, and the achievements/incidents journal. Viewable by the employee themselves or anyone with manager/HR standing over them (elevated role, direct manager, or anywhere up the reporting chain).',
+        operationId: 'getTeamMemberDetail',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [
+          { name: 'employeeId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'financialYear', in: 'query', schema: { type: 'string', maxLength: 20 }, description: 'Defaults to the current real-world fiscal year, e.g. "FY 2026-2027"' },
+        ],
+        responses: {
+          200: { description: 'Employee detail payload', content: { 'application/json': { schema: { $ref: '#/components/schemas/TeamMemberDetailResponse' } } } },
+          400: { description: 'Validation failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+          403: { description: 'Employee is outside your reporting scope' },
+          404: { description: 'Employee not found' },
+        },
+      },
+    },
+    '/team/{employeeId}/projects': {
+      get: {
+        tags: ['Team'],
+        summary: 'Standalone project engagements list for one employee/year',
+        operationId: 'getTeamMemberProjects',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [
+          { name: 'employeeId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'financialYear', in: 'query', schema: { type: 'string', maxLength: 20 } },
+        ],
+        responses: {
+          200: { description: 'Project list for the resolved financial year', content: { 'application/json': { schema: { type: 'object', properties: { financialYear: { type: 'string' }, projects: { type: 'array', items: { type: 'object' } } } } } } },
+          403: { description: 'Employee is outside your reporting scope' },
+          404: { description: 'Employee not found' },
+        },
+      },
+    },
+    '/team/{employeeId}/training': {
+      post: {
+        tags: ['Team'],
+        summary: 'Submit a training/certification record',
+        description: 'Self-service when employeeId is the caller\'s own ID (source becomes SELF_SUBMITTED, approvalStatus PENDING pending HR review). A manager/HR submitting on someone else\'s behalf is recorded as COMPANY_MANDATED and pre-approved.',
+        operationId: 'createTrainingRecord',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [{ name: 'employeeId', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/CreateTrainingRecordRequest' } } } },
+        responses: {
+          201: { description: 'Training record created', content: { 'application/json': { schema: { type: 'object', properties: { trainingRecord: { $ref: '#/components/schemas/TrainingRecord' } } } } } },
+          400: { description: 'Validation failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+          403: { description: 'Employee is outside your reporting scope' },
+        },
+      },
+    },
+    '/team/{employeeId}/training/{id}': {
+      patch: {
+        tags: ['Team'],
+        summary: 'Update a training/certification record',
+        description: 'The owner (or their manager) may edit non-approval fields. Only HR/Admin/Super Admin/CMD may set approvalStatus (approve/reject a self-submitted certification).',
+        operationId: 'updateTrainingRecord',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [
+          { name: 'employeeId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/UpdateTrainingRecordRequest' } } } },
+        responses: {
+          200: { description: 'Updated training record', content: { 'application/json': { schema: { type: 'object', properties: { trainingRecord: { $ref: '#/components/schemas/TrainingRecord' } } } } } },
+          400: { description: 'Validation failed' },
+          403: { description: 'Forbidden — not the owner/manager, or attempted to set approvalStatus without HR standing' },
+          404: { description: 'Training record not found' },
+        },
+      },
+      delete: {
+        tags: ['Team'],
+        summary: 'Delete a training/certification record and its attachments',
+        operationId: 'deleteTrainingRecord',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [
+          { name: 'employeeId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          200: { description: 'Deleted', content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' } } } } } },
+          403: { description: 'Employee is outside your reporting scope' },
+          404: { description: 'Training record not found' },
+        },
+      },
+    },
+    '/team/{employeeId}/achievements': {
+      post: {
+        tags: ['Team'],
+        summary: 'Log an achievement',
+        description: 'Self-service (an employee logging their own achievement) or a manager/HR logging one for a report — unlike incidents, achievements are explicitly self-submittable per the employee self-service spec.',
+        operationId: 'createAchievement',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [{ name: 'employeeId', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/CreateAchievementRequest' } } } },
+        responses: {
+          201: { description: 'Achievement logged', content: { 'application/json': { schema: { type: 'object', properties: { achievement: { $ref: '#/components/schemas/Achievement' } } } } } },
+          400: { description: 'Validation failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+          403: { description: 'Employee is outside your reporting scope' },
+        },
+      },
+    },
+    '/team/{employeeId}/incidents': {
+      post: {
+        tags: ['Team'],
+        summary: 'Log an incident',
+        description: 'Manager/HR only — not self-service. An employee cannot log an incident against themselves.',
+        operationId: 'createIncident',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [{ name: 'employeeId', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/CreateIncidentRequest' } } } },
+        responses: {
+          201: { description: 'Incident logged', content: { 'application/json': { schema: { type: 'object', properties: { incident: { $ref: '#/components/schemas/Incident' } } } } } },
+          400: { description: 'Validation failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+          403: { description: 'Forbidden — incidents cannot be self-logged, and this employee may be outside your reporting scope' },
+        },
+      },
+    },
+    '/team/{employeeId}/incidents/{id}': {
+      patch: {
+        tags: ['Team'],
+        summary: 'Update an incident (status, severity, resolution notes)',
+        operationId: 'updateIncident',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [
+          { name: 'employeeId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/UpdateIncidentRequest' } } } },
+        responses: {
+          200: { description: 'Updated incident', content: { 'application/json': { schema: { type: 'object', properties: { incident: { $ref: '#/components/schemas/Incident' } } } } } },
+          400: { description: 'Validation failed' },
+          403: { description: 'Forbidden' },
+          404: { description: 'Incident not found' },
+        },
+      },
+    },
+    '/team/{entityKind}/{id}/attachment': {
+      post: {
+        tags: ['Team'],
+        summary: 'Attach a supporting file to a training/achievement/incident record',
+        description: 'multipart/form-data upload (field name "file"). PDF, JPEG, or PNG only, 10MB max. entityKind must be one of training | achievements | incidents.',
+        operationId: 'uploadEntityAttachment',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [
+          { name: 'entityKind', in: 'path', required: true, schema: { type: 'string', enum: ['training', 'achievements', 'incidents'] } },
+          { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'The training record / achievement / incident ID' },
+        ],
+        requestBody: {
+          required: true,
+          content: { 'multipart/form-data': { schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } }, required: ['file'] } } },
+        },
+        responses: {
+          201: { description: 'Attachment stored', content: { 'application/json': { schema: { type: 'object', properties: { attachment: { $ref: '#/components/schemas/EntityAttachment' } } } } } },
+          400: { description: 'Missing file, disallowed MIME type, or invalid entityKind' },
+          403: { description: 'Forbidden' },
+          404: { description: 'Record not found' },
+        },
+      },
+    },
+    '/team/{entityKind}/{id}/attachment/{attachmentId}': {
+      get: {
+        tags: ['Team'],
+        summary: 'Download/stream a protected attachment',
+        description: 'Streams the file inline with correct Content-Type/Content-Disposition. Requires the same access as the parent record (owner, manager, or elevated role).',
+        operationId: 'downloadEntityAttachment',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [
+          { name: 'entityKind', in: 'path', required: true, schema: { type: 'string', enum: ['training', 'achievements', 'incidents'] } },
+          { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'attachmentId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          200: { description: 'File stream', content: { 'application/pdf': {}, 'image/jpeg': {}, 'image/png': {} } },
+          403: { description: 'Forbidden' },
+          404: { description: 'Record or attachment not found' },
         },
       },
     },
