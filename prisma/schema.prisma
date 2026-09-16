@@ -59,6 +59,14 @@ model Tenant {
   leaveAdjustments    LeaveBalanceAdjustment[]
   galleryPosts        GalleryPost[]
   departments         Department[]
+  projects            Project[]
+  projectContributions ProjectContribution[]
+  entityAttachments   EntityAttachment[]
+  trainingRecords     TrainingRecord[]
+  achievements        Achievement[]
+  incidents           Incident[]
+  disputes            Dispute[]
+  disputeMessages     DisputeMessage[]
 
   @@map("tenants")
 }
@@ -131,6 +139,19 @@ model TenantUser {
   nominatedReviewsAsReviewee PeerNomination[]         @relation("NominationReviewee")
   nominatedReviewsAsReviewer PeerNomination[]         @relation("NominationReviewer")
   createdAppraisalCycles     AppraisalCycle[]         @relation("CycleCreator")
+  createdProjects            Project[]                @relation("ProjectCreatedBy")
+  projectContributions       ProjectContribution[]    @relation("ProjectContributor")
+  uploadedAttachments        EntityAttachment[]       @relation("EntityAttachmentUploader")
+  trainingRecords            TrainingRecord[]         @relation("TrainingRecordEmployee")
+  createdTrainingRecords     TrainingRecord[]         @relation("TrainingRecordCreator")
+  achievements               Achievement[]            @relation("AchievementEmployee")
+  loggedAchievements         Achievement[]            @relation("AchievementCreator")
+  incidents                  Incident[]               @relation("IncidentEmployee")
+  reportedIncidents          Incident[]               @relation("IncidentReporter")
+  disputesRaised             Dispute[]                @relation("DisputeRaisedBy")
+  disputeSubjectOf           Dispute[]                @relation("DisputeSubjectEmployee")
+  disputesAssigned           Dispute[]                @relation("DisputeAssignee")
+  disputeMessagesSent        DisputeMessage[]         @relation("DisputeMessageSender")
   // Policies & Compliance Relations
   createdPolicies            Policy[]                 @relation("PolicyAuthor")
   publishedPolicies          Policy[]                 @relation("PolicyPublisher")
@@ -841,6 +862,196 @@ model ReviewScore {
   @@index([reviewId])
   @@index([parameterId])
   @@map("review_scores")
+}
+
+// ── Project Engagements & Contributions (Team Detail page) ───────────────────
+model Project {
+  id            String                @id @default(cuid())
+  tenantId      String
+  tenant        Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name          String
+  description   String?               @db.Text
+  financialYear String?
+  status        String                @default("IN_PROGRESS")
+  createdById   String?
+  createdBy     TenantUser?           @relation("ProjectCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  contributions ProjectContribution[]
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, financialYear])
+  @@map("projects")
+}
+
+model ProjectContribution {
+  id            String     @id @default(cuid())
+  tenantId      String
+  tenant        Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  projectId     String
+  project       Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  employeeId    String
+  employee      TenantUser @relation("ProjectContributor", fields: [employeeId], references: [id], onDelete: Cascade)
+  roleOnProject String
+  outcome       String     @default("IN_PROGRESS")
+  startDate     DateTime?
+  endDate       DateTime?
+  financialYear String?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@unique([projectId, employeeId])
+  @@index([tenantId])
+  @@index([employeeId, financialYear])
+  @@map("project_contributions")
+}
+
+// ── Training/Certifications, Achievements & Incidents Journal, Attachments ───
+enum AttachmentEntityType {
+  TRAINING_RECORD
+  ACHIEVEMENT
+  INCIDENT
+  DISPUTE
+}
+
+model EntityAttachment {
+  id           String               @id @default(cuid())
+  tenantId     String
+  tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  entityType   AttachmentEntityType
+  entityId     String
+  uploadedById String
+  uploadedBy   TenantUser           @relation("EntityAttachmentUploader", fields: [uploadedById], references: [id], onDelete: Cascade)
+  originalName String
+  storedName   String
+  mimeType     String
+  size         Int
+  storageKey   String
+  createdAt    DateTime             @default(now())
+
+  @@index([tenantId])
+  @@index([entityType, entityId])
+  @@map("entity_attachments")
+}
+
+model TrainingRecord {
+  id             String      @id @default(cuid())
+  tenantId       String
+  tenant         Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  employeeId     String
+  employee       TenantUser  @relation("TrainingRecordEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
+  name           String
+  source         String      @default("SELF_SUBMITTED") // SELF_SUBMITTED | COMPANY_MANDATED
+  mandatedBy     String?
+  status         String      @default("IN_PROGRESS") // IN_PROGRESS | COMPLETED
+  approvalStatus String      @default("PENDING") // PENDING | APPROVED | REJECTED
+  score          String?
+  durationHours  Int?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  financialYear  String?
+  createdById    String?
+  createdBy      TenantUser? @relation("TrainingRecordCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  @@index([tenantId])
+  @@index([employeeId, financialYear])
+  @@map("training_records")
+}
+
+model Achievement {
+  id            String     @id @default(cuid())
+  tenantId      String
+  tenant        Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  employeeId    String
+  employee      TenantUser @relation("AchievementEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
+  title         String
+  description   String     @db.Text
+  category      String?
+  occurredOn    DateTime
+  financialYear String?
+  createdById   String
+  createdBy     TenantUser @relation("AchievementCreator", fields: [createdById], references: [id])
+  createdAt     DateTime   @default(now())
+
+  @@index([tenantId])
+  @@index([employeeId, financialYear])
+  @@map("achievements")
+}
+
+model Incident {
+  id              String     @id @default(cuid())
+  tenantId        String
+  tenant          Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  employeeId      String
+  employee        TenantUser @relation("IncidentEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
+  title           String
+  description     String     @db.Text
+  severity        String     @default("LOW") // LOW | MEDIUM | HIGH | CRITICAL
+  status          String     @default("OPEN") // OPEN | RESOLVED | ESCALATED
+  occurredOn      DateTime
+  financialYear   String?
+  reportedById    String
+  reportedBy      TenantUser @relation("IncidentReporter", fields: [reportedById], references: [id])
+  resolutionNotes String?    @db.Text
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  @@index([tenantId])
+  @@index([employeeId, financialYear])
+  @@map("incidents")
+}
+
+// ── Dispute Center (support tickets) ──────────────────────────────────────
+model Dispute {
+  id            String  @id @default(cuid())
+  tenantId      String
+  tenant        Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticketNumber  String  @unique
+
+  subject     String
+  description String @db.Text
+  category    String @default("Review Dispute")
+  priority    String @default("MEDIUM") // LOW | MEDIUM | HIGH
+  status      String @default("OPEN") // OPEN | IN_PROGRESS | RESOLVED
+
+  raisedById String
+  raisedBy   TenantUser @relation("DisputeRaisedBy", fields: [raisedById], references: [id], onDelete: Cascade)
+
+  subjectEmployeeId String?
+  subjectEmployee   TenantUser? @relation("DisputeSubjectEmployee", fields: [subjectEmployeeId], references: [id], onDelete: SetNull)
+
+  assignedToId String?
+  assignedTo   TenantUser? @relation("DisputeAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+
+  resolvedAt      DateTime?
+  resolutionNotes String?   @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages DisputeMessage[]
+
+  @@index([tenantId, status])
+  @@index([raisedById])
+  @@index([subjectEmployeeId])
+  @@map("disputes")
+}
+
+model DisputeMessage {
+  id        String     @id @default(cuid())
+  tenantId  String
+  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  disputeId String
+  dispute   Dispute    @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+  senderId  String
+  sender    TenantUser @relation("DisputeMessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  body      String     @db.Text
+  createdAt DateTime   @default(now())
+
+  @@index([disputeId])
+  @@map("dispute_messages")
 }
 
 model PeerNomination {

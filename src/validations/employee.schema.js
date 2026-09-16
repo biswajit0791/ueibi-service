@@ -14,6 +14,16 @@ const panSchema = z
 
 const ratingSchema = z.coerce.number().int().min(1, "Rating must be between 1 and 10").max(10, "Rating must be between 1 and 10");
 
+export const employeeIdOnlyParamSchema = z.object({
+  id: z.string().min(1),
+});
+
+export const listEmployeesQuerySchema = z.object({
+  search: z.string().max(200).optional(),
+  role: z.enum(['SUPER_ADMIN', 'ADMIN', 'CMD', 'HR', 'FINANCE', 'MANAGER', 'EMPLOYEE', 'STUDENT', 'MENTOR']).optional(),
+  status: z.enum(['INVITED', 'ACTIVE', 'EXITED']).optional(),
+});
+
 export const inviteEmployeeSchema = z.object({
   email: z.string().trim().toLowerCase().email("A valid email address is required"),
   name: z.string().trim().min(2, "Name must be at least 2 characters"),
@@ -166,11 +176,18 @@ export const exitEmployeeSchema = z.object({
   docs: z.any().optional(),
 });
 
+// Per-row shape is intentionally still loose (z.record) rather than the full
+// createExEmployeeSchema/createNonJoinerSchema — the controller already does
+// its own thorough per-row validation (email/PAN regex, rating bounds,
+// defensive parsing) and deliberately SKIPS invalid rows rather than failing
+// the whole batch, so a strict per-row schema here would change that partial-
+// success behavior. The max() cap is the real hardening: it stops an
+// unbounded array from being processed synchronously in one request.
 export const bulkExEmployeeSchema = z.object({
-  items: z.array(z.record(z.any())).min(1, 'Items array cannot be empty'),
+  items: z.array(z.record(z.any())).min(1, 'Items array cannot be empty').max(500, 'Bulk import is limited to 500 rows per request'),
 });
 
 export const bulkNonJoinerSchema = z.object({
-  items: z.array(z.record(z.any())).min(1, 'Items array cannot be empty'),
+  items: z.array(z.record(z.any())).min(1, 'Items array cannot be empty').max(500, 'Bulk import is limited to 500 rows per request'),
 });
 

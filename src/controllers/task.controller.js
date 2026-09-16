@@ -1,10 +1,10 @@
 import { prisma } from '../lib/prisma.js';
 import { logTaskAudit } from './taskActivity.controller.js';
 import { emitToTenant } from '../lib/socket.js';
-import { createTaskSchema, updateTaskSchema, updateTaskStatusSchema } from '../validations/task.schema.js';
+import { createTaskSchema, updateTaskSchema, updateTaskStatusSchema, taskIdParamSchema, listTasksQuerySchema } from '../validations/task.schema.js';
 import { goalService } from '../services/goal.service.js';
 import { loadTaskForUser, getCompanionTaskId } from '../services/taskAccess.service.js';
-import { ELEVATED_ROLES, hasRole } from '../lib/roles.js';
+import { ELEVATED_ROLES, SUPER_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
 import { TASK_STATUSES } from '../lib/workflowStatus.js';
 
 // ─── Helper: resolve & authorise target employee ───────────────────────────
@@ -32,6 +32,15 @@ async function resolveTargetEmployee(requestingUser, tenantId, employeeId, paren
 
   // Tier 4: Elevated roles can assign across the org freely
   if (hasRole(requestingUser.role, ELEVATED_ROLES)) {
+    const callerRole = String(requestingUser.role || '').toUpperCase();
+    const targetRole = String(targetUser.role || '').toUpperCase();
+    // HR cannot assign tasks to higher authority roles (CMD, ADMIN, SUPER_ADMIN)
+    if (callerRole === 'HR' && targetUser.id !== requestingUser.id && hasRole(targetRole, SUPER_ELEVATED_ROLES)) {
+      throw {
+        status: 403,
+        message: `Access forbidden: HR cannot assign tasks to higher authority roles (${targetRole})`,
+      };
+    }
     return targetUser;
   }
 
@@ -133,7 +142,7 @@ export async function createTask(req, res, next) {
     const {
       title, priority, startDate, dueDate, financialYear,
       tags, goalId, isPrivate, isStandalone, weight,
-      description, employeeId, dependency, isDependencyOf,
+      description, employeeId, employeeIds, dependency, isDependencyOf,
       status, progress,
     } = parsed.data;
 
@@ -163,86 +172,102 @@ export async function createTask(req, res, next) {
       }
     }
 
-    // 4b. Resolve and authorise the target employee (cross-tenant guard inside)
-    let target;
-    try {
-      target = await resolveTargetEmployee(req.user, tenantId, employeeId, parentTask, goalId);
-    } catch (e) {
-      return res.status(e.status || 500).json({ success: false, message: e.message });
-    }
+    // 4b. Determine target employee(s) (single or multiple)
+    const targetEmployeeIds = Array.isArray(employeeIds) && employeeIds.length > 0
+      ? Array.from(new Set(employeeIds.filter(Boolean)))
+      : [employeeId || req.user.id];
 
-    // 5. Validate goal tenant scope (if goalId provided). A plain employee adding
-    //    a task *for themselves* may only attach it to a goal they participate in
-    //    — otherwise they could skew an unrelated goal's progress rollup.
+    // 5. Validate goal tenant scope (if goalId provided)
+    let resolvedGoal = null;
     let resolvedGoalId = null;
     if (!isStandalone && goalId) {
       try {
-        const goal = await resolveGoal(goalId, tenantId);
-        if (goal && target.id === req.user.id && !hasRole(req.user.role, ELEVATED_ROLES)) {
-          const onGoal = goal.employeeId === req.user.id
-            || goal.createdById === req.user.id
-            || (await prisma.goalAssignment.findFirst({
-                where: { goalId: goal.id, employeeId: req.user.id }, select: { id: true },
-              })) !== null;
-          if (!onGoal) {
-            return res.status(403).json({ success: false, message: 'You are not assigned to this goal' });
-          }
-        }
-        resolvedGoalId = goal?.id || null;
+        resolvedGoal = await resolveGoal(goalId, tenantId);
+        resolvedGoalId = resolvedGoal?.id || null;
       } catch (e) {
         return res.status(e.status || 500).json({ success: false, message: e.message });
       }
     }
 
-    // 6. Create task — always connect to the authenticated tenant
-    const task = await prisma.task.create({
-      data: {
-        title: title.trim(),
-        priority: priority || 'medium',
-        status: status || 'todo',
-        progress: progress || 0,
-        startDate: startDate ? new Date(startDate) : undefined,
-        dueDate: dueDate ? new Date(dueDate) : undefined,
-        financialYear: financialYear || null,
-        tags: tags || null,
-        isPrivate: isPrivate ?? false,
-        isStandalone: isStandalone ?? false,
-        weight: weight || 1,
-        description: description || null,
-        dependency: dependency || null,
-        isDependencyOf: isDependencyOf || null,
-        // ─ Relations ─
-        employee: { connect: { id: target.id } },
-        tenant: { connect: { id: tenantId } },
-        ...(resolvedGoalId ? { goal: { connect: { id: resolvedGoalId } } } : {}),
-      },
-    });
+    // 6. Create task for each target employee
+    const createdTasks = [];
+    for (const targetId of targetEmployeeIds) {
+      let target;
+      try {
+        target = await resolveTargetEmployee(req.user, tenantId, targetId, parentTask, goalId);
+      } catch (e) {
+        return res.status(e.status || 500).json({ success: false, message: e.message });
+      }
 
-    let goalProgress = 0;
-    if (resolvedGoalId) {
-      goalProgress = await recalculateGoalProgress(resolvedGoalId, task.employeeId);
+      if (resolvedGoal && target.id === req.user.id && !hasRole(req.user.role, ELEVATED_ROLES)) {
+        const onGoal = resolvedGoal.employeeId === req.user.id
+          || resolvedGoal.createdById === req.user.id
+          || (await prisma.goalAssignment.findFirst({
+              where: { goalId: resolvedGoal.id, employeeId: req.user.id }, select: { id: true },
+            })) !== null;
+        if (!onGoal) {
+          return res.status(403).json({ success: false, message: 'You are not assigned to this goal' });
+        }
+      }
+
+      const task = await prisma.task.create({
+        data: {
+          title: title.trim(),
+          priority: priority || 'medium',
+          status: status || 'todo',
+          progress: progress || 0,
+          startDate: startDate ? new Date(startDate) : undefined,
+          dueDate: dueDate ? new Date(dueDate) : undefined,
+          financialYear: financialYear || null,
+          tags: tags || null,
+          isPrivate: isPrivate ?? false,
+          isStandalone: isStandalone ?? false,
+          weight: weight || 1,
+          description: description || null,
+          dependency: dependency || null,
+          isDependencyOf: isDependencyOf || null,
+          // ─ Relations ─
+          employee: { connect: { id: target.id } },
+          tenant: { connect: { id: tenantId } },
+          ...(resolvedGoalId ? { goal: { connect: { id: resolvedGoalId } } } : {}),
+        },
+      });
+
+      let goalProgress = 0;
+      if (resolvedGoalId) {
+        goalProgress = await recalculateGoalProgress(resolvedGoalId, task.employeeId);
+      }
+
+      await logTaskAudit({
+        taskId: task.id,
+        performedById: req.user.id,
+        action: 'created',
+        details: `Task "${task.title}" created.`,
+      });
+
+      emitToTenant(tenantId, 'task_updated', {
+        action: 'create',
+        task: {
+          ...task,
+          progress: task.progress || 0,
+          weight: task.weight || 1,
+        },
+        goalId: resolvedGoalId,
+        goalProgress,
+      });
+
+      createdTasks.push(task);
     }
 
-    // 7. Audit log
-    await logTaskAudit({
-      taskId: task.id,
-      performedById: req.user.id,
-      action: 'created',
-      details: `Task "${task.title}" created.`,
-    });
-
-    emitToTenant(tenantId, 'task_updated', {
-      action: 'create',
-      task: {
-        ...task,
-        progress: task.progress || 0,
-        weight: task.weight || 1,
-      },
-      goalId: resolvedGoalId,
-      goalProgress,
-    });
-
-    res.status(201).json(task);
+    if (createdTasks.length === 1) {
+      res.status(201).json(createdTasks[0]);
+    } else {
+      res.status(201).json({
+        ...createdTasks[0],
+        createdTasks,
+        count: createdTasks.length,
+      });
+    }
   } catch (err) {
     next(err);
   }
@@ -251,8 +276,12 @@ export async function createTask(req, res, next) {
 // ─── GET /api/tasks ─────────────────────────────────────────────────────────
 export async function listTasks(req, res, next) {
   try {
+    const parsedQuery = listTasksQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
+    }
     const tenantId = req.tenantId;
-    const targetEmployeeId = req.query.employeeId || req.user.id;
+    const targetEmployeeId = parsedQuery.data.employeeId || req.user.id;
     const callerRole = String(req.user.role || '').toUpperCase();
     const isElevated = hasRole(req.user.role, ELEVATED_ROLES);
 
@@ -264,7 +293,7 @@ export async function listTasks(req, res, next) {
       const where = {
         tenantId,
         employeeId: req.user.id,
-        ...(req.query.fy ? { financialYear: req.query.fy } : {}),
+        ...(parsedQuery.data.fy ? { financialYear: parsedQuery.data.fy } : {}),
       };
       const items = await prisma.task.findMany({
         where,
@@ -371,7 +400,7 @@ export async function listTasks(req, res, next) {
       ...(targetEmployeeId !== req.user.id ? { isPrivate: false } : {}),
     };
 
-    const fy = req.query.fy;
+    const fy = parsedQuery.data.fy;
     if (fy) where.financialYear = fy;
 
     const items = await prisma.task.findMany({
@@ -388,7 +417,11 @@ export async function listTasks(req, res, next) {
 // ─── PATCH /api/tasks/:id/status ────────────────────────────────────────────
 export async function updateTaskStatus(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = taskIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid task ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const parsed = updateTaskStatusSchema.safeParse(req.body || {});
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
@@ -479,7 +512,11 @@ export async function updateTaskStatus(req, res, next) {
 // ─── PUT /api/tasks/:id ─────────────────────────────────────────────────────
 export async function updateTask(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = taskIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid task ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const tenantId = req.tenantId;
     const parsed = updateTaskSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -709,7 +746,11 @@ export async function updateTask(req, res, next) {
 // ─── DELETE /api/tasks/:id ───────────────────────────────────────────────────
 export async function deleteTask(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = taskIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid task ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const tenantId = req.tenantId;
 
     const existing = await assertTaskOwner(id, req.user, tenantId).catch(e => {

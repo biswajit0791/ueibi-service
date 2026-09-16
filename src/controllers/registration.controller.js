@@ -1,8 +1,6 @@
-import { z } from 'zod';
 import bcrypt from 'bcryptjs';
 import { prisma } from '../lib/prisma.js';
 import { env } from '../config/env.js';
-import { COMPANY_TYPES, DESIGNATIONS } from '../lib/constants.js';
 import { domainMatchesEmail, normalizeDomain } from '../lib/domain.js';
 import { generateOtp, hashOtp, verifyOtpHash } from '../lib/otp.js';
 import { generateRawToken, hashToken } from '../lib/tokens.js';
@@ -10,44 +8,15 @@ import { generateTenantCode } from '../lib/slug.js';
 import { notifyStakeholders } from '../lib/notify.js';
 import { sendMail } from '../lib/mailer.js';
 import { renderOtpEmail } from '../lib/emailTemplates.js';
-
-const otpRequestSchema = z.object({
-  email: z.string().email(),
-  domainName: z.string().min(1),
-});
-
-const otpVerifySchema = z.object({
-  email: z.string().email(),
-  otp: z.string().length(6),
-});
-
-const registrationSchema = z
-  .object({
-    companyName: z.string().min(1),
-    companyType: z.enum(COMPANY_TYPES),
-    domainName: z.string().min(1),
-    fullName: z.string().min(1),
-    designation: z.enum(DESIGNATIONS),
-    email: z.string().email(),
-    password: z.string().min(8),
-    confirmPassword: z.string().min(8),
-    financeEmail: z.string().email(),
-    hrEmail: z.string().email(),
-    acceptedTerms: z.literal(true),
-    verificationToken: z.string().min(1),
-  })
-  .refine((data) => data.password === data.confirmPassword, {
-    message: 'Passwords do not match',
-    path: ['confirmPassword'],
-  })
-  .refine((data) => domainMatchesEmail(data.domainName, data.email), {
-    message: 'Domain name must match your email domain',
-    path: ['domainName'],
-  });
+import { otpRequestSchema, otpVerifySchema, registrationSchema } from '../validations/registration.schema.js';
 
 export async function requestOtp(req, res, next) {
   try {
-    const { email, domainName } = otpRequestSchema.parse(req.body);
+    const parsed = otpRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    }
+    const { email, domainName } = parsed.data;
 
     if (!domainMatchesEmail(domainName, email)) {
       return res.status(400).json({
@@ -88,7 +57,11 @@ export async function requestOtp(req, res, next) {
 
 export async function verifyOtp(req, res, next) {
   try {
-    const { email, otp } = otpVerifySchema.parse(req.body);
+    const parsed = otpVerifySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    }
+    const { email, otp } = parsed.data;
 
     const challenge = await prisma.emailVerification.findFirst({
       where: { email, consumedAt: null, verifiedAt: null },
@@ -130,7 +103,11 @@ export async function verifyOtp(req, res, next) {
 
 export async function createRegistration(req, res, next) {
   try {
-    const data = registrationSchema.parse(req.body);
+    const parsed = registrationSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    }
+    const data = parsed.data;
 
     const challenge = await prisma.emailVerification.findFirst({
       where: {
@@ -210,9 +187,6 @@ export async function createRegistration(req, res, next) {
 
     res.status(201).json({ id: registration.id, status: registration.status });
   } catch (err) {
-    if (err?.name === 'ZodError') {
-      return res.status(400).json({ error: 'Validation failed', details: err.issues });
-    }
     next(err);
   }
 }

@@ -3,7 +3,7 @@ import { LocalStorageProvider } from './localStorage.provider.js';
 // Configuration & Security Constraints
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB limit
 
-const DISALLOWED_EXTENSIONS = new Set([
+export const DISALLOWED_EXTENSIONS = new Set([
   '.exe', '.bat', '.cmd', '.sh', '.js', '.vbs', '.php', '.py',
   '.dll', '.com', '.scr', '.jar', '.vbe', '.jse', '.wsf', '.wsh',
   '.msi', '.pif', '.reg', '.hta', '.cpl', '.apk'
@@ -36,11 +36,12 @@ export class StorageService {
   }
 
   /**
-   * Stores a file attachment with tenant & task isolation.
+   * Stores a file attachment with tenant & entity isolation. `taskId` is a
+   * back-compat alias for `{ entityType: 'tasks', entityId: taskId }`.
    */
-  async save({ tenantId, taskId, buffer, originalName, mimeType, size }) {
+  async save({ tenantId, taskId, entityType, entityId, buffer, originalName, mimeType, size }) {
     this.validateFile({ buffer, originalName, size, mimeType });
-    return this.provider.save({ tenantId, taskId, buffer, originalName, mimeType, size });
+    return this.provider.save({ tenantId, taskId, entityType, entityId, buffer, originalName, mimeType, size });
   }
 
   /**

@@ -1,4 +1,5 @@
 import { prisma } from '../lib/prisma.js';
+import { notificationIdParamSchema } from '../validations/notification.schema.js';
 
 // ─── GET /api/notifications ──────────────────────────────────────────────────
 export async function listNotifications(req, res, next) {
@@ -17,7 +18,11 @@ export async function listNotifications(req, res, next) {
 // ─── PATCH /api/notifications/:id/read ──────────────────────────────────────
 export async function markRead(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = notificationIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid notification ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const notif = await prisma.notification.findUnique({ where: { id } });
     if (!notif) return res.status(404).json({ error: 'Notification not found' });
     if (notif.recipientId !== req.user.id) return res.status(403).json({ error: 'Access forbidden' });
@@ -45,7 +50,11 @@ export async function markAllRead(req, res, next) {
 // ─── DELETE /api/notifications/:id ──────────────────────────────────────────
 export async function deleteNotification(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = notificationIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid notification ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const notif = await prisma.notification.findUnique({ where: { id } });
     if (!notif) return res.status(404).json({ error: 'Notification not found' });
     if (notif.recipientId !== req.user.id) return res.status(403).json({ error: 'Access forbidden' });

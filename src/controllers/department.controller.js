@@ -14,7 +14,7 @@
  */
 
 import { prisma } from '../lib/prisma.js';
-import { createDepartmentSchema, updateDepartmentSchema } from '../validations/department.schema.js';
+import { createDepartmentSchema, updateDepartmentSchema, departmentIdParamSchema } from '../validations/department.schema.js';
 
 // ─── Default seed list ────────────────────────────────────────────────────────
 // Applied automatically when a tenant has zero departments (first access).
@@ -173,7 +173,11 @@ export async function createDepartment(req, res, next) {
  */
 export async function updateDepartment(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = departmentIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid department ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const tenantId = req.tenantId;
 
     // Verify ownership
@@ -229,7 +233,11 @@ export async function updateDepartment(req, res, next) {
  */
 export async function deactivateDepartment(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = departmentIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid department ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const tenantId = req.tenantId;
 
     const existing = await prisma.department.findFirst({

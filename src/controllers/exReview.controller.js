@@ -3,6 +3,7 @@ import { prisma } from '../lib/prisma.js';
 import { sendMail } from '../lib/mailer.js';
 import { AppraisalNotificationService } from '../services/appraisalNotification.service.js';
 import { requestExReviewSchema, submitExReviewSchema } from '../validations/exReview.schema.js';
+import { tokenParamSchema } from '../validations/publicToken.schema.js';
 
 export async function requestExReview(req, res, next) {
   try {
@@ -67,7 +68,11 @@ export async function requestExReview(req, res, next) {
 
 export async function getExReviewByToken(req, res, next) {
   try {
-    const { token } = req.params;
+    const parsedParams = tokenParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid parameters', details: parsedParams.error.issues });
+    }
+    const { token } = parsedParams.data;
 
     const review = await prisma.exEmployerReview.findUnique({
       where: { token },
@@ -101,7 +106,11 @@ export async function getExReviewByToken(req, res, next) {
 
 export async function submitExReview(req, res, next) {
   try {
-    const { token } = req.params;
+    const parsedParams = tokenParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid parameters', details: parsedParams.error.issues });
+    }
+    const { token } = parsedParams.data;
     const parsed = submitExReviewSchema.safeParse(req.body || {});
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });

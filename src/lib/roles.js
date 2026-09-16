@@ -18,6 +18,12 @@ export const ELEVATED_ROLES = ['SUPER_ADMIN', 'ADMIN', 'CMD', 'HR'];
 /** Roles allowed to perform HR-style sign-off / final approval actions. */
 export const HR_ROLES = ['SUPER_ADMIN', 'ADMIN', 'CMD', 'HR'];
 
+/**
+ * Roles that are considered "super elevated" — HR cannot assign goals to these
+ * users. Only SUPER_ADMIN / ADMIN may do so.
+ */
+export const SUPER_ELEVATED_ROLES = ['SUPER_ADMIN', 'ADMIN', 'CMD'];
+
 /** Elevated roles plus MANAGER — used where line managers also have write access. */
 export const MANAGER_OR_ELEVATED_ROLES = [...ELEVATED_ROLES, 'MANAGER'];
 
@@ -33,3 +39,10 @@ export function hasRole(role, group) {
 export function isElevated(role) {
   return hasRole(role, ELEVATED_ROLES);
 }
+
+export {
+  DASHBOARD_VISIBILITY,
+  DASHBOARD_ALLOWED_ROLES,
+  getVisibleDashboards,
+  canViewDashboard,
+} from './dashboardPermissions.js';

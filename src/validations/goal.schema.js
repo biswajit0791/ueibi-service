@@ -37,8 +37,12 @@ export const createGoalSchema = z.object({
 // NOTE: `status` is deliberately NOT accepted here. Advancing the review
 // workflow must go through the dedicated /submit, /approve, /reject,
 // /hr-approve, /hr-reject and /resubmit endpoints — a plain PATCH must not be
-// able to jump a goal straight to COMPLETED. Re-assignment (employeeId /
-// employeeIds) is also not editable after creation.
+// able to jump a goal straight to COMPLETED.
+//
+// Re-assignment: existing assignees are immutable; however elevated roles
+// (HR / Admin / Super-Admin) MAY add NEW employees to an existing goal by
+// supplying `addEmployeeIds` — a list of employee IDs to upsert as additional
+// GoalAssignment rows. Existing assignments are never removed or replaced.
 export const updateGoalSchema = z.object({
   title: z.string().trim().min(1, "Goal title cannot be empty").max(255, "Goal title cannot exceed 255 characters").optional(),
   description: z.string().max(3000, "Description cannot exceed 3000 characters").nullable().optional(),
@@ -55,6 +59,8 @@ export const updateGoalSchema = z.object({
   dueDate: z.string().nullable().optional(),
   attachments: z.array(z.string().max(1024)).max(20, "A goal can have at most 20 attachments").optional(),
   specialNotes: z.string().max(2000, "Special notes cannot exceed 2000 characters").nullable().optional(),
+  // IDs of employees to ADD to this goal (elevated roles only; never removes existing assignees)
+  addEmployeeIds: z.array(z.string().min(1)).max(200).optional(),
 });
 // (default zod behaviour strips unknown keys, so stray `status` / `employeeId`
 //  in the payload are silently dropped rather than applied.)
@@ -120,3 +126,26 @@ export const goalCommentSchema = z.object({
     .max(2000, "Comment text cannot exceed 2000 characters"),
   attachments: z.array(z.string()).optional().default([]),
 }).passthrough();
+
+export const goalIdParamSchema = z.object({
+  id: z.string().min(1),
+});
+
+export const goalCommentParamSchema = z.object({
+  id: z.string().min(1),
+  cid: z.string().min(1),
+});
+
+// status/category/scope stay loose (bounded strings, not strict enums) — the
+// status field has legacy lowercase aliases mixed with canonical uppercase
+// values (see GOAL_STATUS in goal.service.js), so an enum here risks
+// rejecting a value the frontend still legitimately sends.
+export const listGoalsQuerySchema = z.object({
+  employeeId: z.string().max(100).optional(),
+  status: z.string().max(50).optional(),
+  financialYear: z.string().max(50).optional(),
+  category: z.string().max(100).optional(),
+  scope: z.string().max(50).optional(),
+  page: z.coerce.number().int().min(1).optional().default(1),
+  limit: z.coerce.number().int().min(1).max(200).optional().default(100),
+});

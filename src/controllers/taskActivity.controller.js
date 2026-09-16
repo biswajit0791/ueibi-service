@@ -2,7 +2,14 @@ import { prisma } from '../lib/prisma.js';
 import { emitToUser } from '../lib/socket.js';
 import { commentService } from '../services/comment.service.js';
 import { storageService } from '../services/storage/storage.service.js';
-import { createTaskCommentSchema } from '../validations/task.schema.js';
+import {
+  createTaskCommentSchema,
+  taskIdParamSchema,
+  taskCommentParamSchema,
+  taskCommentAttachmentParamSchema,
+  listTaskCommentsQuerySchema,
+  taskCommentAttachmentQuerySchema,
+} from '../validations/task.schema.js';
 import { loadTaskForUser } from '../services/taskAccess.service.js';
 
 // ─── Helper: write an audit log entry ──────────────────────────────────────
@@ -31,7 +38,11 @@ const verifyTaskAccess = (taskId, requestingUser, tenantId) => loadTaskForUser(t
 // ─── POST /api/tasks/:id/comments ───────────────────────────────────────────
 export async function addTaskComment(req, res, next) {
   try {
-    const { id: taskId } = req.params;
+    const parsedParams = taskIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid task ID parameter', details: parsedParams.error.issues });
+    }
+    const { id: taskId } = parsedParams.data;
     const validated = createTaskCommentSchema.safeParse(req.body);
     if (!validated.success) {
       return res.status(400).json({ error: validated.error.errors[0]?.message || 'Invalid comment data' });
@@ -89,8 +100,16 @@ export async function addTaskComment(req, res, next) {
 // ─── GET /api/tasks/:id/comments ────────────────────────────────────────────
 export async function listTaskComments(req, res, next) {
   try {
-    const { id: taskId } = req.params;
-    const { page, limit } = req.query;
+    const parsedParams = taskIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid task ID parameter', details: parsedParams.error.issues });
+    }
+    const { id: taskId } = parsedParams.data;
+    const parsedQuery = listTaskCommentsQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
+    }
+    const { page, limit } = parsedQuery.data;
 
     // Verify task belongs to current tenant and user has access
     await verifyTaskAccess(taskId, req.user, req.tenantId);
@@ -114,7 +133,15 @@ export async function listTaskComments(req, res, next) {
 // ─── GET /api/tasks/:id/comments/:cid/attachments/:aid ──────────────────────
 export async function getTaskCommentAttachment(req, res, next) {
   try {
-    const { id: taskId, cid, aid } = req.params;
+    const parsedParams = taskCommentAttachmentParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid parameters', details: parsedParams.error.issues });
+    }
+    const { id: taskId, cid, aid } = parsedParams.data;
+    const parsedQuery = taskCommentAttachmentQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
+    }
 
     // Verify task belongs to current tenant and user has access
     await verifyTaskAccess(taskId, req.user, req.tenantId);
@@ -128,7 +155,7 @@ export async function getTaskCommentAttachment(req, res, next) {
 
     const stream = await storageService.getDownloadStream(attachment.storageKey);
 
-    const isDownload = req.query.download === 'true';
+    const isDownload = parsedQuery.data.download === 'true';
     const dispositionType = isDownload ? 'attachment' : 'inline';
     const encodedFilename = encodeURIComponent(attachment.originalName);
 
@@ -150,7 +177,11 @@ export async function getTaskCommentAttachment(req, res, next) {
 // ─── DELETE /api/tasks/:id/comments/:cid ────────────────────────────────────
 export async function deleteTaskComment(req, res, next) {
   try {
-    const { id: taskId, cid } = req.params;
+    const parsedParams = taskCommentParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid parameters', details: parsedParams.error.issues });
+    }
+    const { id: taskId, cid } = parsedParams.data;
 
     // Verify task belongs to current tenant
     await verifyTaskAccess(taskId, req.user, req.tenantId);
@@ -174,7 +205,11 @@ export async function deleteTaskComment(req, res, next) {
 // ─── DELETE /api/tasks/:id/comments/:cid/attachments/:aid ───────────────────
 export async function deleteTaskCommentAttachment(req, res, next) {
   try {
-    const { id: taskId, cid, aid } = req.params;
+    const parsedParams = taskCommentAttachmentParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid parameters', details: parsedParams.error.issues });
+    }
+    const { id: taskId, cid, aid } = parsedParams.data;
 
     // Verify task belongs to current tenant
     await verifyTaskAccess(taskId, req.user, req.tenantId);
@@ -199,7 +234,11 @@ export async function deleteTaskCommentAttachment(req, res, next) {
 // ─── GET /api/tasks/:id/audit ────────────────────────────────────────────────
 export async function listTaskAudit(req, res, next) {
   try {
-    const { id: taskId } = req.params;
+    const parsedParams = taskIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid task ID parameter', details: parsedParams.error.issues });
+    }
+    const { id: taskId } = parsedParams.data;
 
     // Verify task belongs to current tenant and user has access
     await verifyTaskAccess(taskId, req.user, req.tenantId);

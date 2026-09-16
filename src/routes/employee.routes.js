@@ -3,6 +3,7 @@ import {
   inviteEmployee,
   onboardEmployee,
   listEmployees,
+  getEmployee,
   listExEmployees,
   addExEmployee,
   bulkAddExEmployees,
@@ -54,6 +55,9 @@ router.post('/employees/offers/bulk', requireAuth, requireTenant, authorize('SUP
 router.patch('/employees/offers/:id', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), updateNonJoiner);
 router.delete('/employees/offers/:id', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), deleteNonJoiner);
 
+// Single-employee detail — registered LAST among /employees GET routes so it
+// never shadows the more specific /employees/ex, /employees/offers, /employees/stats.
+router.get('/employees/:id', requireAuth, requireTenant, getEmployee);
 
 export default router;
 

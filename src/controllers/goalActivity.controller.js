@@ -1,5 +1,5 @@
 import { prisma } from '../lib/prisma.js';
-import { goalCommentSchema } from '../validations/goal.schema.js';
+import { goalCommentSchema, goalIdParamSchema, goalCommentParamSchema } from '../validations/goal.schema.js';
 import { logTaskAudit, pushNotification } from './taskActivity.controller.js';
 import { goalService } from '../services/goal.service.js';
 import { HR_ROLES, hasRole } from '../lib/roles.js';
@@ -30,7 +30,11 @@ async function loadAccessibleGoal(goalId, req) {
 // ─── POST /api/goals/:id/comments ───────────────────────────────────────────
 export async function addGoalComment(req, res, next) {
   try {
-    const { id: goalId } = req.params;
+    const parsedParams = goalIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid goal ID parameter', details: parsedParams.error.issues });
+    }
+    const { id: goalId } = parsedParams.data;
     const parsed = goalCommentSchema.safeParse(req.body || {});
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
@@ -86,7 +90,11 @@ export async function addGoalComment(req, res, next) {
 // ─── GET /api/goals/:id/comments ────────────────────────────────────────────
 export async function listGoalComments(req, res, next) {
   try {
-    const { id: goalId } = req.params;
+    const parsedParams = goalIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid goal ID parameter', details: parsedParams.error.issues });
+    }
+    const { id: goalId } = parsedParams.data;
 
     try {
       await loadAccessibleGoal(goalId, req);
@@ -111,7 +119,11 @@ export async function listGoalComments(req, res, next) {
 // ─── GET /api/goals/:id/audit ────────────────────────────────────────────────
 export async function listGoalAudit(req, res, next) {
   try {
-    const { id: goalId } = req.params;
+    const parsedParams = goalIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid goal ID parameter', details: parsedParams.error.issues });
+    }
+    const { id: goalId } = parsedParams.data;
 
     try {
       await loadAccessibleGoal(goalId, req);
@@ -136,7 +148,11 @@ export async function listGoalAudit(req, res, next) {
 // ─── DELETE /api/goals/:id/comments/:cid ────────────────────────────────────
 export async function deleteGoalComment(req, res, next) {
   try {
-    const { id: goalId, cid } = req.params;
+    const parsedParams = goalCommentParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid parameters', details: parsedParams.error.issues });
+    }
+    const { id: goalId, cid } = parsedParams.data;
 
     // Verify comment belongs to the goal and goal belongs to requester's tenant
     const comment = await prisma.goalComment.findUnique({

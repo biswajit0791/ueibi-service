@@ -8,9 +8,11 @@ import {
   goalApproveSchema,
   goalRejectSchema,
   goalResubmitSchema,
+  goalIdParamSchema,
+  listGoalsQuerySchema,
 } from '../validations/goal.schema.js';
 import { goalService, GOAL_CATEGORIES, GOAL_TYPES, GOAL_PRIORITIES, GOAL_STATUS } from '../services/goal.service.js';
-import { ELEVATED_ROLES, hasRole } from '../lib/roles.js';
+import { ELEVATED_ROLES, SUPER_ELEVATED_ROLES, hasRole, canViewDashboard } from '../lib/roles.js';
 import { getCurrentFinancialYear, getCurrentQuarter } from '../lib/financialYear.js';
 import { GOAL_EDITABLE_STATUSES } from '../lib/workflowStatus.js';
 
@@ -49,7 +51,7 @@ export async function getAssignableUsers(req, res, next) {
     const role = req.user.role;
     const tenantId = req.tenantId;
 
-    if (hasRole(role, ELEVATED_ROLES)) {
+    if (hasRole(role, ['SUPER_ADMIN', 'ADMIN', 'CMD', 'HR', 'FINANCE'])) {
       const users = await prisma.tenantUser.findMany({
         where: { tenantId, status: 'ACTIVE', isDeleted: false },
         select: {
@@ -63,7 +65,10 @@ export async function getAssignableUsers(req, res, next) {
         },
         orderBy: { name: 'asc' },
       });
-      return res.json({ users });
+
+      // Filter by role hierarchy: caller can only see/select boards they have authority to view, plus self
+      const filteredUsers = users.filter((u) => u.id === req.user.id || canViewDashboard(role, u.role));
+      return res.json({ users: filteredUsers });
     }
 
     const allUsers = await prisma.tenantUser.findMany({
@@ -154,15 +159,16 @@ export async function getAssignableUsers(req, res, next) {
  *
  * Creates a new goal with the correct initial status based on:
  *
- *   A. EMPLOYEE self-assignment (employeeId == caller or omitted):
+ *   A. Self-assignment (employeeId == caller or omitted, any role):
  *      status = DRAFT  (existing behaviour preserved)
  *      approvalMode not stored
  *
- *   B. MANAGER assigns to another employee with MANAGER_APPROVAL:
+ *   B. Elevated role (ADMIN/HR/CMD/SUPER_ADMIN) or MANAGER assigns to another
+ *      employee with MANAGER_APPROVAL:
  *      status = PENDING_APPROVAL
  *      Reporting manager must call activate-approve before tasks start.
  *
- *   C. MANAGER assigns to another employee with AUTO_APPROVE:
+ *   C. Elevated role or MANAGER assigns to another employee with AUTO_APPROVE:
  *      status = ACTIVE  (tasks immediately workable)
  *
  * In all cases, createdById is stored for proper audit trail.
@@ -289,19 +295,20 @@ export async function createGoal(req, res, next) {
 
     // ── Determine initial status ───────────────────────────────────────────
     // Self-assigned goals always start as DRAFT (existing behaviour preserved).
-    // Manager-created goals use approvalMode to set the initial status.
+    // Goals assigned to others by MANAGER or elevated roles (ADMIN/HR/CMD/SUPER_ADMIN)
+    // use approvalMode to set the initial status.
     let initialStatus;
     let effectiveApprovalMode = null;
 
     if (isSelfAssigned) {
-      // Flow A: Employee self-created → DRAFT
+      // Flow A: Self-assigned (any role) → DRAFT
       initialStatus = GOAL_STATUS.DRAFT;
     } else if (approvalMode === 'AUTO_APPROVE') {
-      // Flow C: Manager + AUTO_APPROVE → ACTIVE immediately
+      // Flow C: Elevated role or Manager + AUTO_APPROVE → ACTIVE immediately
       initialStatus = GOAL_STATUS.ACTIVE;
       effectiveApprovalMode = 'AUTO_APPROVE';
     } else {
-      // Flow B: Manager + MANAGER_APPROVAL (default for manager-created) → PENDING_APPROVAL
+      // Flow B: Elevated role or Manager + MANAGER_APPROVAL (default) → PENDING_APPROVAL
       initialStatus = GOAL_STATUS.PENDING_APPROVAL;
       effectiveApprovalMode = 'MANAGER_APPROVAL';
     }
@@ -440,13 +447,11 @@ export async function createGoal(req, res, next) {
  */
 export async function listGoals(req, res, next) {
   try {
-    const { employeeId, status, financialYear, category, scope } = req.query;
-
-    // Pagination (backwards compatible: callers that don't pass `page` still get
-    // a single page, just capped so a huge tenant can't return thousands of
-    // deeply-included goal trees in one response).
-    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 100));
+    const parsedQuery = listGoalsQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
+    }
+    const { employeeId, status, financialYear, category, scope, page, limit } = parsedQuery.data;
     const skip = (page - 1) * limit;
 
     const where = { tenantId: req.tenantId };
@@ -460,37 +465,45 @@ export async function listGoals(req, res, next) {
         return res.status(400).json({ error: 'Target employee not found in this organization' });
       }
 
-      if (employeeId !== req.user.id && !isElevated) {
-        if (req.user.role === 'MANAGER') {
-          const targetRole = String(targetUser.role || '').toUpperCase();
-          const higherRoles = ['SUPER_ADMIN', 'ADMIN', 'CMD', 'HR', 'FINANCE', 'DIRECTOR', 'LEADERSHIP', 'OWNER', 'MANAGER'];
-          if (higherRoles.includes(targetRole)) {
-            return res.status(403).json({
-              error: `Access forbidden: managers cannot view boards of peer or higher authority roles (${targetRole})`,
-            });
-          }
-
-          const isSubordinate = await checkIsSubordinate(req.user.id, employeeId, req.tenantId);
-          const isSameDept = req.user.department && targetUser?.department === req.user.department;
-          const isCoAssigned = await prisma.goalAssignment.findFirst({
-            where: {
-              tenantId: req.tenantId,
-              employeeId: employeeId,
-              goal: {
-                OR: [
-                  { employeeId: req.user.id },
-                  { createdById: req.user.id },
-                  { assignments: { some: { employeeId: req.user.id } } },
-                ],
-              },
-            },
+      if (employeeId !== req.user.id) {
+        if (!canViewDashboard(req.user.role, targetUser.role)) {
+          return res.status(403).json({
+            error: `Access forbidden: ${req.user.role} cannot view goals of ${targetUser.role || 'this role'}`,
           });
+        }
 
-          if (!isSubordinate && !isSameDept && !isCoAssigned && targetUser?.managerId) {
-            return res.status(403).json({ error: 'Access forbidden: user is not in your team' });
+        if (!isElevated) {
+          if (req.user.role === 'MANAGER') {
+            const targetRole = String(targetUser.role || '').toUpperCase();
+            const higherRoles = ['SUPER_ADMIN', 'ADMIN', 'CMD', 'HR', 'FINANCE', 'DIRECTOR', 'LEADERSHIP', 'OWNER', 'MANAGER'];
+            if (higherRoles.includes(targetRole)) {
+              return res.status(403).json({
+                error: `Access forbidden: managers cannot view boards of peer or higher authority roles (${targetRole})`,
+              });
+            }
+
+            const isSubordinate = await checkIsSubordinate(req.user.id, employeeId, req.tenantId);
+            const isSameDept = req.user.department && targetUser?.department === req.user.department;
+            const isCoAssigned = await prisma.goalAssignment.findFirst({
+              where: {
+                tenantId: req.tenantId,
+                employeeId: employeeId,
+                goal: {
+                  OR: [
+                    { employeeId: req.user.id },
+                    { createdById: req.user.id },
+                    { assignments: { some: { employeeId: req.user.id } } },
+                  ],
+                },
+              },
+            });
+
+            if (!isSubordinate && !isSameDept && !isCoAssigned && targetUser?.managerId) {
+              return res.status(403).json({ error: 'Access forbidden: user is not in your team' });
+            }
+          } else {
+            return res.status(403).json({ error: 'Access forbidden: employees can only view their own goals' });
           }
-        } else {
-          return res.status(403).json({ error: 'Access forbidden: employees can only view their own goals' });
         }
       }
       where.OR = [
@@ -584,15 +597,30 @@ export async function listGoals(req, res, next) {
         }
 
         where.OR = managerOrConditions;
-      } else if (isElevated) {
-        // HR/Admin: If employeeId is not specified and not 'all', default to own or tenant
+      } else if (isElevated || req.user.role === 'FINANCE') {
+        // HR/Admin/Finance: If employeeId is not specified, default to own
         if (!employeeId) {
           where.OR = [
             { employeeId: req.user.id },
             { assignments: { some: { employeeId: req.user.id } } },
           ];
+        } else if (employeeId === 'all') {
+          // If caller is HR, ADMIN, or FINANCE, exclude goals belonging exclusively to higher roles
+          const allRoles = ['SUPER_ADMIN', 'ADMIN', 'CMD', 'HR', 'FINANCE', 'MANAGER', 'EMPLOYEE'];
+          const forbiddenRoles = allRoles.filter((r) => !canViewDashboard(req.user.role, r));
+          if (forbiddenRoles.length > 0) {
+            where.OR = [
+              { employeeId: req.user.id },
+              { createdById: req.user.id },
+              { assignments: { some: { employeeId: req.user.id } } },
+              {
+                employee: {
+                  role: { notIn: forbiddenRoles },
+                },
+              },
+            ];
+          }
         }
-        // If employeeId === 'all', no restriction on where.employeeId, view tenant wide
       }
     }
 
@@ -665,7 +693,11 @@ export async function listGoals(req, res, next) {
  */
 export async function getGoalById(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = goalIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid goal ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
 
     const goal = await prisma.goal.findFirst({
       where: { id, tenantId: req.tenantId },
@@ -722,7 +754,11 @@ export async function getGoalById(req, res, next) {
  */
 export async function updateGoal(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = goalIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid goal ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const parsed = updateGoalSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
@@ -753,7 +789,7 @@ export async function updateGoal(req, res, next) {
 
     // Prevent direct status manipulation through the generic update endpoint.
     // Status changes must go through dedicated workflow action endpoints.
-    const { status: _ignoredStatus, ...safeData } = parsed.data;
+    const { status: _ignoredStatus, addEmployeeIds, ...safeData } = parsed.data;
 
     const updated = await prisma.goal.update({
       where: { id },
@@ -787,6 +823,88 @@ export async function updateGoal(req, res, next) {
       },
     });
 
+    // ── Add new assignees (elevated roles only) ─────────────────────────────
+    if (addEmployeeIds && addEmployeeIds.length > 0) {
+      if (!hasRole(req.user.role, ELEVATED_ROLES)) {
+        return res.status(403).json({ error: 'Only HR / Admin can add new assignees to an existing goal.' });
+      }
+
+      // Determine which employees are not already assigned
+      const existingAssigneeIds = new Set(
+        existing.assignments.map((a) => a.employeeId)
+      );
+      if (existing.employeeId) existingAssigneeIds.add(existing.employeeId);
+
+      const newIds = addEmployeeIds.filter((empId) => !existingAssigneeIds.has(empId));
+
+      if (newIds.length > 0) {
+        // Validate that all supplied IDs belong to this tenant
+        const validUsers = await prisma.tenantUser.findMany({
+          where: { id: { in: newIds }, tenantId: req.tenantId, isDeleted: false },
+          select: { id: true, name: true, role: true },
+        });
+
+        // HR can only add non-super-elevated users.
+        // ADMIN / SUPER_ADMIN can add anyone.
+        const callerIsAdmin = hasRole(req.user.role, ['SUPER_ADMIN', 'ADMIN']);
+        const filteredUsers = callerIsAdmin
+          ? validUsers
+          : validUsers.filter((u) => !hasRole(u.role, SUPER_ELEVATED_ROLES));
+
+        const blockedUsers = validUsers.filter((u) => !filteredUsers.some((f) => f.id === u.id));
+        if (blockedUsers.length > 0) {
+          const blockedNames = blockedUsers.map((u) => `${u.name} (${u.role})`).join(', ');
+          return res.status(403).json({
+            error: `Only SUPER_ADMIN or ADMIN can assign goals to: ${blockedNames}.`,
+          });
+        }
+
+        const validIds = filteredUsers.map((u) => u.id);
+
+        // Upsert new GoalAssignment rows
+        await Promise.all(
+          validIds.map((empId) =>
+            prisma.goalAssignment.upsert({
+              where: { goalId_employeeId: { goalId: id, employeeId: empId } },
+              update: {},   // already exists — leave untouched
+              create: {
+                tenantId: req.tenantId,
+                goalId: id,
+                employeeId: empId,
+                assignedById: req.user.id,
+                progress: 0,
+                status: existing.status,
+                milestones: 0,
+                completedMilestones: 0,
+              },
+            })
+          )
+        );
+
+        const addedNames = validUsers.map((u) => u.name).join(', ');
+        await goalService.logAudit({
+          goalId: id,
+          performedById: req.user.id,
+          action: 'GOAL_UPDATED',
+          details: `${req.user.name} added new assignee(s) to the goal: ${addedNames}.`,
+        });
+
+        // Notify newly added employees
+        for (const user of validUsers) {
+          if (user.id === req.user.id) continue;
+          await goalService.notify({
+            tenantId: req.tenantId,
+            recipientId: user.id,
+            type: 'goal_update',
+            title: `Goal Assigned: "${updated.title}"`,
+            body: `${req.user.name} has assigned you to the goal "${updated.title}".`,
+            entityType: 'goal',
+            entityId: id,
+          });
+        }
+      }
+    }
+
     await goalService.logAudit({
       goalId: id,
       performedById: req.user.id,
@@ -794,7 +912,26 @@ export async function updateGoal(req, res, next) {
       details: `${req.user.name} updated goal details.`,
     });
 
-    res.json(updated);
+    // Re-fetch to return the fully up-to-date goal (including any new assignments)
+    const finalGoal = await prisma.goal.findUnique({
+      where: { id },
+      include: {
+        employee: true,
+        createdByUser: { select: { id: true, name: true, role: true } },
+        assignments: {
+          include: {
+            employee: { select: { id: true, name: true, email: true, department: true, designation: true, role: true, managerId: true } },
+          },
+        },
+        tasks: true,
+        auditLogs: {
+          orderBy: { createdAt: 'desc' },
+          include: { performedBy: { select: { id: true, name: true, role: true } } },
+        },
+      },
+    });
+
+    res.json(finalGoal);
   } catch (err) {
     next(err);
   }
@@ -805,7 +942,11 @@ export async function updateGoal(req, res, next) {
  */
 export async function deleteGoal(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = goalIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid goal ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
 
     const goal = await prisma.goal.findFirst({
       where: { id, tenantId: req.tenantId },
@@ -874,7 +1015,11 @@ export async function deleteGoal(req, res, next) {
  */
 export async function activateApproveGoal(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = goalIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid goal ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const parsed = activateApproveSchema.safeParse(req.body || {});
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
@@ -902,7 +1047,11 @@ export async function activateApproveGoal(req, res, next) {
  */
 export async function submitGoal(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = goalIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid goal ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const parsed = goalSubmitSchema.safeParse(req.body || {});
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
@@ -929,7 +1078,11 @@ export async function submitGoal(req, res, next) {
  */
 export async function managerApproveGoal(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = goalIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid goal ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const parsed = goalApproveSchema.safeParse(req.body || {});
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
@@ -960,7 +1113,11 @@ export async function managerApproveGoal(req, res, next) {
  */
 export async function managerRejectGoal(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = goalIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid goal ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const parsed = goalRejectSchema.safeParse(req.body || {});
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
@@ -990,7 +1147,11 @@ export async function managerRejectGoal(req, res, next) {
  */
 export async function hrApproveGoal(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = goalIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid goal ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const parsed = goalApproveSchema.safeParse(req.body || {});
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
@@ -1021,7 +1182,11 @@ export async function hrApproveGoal(req, res, next) {
  */
 export async function hrRejectGoal(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = goalIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid goal ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const parsed = goalRejectSchema.safeParse(req.body || {});
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
@@ -1051,7 +1216,11 @@ export async function hrRejectGoal(req, res, next) {
  */
 export async function resubmitGoal(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = goalIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid goal ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const parsed = goalResubmitSchema.safeParse(req.body || {});
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });

@@ -6,6 +6,10 @@ import {
   assignPolicySchema,
   reminderSchema,
   publishPolicySchema,
+  policyIdParamSchema,
+  listPoliciesQuerySchema,
+  complianceRegistryQuerySchema,
+  policyIdQuerySchema,
 } from '../validations/policy.schema.js';
 
 export async function getMyPolicies(req, res, next) {
@@ -22,7 +26,11 @@ export async function getMyPolicies(req, res, next) {
 
 export async function getMyPolicyById(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = policyIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid policy ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const policies = await policyService.getMyPolicies({
       tenantId: req.tenantId,
       userId: req.user.id,
@@ -39,7 +47,11 @@ export async function getMyPolicyById(req, res, next) {
 
 export async function signPolicy(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = policyIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid policy ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const parsed = signPolicySchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
@@ -63,14 +75,18 @@ export async function signPolicy(req, res, next) {
 
 export async function listPolicies(req, res, next) {
   try {
-    const { status, category, search, page, limit } = req.query;
+    const parsedQuery = listPoliciesQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
+    }
+    const { status, category, search, page, limit } = parsedQuery.data;
     const result = await policyService.listPolicies({
       tenantId: req.tenantId,
       status,
       category,
       search,
-      page: page ? parseInt(page, 10) : 1,
-      limit: limit ? parseInt(limit, 10) : 50,
+      page: page || 1,
+      limit: limit || 50,
     });
     res.json(result);
   } catch (err) {
@@ -80,7 +96,11 @@ export async function listPolicies(req, res, next) {
 
 export async function getPolicyById(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = policyIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid policy ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const policy = await policyService.getPolicyById({
       tenantId: req.tenantId,
       id,
@@ -119,7 +139,11 @@ export async function createPolicy(req, res, next) {
 
 export async function updatePolicy(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = policyIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid policy ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const parsed = updatePolicySchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
@@ -144,7 +168,11 @@ export async function updatePolicy(req, res, next) {
 
 export async function publishPolicy(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = policyIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid policy ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const parsed = publishPolicySchema.safeParse(req.body || {});
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
@@ -168,7 +196,11 @@ export async function publishPolicy(req, res, next) {
 
 export async function archivePolicy(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = policyIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid policy ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const result = await policyService.archivePolicy({
       tenantId: req.tenantId,
       user: req.user,
@@ -186,7 +218,11 @@ export async function archivePolicy(req, res, next) {
 
 export async function deletePolicy(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = policyIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid policy ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const result = await policyService.deletePolicy({
       tenantId: req.tenantId,
       user: req.user,
@@ -204,7 +240,11 @@ export async function deletePolicy(req, res, next) {
 
 export async function assignPolicy(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = policyIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid policy ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const parsed = assignPolicySchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
@@ -229,13 +269,17 @@ export async function assignPolicy(req, res, next) {
 
 export async function getComplianceRegistry(req, res, next) {
   try {
-    const { policyId, search, page, limit } = req.query;
+    const parsedQuery = complianceRegistryQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
+    }
+    const { policyId, search, page, limit } = parsedQuery.data;
     const result = await policyService.getComplianceRegistry({
       tenantId: req.tenantId,
       policyId,
       search,
-      page: page ? parseInt(page, 10) : 1,
-      limit: limit ? parseInt(limit, 10) : 50,
+      page: page || 1,
+      limit: limit || 50,
     });
     res.json(result);
   } catch (err) {
@@ -245,7 +289,11 @@ export async function getComplianceRegistry(req, res, next) {
 
 export async function getPendingCompliance(req, res, next) {
   try {
-    const { policyId } = req.query;
+    const parsedQuery = policyIdQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
+    }
+    const { policyId } = parsedQuery.data;
     const result = await policyService.getPendingCompliance({
       tenantId: req.tenantId,
       policyId,
@@ -258,7 +306,11 @@ export async function getPendingCompliance(req, res, next) {
 
 export async function sendReminders(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = policyIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid policy ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const parsed = reminderSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
@@ -283,7 +335,11 @@ export async function sendReminders(req, res, next) {
 
 export async function exportComplianceCSV(req, res, next) {
   try {
-    const { policyId } = req.query;
+    const parsedQuery = policyIdQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
+    }
+    const { policyId } = parsedQuery.data;
     const csvContent = await policyService.exportComplianceCSV({
       tenantId: req.tenantId,
       policyId,

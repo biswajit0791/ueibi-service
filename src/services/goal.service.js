@@ -26,9 +26,9 @@ export const GOAL_TYPES = [
 export const GOAL_PRIORITIES = ['low', 'medium', 'high', 'critical'];
 
 // ── Status constants ────────────────────────────────────────────────────────
-// Employee self-created flow:   DRAFT → PENDING_MANAGER_REVIEW → PENDING_HR_REVIEW → COMPLETED
-// Manager + MANAGER_APPROVAL:  PENDING_APPROVAL → ACTIVE → (tasks) → PENDING_MANAGER_REVIEW → PENDING_HR_REVIEW → COMPLETED
-// Manager + AUTO_APPROVE:      ACTIVE → (tasks) → PENDING_MANAGER_REVIEW → PENDING_HR_REVIEW → COMPLETED
+// Employee self-created flow:               DRAFT → PENDING_MANAGER_REVIEW → PENDING_HR_REVIEW → COMPLETED
+// Elevated/Manager + MANAGER_APPROVAL flow:  PENDING_APPROVAL → ACTIVE → (tasks) → PENDING_MANAGER_REVIEW → PENDING_HR_REVIEW → COMPLETED
+// Elevated/Manager + AUTO_APPROVE flow:      ACTIVE → (tasks) → PENDING_MANAGER_REVIEW → PENDING_HR_REVIEW → COMPLETED
 export const GOAL_STATUS = {
   DRAFT: 'DRAFT',
   PENDING_APPROVAL: 'PENDING_APPROVAL',
@@ -240,15 +240,17 @@ export class GoalService {
     return overallProgress;
   }
 
-  // ─── WORKFLOW ACTION: Activate/Approve a PENDING_APPROVAL goal ─────────────
+  // ─── WORKFLOW ACTION: Activate/Approve a PENDING_APPROVAL goal ──────────────────
   /**
-   * Transitions a manager-created goal from PENDING_APPROVAL → ACTIVE.
+   * Transitions a goal created by an elevated role or manager from
+   * PENDING_APPROVAL → ACTIVE.
    *
    * Who can call this:
    *  - The goal-owner's direct reporting manager
-   *  - HR / SUPER_ADMIN / ADMIN
+   *  - HR / SUPER_ADMIN / ADMIN / CMD (elevated roles)
+   *  - The creator of the goal (assignedById match)
    *
-   * Flow: MANAGER + MANAGER_APPROVAL mode
+   * Flow: Elevated role or Manager + MANAGER_APPROVAL mode
    *   Goal created → PENDING_APPROVAL → [this action] → ACTIVE
    */
   async activateGoal({ tenantId, goalId, user, comment }) {
@@ -451,7 +453,12 @@ export class GoalService {
       where: { tenantId, role: 'MANAGER', status: 'ACTIVE', isDeleted: false },
       select: { id: true, name: true },
     });
-    const requiresManagerReview = hasManager || (tenantManagers.length > 0 && String(user.role || '').toUpperCase() !== 'MANAGER');
+
+    // AUTO_APPROVE goals skip manager review entirely — go straight to HR
+    const isAutoApprove = goal.approvalMode === 'AUTO_APPROVE';
+    const requiresManagerReview = !isAutoApprove && (
+      hasManager || (tenantManagers.length > 0 && String(user.role || '').toUpperCase() !== 'MANAGER')
+    );
     const newStatus = requiresManagerReview ? GOAL_STATUS.PENDING_MANAGER_REVIEW : GOAL_STATUS.PENDING_HR_REVIEW;
 
     // Update assignment status independently

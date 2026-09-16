@@ -1,4 +1,5 @@
 import { prisma } from '../lib/prisma.js';
+import { listRegistrationsQuerySchema, registrationIdParamSchema } from '../validations/adminRegistrations.schema.js';
 
 /**
  * GET /api/admin/registrations
@@ -6,7 +7,11 @@ import { prisma } from '../lib/prisma.js';
  */
 export async function listRegistrations(req, res, next) {
   try {
-    const { status, search, page = '1', limit = '20' } = req.query;
+    const parsedQuery = listRegistrationsQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
+    }
+    const { status, search, page, limit } = parsedQuery.data;
 
     const where = {};
     if (status) where.status = status;
@@ -20,16 +25,14 @@ export async function listRegistrations(req, res, next) {
       ];
     }
 
-    const pageNum = Math.max(1, parseInt(page, 10) || 1);
-    const take = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
-    const skip = (pageNum - 1) * take;
+    const skip = (page - 1) * limit;
 
     const [items, total] = await Promise.all([
       prisma.companyRegistration.findMany({
         where,
         orderBy: { createdAt: 'desc' },
         skip,
-        take,
+        take: limit,
         select: {
           id: true,
           companyName: true,
@@ -69,7 +72,7 @@ export async function listRegistrations(req, res, next) {
       ),
     };
 
-    res.json({ items, total, page: pageNum, limit: take, summary });
+    res.json({ items, total, page, limit, summary });
   } catch (err) {
     next(err);
   }
@@ -81,8 +84,12 @@ export async function listRegistrations(req, res, next) {
  */
 export async function getRegistration(req, res, next) {
   try {
+    const parsedParams = registrationIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid registration ID parameter', details: parsedParams.error.issues });
+    }
     const registration = await prisma.companyRegistration.findUnique({
-      where: { id: req.params.id },
+      where: { id: parsedParams.data.id },
       include: {
         tenant: true,
         coupon: true,
