@@ -126,3 +126,26 @@ export const goalCommentSchema = z.object({
     .max(2000, "Comment text cannot exceed 2000 characters"),
   attachments: z.array(z.string()).optional().default([]),
 }).passthrough();
+
+export const goalIdParamSchema = z.object({
+  id: z.string().min(1),
+});
+
+export const goalCommentParamSchema = z.object({
+  id: z.string().min(1),
+  cid: z.string().min(1),
+});
+
+// status/category/scope stay loose (bounded strings, not strict enums) — the
+// status field has legacy lowercase aliases mixed with canonical uppercase
+// values (see GOAL_STATUS in goal.service.js), so an enum here risks
+// rejecting a value the frontend still legitimately sends.
+export const listGoalsQuerySchema = z.object({
+  employeeId: z.string().max(100).optional(),
+  status: z.string().max(50).optional(),
+  financialYear: z.string().max(50).optional(),
+  category: z.string().max(100).optional(),
+  scope: z.string().max(50).optional(),
+  page: z.coerce.number().int().min(1).optional().default(1),
+  limit: z.coerce.number().int().min(1).max(200).optional().default(100),
+});

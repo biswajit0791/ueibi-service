@@ -4,7 +4,7 @@
  *   - Department Master List & RBAC (/departments)
  *   - Employee Capacity, Exits, Reactivation, Ex-Employees & Non-Joiner Offers (/employees/*)
  *   - Corporate Gallery & Social Reactions (/gallery/*)
- *   - National Registry Cross-Tenant Candidate Search (/registry/*)
+ *   - Tenant-Scoped Registry Candidate Search (/registry/*)
  *   - Admin Registrations Overview (/admin/registrations/*)
  *   - Reference Reviews & Public Verification (/ex-employer-reviews, /public/ex-employer-review/*)
  *   - Leave Request Workflow Approval Aliases (/leaves/:id/approve, /leaves/:id/reject)
@@ -23,7 +23,7 @@ export const swaggerExtensions = {
     },
     {
       name: 'Registry',
-      description: 'Cross-tenant background check and employment verification registry',
+      description: 'Tenant-scoped background check and employment verification registry: search your own company\'s ex-employees, non-joiners, and current employees\' completed reference reviews',
     },
     {
       name: 'Team',
@@ -255,8 +255,8 @@ export const swaggerExtensions = {
         phone: { type: 'string', example: '+919876543210' },
         dob: { type: 'string', example: '1990' },
         industry: { type: 'string', example: 'Technology' },
-        skills: { type: 'string', example: 'Engineering, Performance, Registry Verified' },
-        linkedin: { type: 'string', example: 'linkedin.com/in/vikram' },
+        skills: { type: 'string', example: '', description: 'No skills field exists in the underlying data model — currently always an empty string, not a real filterable attribute.' },
+        linkedin: { type: 'string', nullable: true, example: null, description: 'No LinkedIn field exists in the underlying data model — currently always null.' },
         reviews: {
           type: 'array',
           items: {
@@ -267,6 +267,7 @@ export const swaggerExtensions = {
               employee_designation: { type: 'string', example: 'Staff Designer' },
               service_start: { type: 'string', nullable: true },
               service_end: { type: 'string', nullable: true },
+              date_of_joining: { type: 'string', nullable: true, description: 'Present only on non-joiner (declined/withdrew offer) reviews' },
               feedback: { type: 'string' },
               technical_rating: { type: 'integer', nullable: true, example: 9 },
               professional_rating: { type: 'integer', nullable: true, example: 9 },
@@ -1182,18 +1183,19 @@ export const swaggerExtensions = {
     '/registry/search': {
       get: {
         tags: ['Registry'],
-        summary: 'Universal candidate background and verification search',
-        description: 'Cross-tenant background search queries verified ex-employees, candidate non-joiners, and historical employer reference reviews by PAN, email, phone, designation, or rating thresholds.',
+        summary: 'Tenant-scoped candidate background and verification search',
+        description: 'Searches the caller\'s own tenant only: verified (Published, non-deleted) ex-employees, non-joiners, and current employees\' completed reference reviews, by PAN, email, phone, designation, or rating thresholds. Restricted to SUPER_ADMIN, ADMIN, CMD, HR, and FINANCE — matches the sidebar link visibility.',
         operationId: 'searchRegistryCandidates',
         security: [{ userCookie: [] }, { bearerAuth: [] }],
         parameters: [
-          { name: 'query', in: 'query', schema: { type: 'string' }, description: 'Universal search term: PAN or email' },
-          { name: 'name', in: 'query', schema: { type: 'string' }, description: 'Candidate first or last name' },
-          { name: 'designation', in: 'query', schema: { type: 'string' }, description: 'Role or designation title' },
-          { name: 'birthYear', in: 'query', schema: { type: 'string' }, description: 'Birth year YYYY' },
-          { name: 'phone', in: 'query', schema: { type: 'string' }, description: 'Phone number' },
-          { name: 'minTech', in: 'query', schema: { type: 'integer' }, description: 'Minimum technical rating filter (1-10)' },
-          { name: 'minAttitude', in: 'query', schema: { type: 'integer' }, description: 'Minimum attitude rating filter (1-10)' },
+          { name: 'query', in: 'query', schema: { type: 'string', maxLength: 200 }, description: 'Universal search term: PAN or email' },
+          { name: 'name', in: 'query', schema: { type: 'string', maxLength: 200 }, description: 'Candidate first or last name' },
+          { name: 'designation', in: 'query', schema: { type: 'string', maxLength: 200 }, description: 'Role or designation title' },
+          { name: 'birthYear', in: 'query', schema: { type: 'string', pattern: '^\\d{4}$' }, description: 'Birth year YYYY' },
+          { name: 'phone', in: 'query', schema: { type: 'string', maxLength: 50 }, description: 'Phone number' },
+          { name: 'linkedin', in: 'query', schema: { type: 'string', maxLength: 200 }, description: 'Accepted but currently unused — no LinkedIn field exists in the data model to filter against' },
+          { name: 'minTech', in: 'query', schema: { type: 'integer', minimum: 0, maximum: 10 }, description: 'Minimum technical rating filter (0-10)' },
+          { name: 'minAttitude', in: 'query', schema: { type: 'integer', minimum: 0, maximum: 10 }, description: 'Minimum attitude rating filter (0-10)' },
         ],
         responses: {
           200: {
@@ -1207,6 +1209,8 @@ export const swaggerExtensions = {
               },
             },
           },
+          400: { description: 'Validation failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+          403: { description: 'Forbidden — SUPER_ADMIN, ADMIN, CMD, HR, or FINANCE only' },
         },
       },
     },
@@ -1544,6 +1548,48 @@ export const swaggerExtensions = {
         },
       },
     },
+    // ═══════════════════════════════════════════════════════════════════════════
+    // GOALS / APPRAISAL — previously undocumented endpoints
+    // ═══════════════════════════════════════════════════════════════════════════
+    '/goals/{id}/activate-approve': {
+      post: {
+        tags: ['Goals'],
+        summary: 'Employee activates a PENDING_APPROVAL goal into ACTIVE',
+        description: 'First step of the goal lifecycle: PENDING_APPROVAL → ACTIVE (via this endpoint) → PENDING_MANAGER_REVIEW (via /submit) → PENDING_HR_REVIEW (via /approve) → COMPLETED (via /hr-approve).',
+        operationId: 'activateApproveGoal',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          content: { 'application/json': { schema: { type: 'object', properties: { comment: { type: 'string', maxLength: 500 } } } } },
+        },
+        responses: {
+          200: { description: 'Goal activated', content: { 'application/json': { schema: { $ref: '#/components/schemas/Goal' } } } },
+          400: { description: 'Validation failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+          403: { description: 'Forbidden' },
+          404: { description: 'Goal not found' },
+        },
+      },
+    },
+    '/appraisal-cycles/{id}/summary': {
+      get: {
+        tags: ['Appraisals'],
+        summary: 'Org-wide roll-up summary for one appraisal cycle',
+        description: 'Headcount vs. review status, per-department completion and average scores, and hike sign-off progress for one cycle. Tenant-scoped. Restricted to HR, SUPER_ADMIN, CMD, ADMIN.',
+        operationId: 'getAppraisalCycleSummary',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [
+          { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'department', in: 'query', schema: { type: 'string' }, description: 'Optional department filter' },
+        ],
+        responses: {
+          200: { description: 'Cycle summary' },
+          400: { description: 'Validation failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+          403: { description: 'Forbidden — HR/SUPER_ADMIN/CMD/ADMIN only' },
+          404: { description: 'Cycle not found' },
+        },
+      },
+    },
+
     '/disputes/{id}/attachment/{attachmentId}': {
       get: {
         tags: ['Disputes'],

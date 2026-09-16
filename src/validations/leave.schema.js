@@ -100,3 +100,49 @@ export const leaveBalanceAdjustmentSchema = z.object({
   message: 'Leave type is required when adjusting leave balances',
   path: ['leaveTypeId'],
 });
+
+// Every :id route in this file (leave type, leave request) is a single
+// bare id — one shared shape.
+export const idParamSchema = z.object({
+  id: z.string().min(1),
+});
+
+export const listLeaveTypesQuerySchema = z.object({
+  search: z.string().max(200).optional(),
+  status: z.string().max(50).optional(),
+  page: z.coerce.number().int().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+});
+
+export const yearQuerySchema = z.object({
+  year: z.coerce.number().int().min(2000).max(2100).optional(),
+});
+
+export const listEmployeeBalancesQuerySchema = z.object({
+  search: z.string().max(200).optional(),
+  year: z.coerce.number().int().min(2000).max(2100).optional(),
+  page: z.coerce.number().int().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+});
+
+export const listLeaveRequestsQuerySchema = z.object({
+  scope: z.string().max(50).optional().default('my'),
+  status: z.string().max(50).optional(),
+  leaveTypeId: z.string().max(100).optional(),
+  requestType: z.enum(['LEAVE', 'WFH']).optional(),
+  page: z.coerce.number().int().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+});
+
+export const leaveCalendarQuerySchema = z.object({
+  month: z.string().max(20).optional(),
+  year: z.coerce.number().int().min(2000).max(2100).optional(),
+  department: z.string().max(200).optional(),
+  leaveTypeId: z.string().max(100).optional(),
+});
+
+export const leaveAuditLogsQuerySchema = z.object({
+  action: z.string().max(100).optional(),
+  page: z.coerce.number().int().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+});

@@ -35,3 +35,7 @@ export const updateDepartmentSchema = z.object({
   sortOrder: z.coerce.number().int().min(0).optional(),
   isActive: z.boolean().optional(),
 });
+
+export const departmentIdParamSchema = z.object({
+  id: z.string().min(1),
+});

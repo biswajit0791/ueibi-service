@@ -1,7 +1,7 @@
 import { prisma } from '../lib/prisma.js';
 import { logTaskAudit } from './taskActivity.controller.js';
 import { emitToTenant } from '../lib/socket.js';
-import { createTaskSchema, updateTaskSchema, updateTaskStatusSchema } from '../validations/task.schema.js';
+import { createTaskSchema, updateTaskSchema, updateTaskStatusSchema, taskIdParamSchema, listTasksQuerySchema } from '../validations/task.schema.js';
 import { goalService } from '../services/goal.service.js';
 import { loadTaskForUser, getCompanionTaskId } from '../services/taskAccess.service.js';
 import { ELEVATED_ROLES, SUPER_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
@@ -276,8 +276,12 @@ export async function createTask(req, res, next) {
 // ─── GET /api/tasks ─────────────────────────────────────────────────────────
 export async function listTasks(req, res, next) {
   try {
+    const parsedQuery = listTasksQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
+    }
     const tenantId = req.tenantId;
-    const targetEmployeeId = req.query.employeeId || req.user.id;
+    const targetEmployeeId = parsedQuery.data.employeeId || req.user.id;
     const callerRole = String(req.user.role || '').toUpperCase();
     const isElevated = hasRole(req.user.role, ELEVATED_ROLES);
 
@@ -289,7 +293,7 @@ export async function listTasks(req, res, next) {
       const where = {
         tenantId,
         employeeId: req.user.id,
-        ...(req.query.fy ? { financialYear: req.query.fy } : {}),
+        ...(parsedQuery.data.fy ? { financialYear: parsedQuery.data.fy } : {}),
       };
       const items = await prisma.task.findMany({
         where,
@@ -396,7 +400,7 @@ export async function listTasks(req, res, next) {
       ...(targetEmployeeId !== req.user.id ? { isPrivate: false } : {}),
     };
 
-    const fy = req.query.fy;
+    const fy = parsedQuery.data.fy;
     if (fy) where.financialYear = fy;
 
     const items = await prisma.task.findMany({
@@ -413,7 +417,11 @@ export async function listTasks(req, res, next) {
 // ─── PATCH /api/tasks/:id/status ────────────────────────────────────────────
 export async function updateTaskStatus(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = taskIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid task ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const parsed = updateTaskStatusSchema.safeParse(req.body || {});
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
@@ -504,7 +512,11 @@ export async function updateTaskStatus(req, res, next) {
 // ─── PUT /api/tasks/:id ─────────────────────────────────────────────────────
 export async function updateTask(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = taskIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid task ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const tenantId = req.tenantId;
     const parsed = updateTaskSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -734,7 +746,11 @@ export async function updateTask(req, res, next) {
 // ─── DELETE /api/tasks/:id ───────────────────────────────────────────────────
 export async function deleteTask(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = taskIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid task ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const tenantId = req.tenantId;
 
     const existing = await assertTaskOwner(id, req.user, tenantId).catch(e => {

@@ -39,3 +39,10 @@ export function hasRole(role, group) {
 export function isElevated(role) {
   return hasRole(role, ELEVATED_ROLES);
 }
+
+export {
+  DASHBOARD_VISIBILITY,
+  DASHBOARD_ALLOWED_ROLES,
+  getVisibleDashboards,
+  canViewDashboard,
+} from './dashboardPermissions.js';

@@ -310,7 +310,11 @@ export async function toggleGalleryLike(req, res, next) {
   try {
     const tenantId = req.tenantId;
     const userId = req.user.id;
-    const { id: postId } = req.params;
+    const parsedParams = galleryIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid parameters', details: parsedParams.error.issues });
+    }
+    const { id: postId } = parsedParams.data;
 
     const post = await prisma.galleryPost.findFirst({ where: { id: postId, tenantId, isActive: true } });
     if (!post) return res.status(404).json({ error: 'Post not found' });
@@ -398,7 +402,11 @@ export async function toggleGalleryLike(req, res, next) {
 export async function getGalleryComments(req, res, next) {
   try {
     const tenantId = req.tenantId;
-    const { id: postId } = req.params;
+    const parsedParams = galleryIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid parameters', details: parsedParams.error.issues });
+    }
+    const { id: postId } = parsedParams.data;
 
     const post = await prisma.galleryPost.findFirst({ where: { id: postId, tenantId, isActive: true } });
     if (!post) return res.status(404).json({ error: 'Post not found' });
@@ -436,7 +444,11 @@ export async function addGalleryComment(req, res, next) {
     const tenantId = req.tenantId;
     const userId = req.user.id;
     const userName = req.user.name;
-    const { id: postId } = req.params;
+    const parsedParams = galleryIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid parameters', details: parsedParams.error.issues });
+    }
+    const { id: postId } = parsedParams.data;
 
     const parsed = addGalleryCommentSchema.safeParse(req.body || {});
     if (!parsed.success) {
@@ -510,7 +522,11 @@ export async function deleteGalleryComment(req, res, next) {
   try {
     const tenantId = req.tenantId;
     const user = req.user;
-    const { id } = req.params;
+    const parsedParams = galleryIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid parameters', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
 
     const comment = await prisma.galleryComment.findFirst({ where: { id, tenantId } });
     if (!comment) return res.status(404).json({ error: 'Comment not found' });
