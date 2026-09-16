@@ -39,3 +39,19 @@ export const updateDepartmentSchema = z.object({
 export const departmentIdParamSchema = z.object({
   id: z.string().min(1),
 });
+
+/**
+ * Query options for GET /departments.
+ *
+ * `limit` is intentionally optional with NO default: the department list also
+ * backs the "select a department" dropdowns (Employee Records, Team
+ * Directory), which need every department. Paginating by default would
+ * silently truncate those, so a page is only sliced when the caller
+ * explicitly asks for a limit.
+ */
+export const listDepartmentsQuerySchema = z.object({
+  includeArchived: z.enum(['true', 'false']).optional(),
+  search: z.string().trim().max(200).optional(),
+  page: z.coerce.number().int().min(1).optional().default(1),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+});

@@ -14,7 +14,12 @@
  */
 
 import { prisma } from '../lib/prisma.js';
-import { createDepartmentSchema, updateDepartmentSchema, departmentIdParamSchema } from '../validations/department.schema.js';
+import {
+  createDepartmentSchema,
+  updateDepartmentSchema,
+  departmentIdParamSchema,
+  listDepartmentsQuerySchema,
+} from '../validations/department.schema.js';
 
 // ─── Default seed list ────────────────────────────────────────────────────────
 // Applied automatically when a tenant has zero departments (first access).
@@ -61,7 +66,12 @@ async function seedDefaultsIfEmpty(tenantId) {
 export async function listDepartments(req, res, next) {
   try {
     const tenantId = req.tenantId;
-    const includeArchived = req.query.includeArchived === 'true';
+    const parsedQuery = listDepartmentsQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
+    }
+    const { search, page, limit } = parsedQuery.data;
+    const includeArchived = parsedQuery.data.includeArchived === 'true';
 
     // Auto-seed defaults on first access
     await seedDefaultsIfEmpty(tenantId);
@@ -70,10 +80,21 @@ export async function listDepartments(req, res, next) {
     if (!includeArchived) {
       where.isActive = true;
     }
+    if (search) {
+      where.OR = [
+        { name: { contains: search, mode: 'insensitive' } },
+        { description: { contains: search, mode: 'insensitive' } },
+      ];
+    }
+
+    const total = await prisma.department.count({ where });
 
     const departments = await prisma.department.findMany({
       where,
       orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+      // Only slice when the caller explicitly asked for a page size — the
+      // dropdown consumers call this without a limit and need every row.
+      ...(limit ? { skip: (page - 1) * limit, take: limit } : {}),
       select: {
         id: true,
         name: true,
@@ -100,7 +121,17 @@ export async function listDepartments(req, res, next) {
       usageCount: usageMap[d.name] ?? 0,
     }));
 
-    res.json({ departments: enriched });
+    // `departments` keeps its original shape/key so the existing dropdown
+    // consumers are unaffected; `pagination` is purely additive.
+    res.json({
+      departments: enriched,
+      pagination: {
+        page: limit ? page : 1,
+        limit: limit ?? total,
+        total,
+        totalPages: limit ? (Math.ceil(total / limit) || 1) : 1,
+      },
+    });
   } catch (err) {
     next(err);
   }
