@@ -1,7 +1,22 @@
 import { prisma } from '../lib/prisma.js';
+import { registrySearchQuerySchema } from '../validations/registry.schema.js';
 
+// Only records HR has actually published (and not soft-deleted) should be
+// searchable — a draft "Submitted" record is not yet HR-approved.
+const PUBLISHED_FILTER = { isDeleted: false, status: 'Published' };
+
+/**
+ * Tenant-scoped registry search: an HR/Admin at a given company can look up
+ * their own tenant's ex-employees, non-joiners, and current employees'
+ * completed reference reviews — not other companies' records. Every query
+ * below is filtered by req.tenantId for that reason.
+ */
 export async function searchRegistry(req, res, next) {
   try {
+    const parsed = registrySearchQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    }
     const {
       query,
       name,
@@ -11,7 +26,7 @@ export async function searchRegistry(req, res, next) {
       linkedin,
       minTech,
       minAttitude,
-    } = req.query || {};
+    } = parsed.data;
 
     const pansToFetch = new Set();
     const emailsToFetch = new Set();
@@ -24,6 +39,8 @@ export async function searchRegistry(req, res, next) {
       // Search ExEmployeeRecord
       const exRecs = await prisma.exEmployeeRecord.findMany({
         where: {
+          ...PUBLISHED_FILTER,
+          tenantId: req.tenantId,
           OR: [
             { pan: { equals: q, mode: 'insensitive' } },
             { email: { equals: qLower, mode: 'insensitive' } },
@@ -39,6 +56,8 @@ export async function searchRegistry(req, res, next) {
       // Search NonJoinerRecord
       const offerRecs = await prisma.nonJoinerRecord.findMany({
         where: {
+          ...PUBLISHED_FILTER,
+          tenantId: req.tenantId,
           OR: [
             { pan: { equals: q, mode: 'insensitive' } },
             { email: { equals: qLower, mode: 'insensitive' } },
@@ -54,6 +73,7 @@ export async function searchRegistry(req, res, next) {
       // Search TenantUser
       const users = await prisma.tenantUser.findMany({
         where: {
+          tenantId: req.tenantId,
           OR: [
             { pan: { equals: q, mode: 'insensitive' } },
             { email: { equals: qLower, mode: 'insensitive' } },
@@ -76,9 +96,9 @@ export async function searchRegistry(req, res, next) {
       }
     } else {
       // 2. Advanced Search Filter
-      const exWhere = {};
-      const njWhere = {};
-      const userWhere = {};
+      const exWhere = { ...PUBLISHED_FILTER, tenantId: req.tenantId };
+      const njWhere = { ...PUBLISHED_FILTER, tenantId: req.tenantId };
+      const userWhere = { tenantId: req.tenantId };
 
       if (name) {
         const nLower = name.trim().toLowerCase();
@@ -156,6 +176,8 @@ export async function searchRegistry(req, res, next) {
     const [allEx, allOffers, allUsers] = await Promise.all([
       prisma.exEmployeeRecord.findMany({
         where: {
+          ...PUBLISHED_FILTER,
+          tenantId: req.tenantId,
           OR: [
             { pan: { in: panList } },
             { email: { in: emailList } },
@@ -174,6 +196,8 @@ export async function searchRegistry(req, res, next) {
       }),
       prisma.nonJoinerRecord.findMany({
         where: {
+          ...PUBLISHED_FILTER,
+          tenantId: req.tenantId,
           OR: [
             { pan: { in: panList } },
             { email: { in: emailList } },
@@ -192,6 +216,7 @@ export async function searchRegistry(req, res, next) {
       }),
       prisma.tenantUser.findMany({
         where: {
+          tenantId: req.tenantId,
           OR: [
             { pan: { in: panList } },
             { email: { in: emailList } },
@@ -227,8 +252,10 @@ export async function searchRegistry(req, res, next) {
           phone: baseItem.phone || 'N/A',
           dob: baseItem.dob || '1995',
           industry: baseItem.department || 'Technology',
-          skills: 'Engineering, Performance, Registry Verified',
-          linkedin: 'linkedin.com/in/' + fname.toLowerCase(),
+          // No skills/LinkedIn field exists anywhere in the data model — leave
+          // these empty rather than fabricate values in a verification product.
+          skills: '',
+          linkedin: null,
           reviews: [],
         });
       }
@@ -274,7 +301,6 @@ export async function searchRegistry(req, res, next) {
         service_start: null,
         service_end: null,
         date_of_joining: r.dateOfJoining.toISOString().split('T')[0],
-        date_of_joininng: r.dateOfJoining.toISOString().split('T')[0],
         feedback: r.feedback,
         technical_rating: null,
         professional_rating: null,

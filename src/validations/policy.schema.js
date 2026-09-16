@@ -48,3 +48,26 @@ export const publishPolicySchema = z.object({
   assignees: z.union([z.array(z.string()), z.literal('ALL')]).optional(),
 });
 
+export const policyIdParamSchema = z.object({
+  id: z.string().min(1),
+});
+
+export const listPoliciesQuerySchema = z.object({
+  status: z.string().max(50).optional(),
+  category: z.string().max(100).optional(),
+  search: z.string().max(200).optional(),
+  page: z.coerce.number().int().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+});
+
+export const complianceRegistryQuerySchema = z.object({
+  policyId: z.string().max(100).optional(),
+  search: z.string().max(200).optional(),
+  page: z.coerce.number().int().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+});
+
+export const policyIdQuerySchema = z.object({
+  policyId: z.string().max(100).optional(),
+});
+

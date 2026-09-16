@@ -6642,10 +6642,16 @@ if (swaggerExtensions) {
     };
   }
   if (swaggerExtensions.paths) {
-    options.definition.paths = {
-      ...(options.definition.paths || {}),
-      ...swaggerExtensions.paths,
-    };
+    // Deep-merge per path: if both files define the same path key, merge
+    // their method maps (GET/POST/PATCH/...) instead of one whole-object
+    // replacing the other — a plain spread here previously let a narrower
+    // extensions entry (e.g. GET-only) silently delete methods (PATCH/DELETE)
+    // already documented for that same path in the base spec.
+    const mergedPaths = { ...(options.definition.paths || {}) };
+    for (const [path, methods] of Object.entries(swaggerExtensions.paths)) {
+      mergedPaths[path] = { ...(mergedPaths[path] || {}), ...methods };
+    }
+    options.definition.paths = mergedPaths;
   }
 }
 

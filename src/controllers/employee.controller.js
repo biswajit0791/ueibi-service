@@ -16,6 +16,7 @@ import {
   bulkExEmployeeSchema,
   bulkNonJoinerSchema,
   employeeIdOnlyParamSchema,
+  listEmployeesQuerySchema,
 } from '../validations/employee.schema.js';
 import { env } from '../config/env.js';
 import { canCreateRole, getAllowedRoles } from '../lib/roleHierarchy.js';
@@ -407,7 +408,11 @@ export async function onboardEmployee(req, res, next) {
 export async function listEmployees(req, res, next) {
   try {
     const tenantId = req.tenantId;
-    const { search, role, status } = req.query || {};
+    const parsedQuery = listEmployeesQuerySchema.safeParse(req.query || {});
+    if (!parsedQuery.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
+    }
+    const { search, role, status } = parsedQuery.data;
 
     const where = { tenantId, isDeleted: false };
 
@@ -1022,8 +1027,12 @@ export async function bulkAddNonJoiners(req, res, next) {
 export async function updateEmployee(req, res, next) {
   try {
     const tenantId = req.tenantId;
-    const { id } = req.params;
-    
+    const parsedParams = employeeIdOnlyParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid employee ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
+
     // updateEmployeeSchema is a strict allow-list — unknown keys (passwordHash,
     // status, role, isDeleted, tenantId, mustChangePassword, …) are dropped.
     const parsed = updateEmployeeSchema.safeParse(req.body);
@@ -1099,8 +1108,12 @@ export async function updateEmployee(req, res, next) {
 export async function updateExEmployee(req, res, next) {
   try {
     const tenantId = req.tenantId;
-    const { id } = req.params;
-    
+    const parsedParams = employeeIdOnlyParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid employee ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
+
     const parsed = updateExEmployeeSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
@@ -1167,8 +1180,12 @@ export async function updateExEmployee(req, res, next) {
 export async function updateNonJoiner(req, res, next) {
   try {
     const tenantId = req.tenantId;
-    const { id } = req.params;
-    
+    const parsedParams = employeeIdOnlyParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid employee ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
+
     const parsed = updateNonJoinerSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
@@ -1239,7 +1256,11 @@ export async function updateNonJoiner(req, res, next) {
  */
 export async function exitEmployee(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = employeeIdOnlyParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid employee ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const tenantId = req.tenantId;
 
     const parsed = exitEmployeeSchema.safeParse(req.body || {});
@@ -1353,7 +1374,11 @@ export async function exitEmployee(req, res, next) {
  */
 export async function reactivateEmployee(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = employeeIdOnlyParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid employee ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const tenantId = req.tenantId;
 
     const tenantUser = await prisma.tenantUser.findFirst({
@@ -1398,7 +1423,11 @@ export async function reactivateEmployee(req, res, next) {
 
 export async function deleteEmployee(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = employeeIdOnlyParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid employee ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const tenantId = req.tenantId;
 
     const userRecord = await prisma.tenantUser.findFirst({
@@ -1435,7 +1464,11 @@ export async function deleteEmployee(req, res, next) {
 
 export async function deleteExEmployee(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = employeeIdOnlyParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid employee ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const tenantId = req.tenantId;
 
     const record = await prisma.exEmployeeRecord.findFirst({
@@ -1459,7 +1492,11 @@ export async function deleteExEmployee(req, res, next) {
 
 export async function deleteNonJoiner(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = employeeIdOnlyParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid employee ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const tenantId = req.tenantId;
 
     const record = await prisma.nonJoinerRecord.findFirst({

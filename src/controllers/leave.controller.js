@@ -7,6 +7,13 @@ import {
   approvalActionSchema,
   wfhPolicySchema,
   leaveBalanceAdjustmentSchema,
+  idParamSchema,
+  listLeaveTypesQuerySchema,
+  yearQuerySchema,
+  listEmployeeBalancesQuerySchema,
+  listLeaveRequestsQuerySchema,
+  leaveCalendarQuerySchema,
+  leaveAuditLogsQuerySchema,
 } from '../validations/leave.schema.js';
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -36,7 +43,11 @@ export async function createLeaveType(req, res, next) {
 
 export async function listLeaveTypes(req, res, next) {
   try {
-    const { search, status, page, limit } = req.query;
+    const parsedQuery = listLeaveTypesQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
+    }
+    const { search, status, page, limit } = parsedQuery.data;
     const result = await leaveService.listLeaveTypes({
       tenantId: req.tenantId,
       search,
@@ -54,7 +65,11 @@ export async function listLeaveTypes(req, res, next) {
 
 export async function getLeaveTypeById(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = idParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const result = await leaveService.getLeaveTypeById({
       tenantId: req.tenantId,
       id,
@@ -69,7 +84,11 @@ export async function getLeaveTypeById(req, res, next) {
 
 export async function updateLeaveType(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = idParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const validated = updateLeaveTypeSchema.safeParse(req.body);
     if (!validated.success) {
       return res.status(400).json({ error: validated.error.errors[0]?.message || 'Invalid leave type data' });
@@ -92,7 +111,11 @@ export async function updateLeaveType(req, res, next) {
 
 export async function toggleLeaveTypeStatus(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = idParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const validated = leaveTypeStatusSchema.safeParse(req.body);
     if (!validated.success) {
       return res.status(400).json({ error: validated.error.errors[0]?.message || 'Invalid status data' });
@@ -115,7 +138,11 @@ export async function toggleLeaveTypeStatus(req, res, next) {
 
 export async function deleteLeaveType(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = idParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const result = await leaveService.deleteLeaveType({
       tenantId: req.tenantId,
       id,
@@ -152,10 +179,14 @@ export async function listActiveLeaveTypes(req, res, next) {
 
 export async function getMyLeaveBalances(req, res, next) {
   try {
+    const parsedQuery = yearQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
+    }
     const balances = await leaveService.getBalances({
       tenantId: req.tenantId,
       employeeId: req.user.id,
-      year: parseInt(req.query.year, 10) || new Date().getFullYear(),
+      year: parsedQuery.data.year || new Date().getFullYear(),
     });
 
     res.json(balances);
@@ -167,11 +198,15 @@ export async function getMyLeaveBalances(req, res, next) {
 
 export async function listEmployeeBalances(req, res, next) {
   try {
-    const { search, year, page, limit } = req.query;
+    const parsedQuery = listEmployeeBalancesQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
+    }
+    const { search, year, page, limit } = parsedQuery.data;
     const result = await leaveService.listEmployeeBalances({
       tenantId: req.tenantId,
       search,
-      year: parseInt(year, 10) || new Date().getFullYear(),
+      year: year || new Date().getFullYear(),
       page,
       limit,
     });
@@ -231,7 +266,11 @@ export async function createLeaveRequest(req, res, next) {
 
 export async function listLeaveRequests(req, res, next) {
   try {
-    const { scope = 'my', status, leaveTypeId, requestType, page, limit } = req.query;
+    const parsedQuery = listLeaveRequestsQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
+    }
+    const { scope, status, leaveTypeId, requestType, page, limit } = parsedQuery.data;
 
     const result = await leaveService.listRequests({
       tenantId: req.tenantId,
@@ -253,7 +292,11 @@ export async function listLeaveRequests(req, res, next) {
 
 export async function cancelLeaveRequest(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = idParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const cancelled = await leaveService.cancelRequest({
       tenantId: req.tenantId,
       requestId: id,
@@ -274,7 +317,11 @@ export async function cancelLeaveRequest(req, res, next) {
 
 export async function managerApproveLeave(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = idParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const validated = approvalActionSchema.safeParse({ action: 'APPROVE', comment: req.body?.comment });
     if (!validated.success) {
       return res.status(400).json({ error: validated.error.errors[0]?.message || 'Validation failed' });
@@ -298,7 +345,11 @@ export async function managerApproveLeave(req, res, next) {
 
 export async function managerRejectLeave(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = idParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const validated = approvalActionSchema.safeParse({ action: 'REJECT', comment: req.body?.comment });
     if (!validated.success) {
       return res.status(400).json({ error: validated.error.errors[0]?.message || 'Rejection reason is required' });
@@ -322,7 +373,11 @@ export async function managerRejectLeave(req, res, next) {
 
 export async function hrApproveLeave(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = idParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const validated = approvalActionSchema.safeParse({ action: 'APPROVE', comment: req.body?.comment });
     if (!validated.success) {
       return res.status(400).json({ error: validated.error.errors[0]?.message || 'Validation failed' });
@@ -346,7 +401,11 @@ export async function hrApproveLeave(req, res, next) {
 
 export async function hrRejectLeave(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = idParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const validated = approvalActionSchema.safeParse({ action: 'REJECT', comment: req.body?.comment });
     if (!validated.success) {
       return res.status(400).json({ error: validated.error.errors[0]?.message || 'Rejection reason is required' });
@@ -370,7 +429,11 @@ export async function hrRejectLeave(req, res, next) {
 
 export async function adminApproveLeave(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = idParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const validated = approvalActionSchema.safeParse({ action: 'APPROVE', comment: req.body?.comment });
     if (!validated.success) {
       return res.status(400).json({ error: validated.error.errors[0]?.message || 'Validation failed' });
@@ -394,7 +457,11 @@ export async function adminApproveLeave(req, res, next) {
 
 export async function adminRejectLeave(req, res, next) {
   try {
-    const { id } = req.params;
+    const parsedParams = idParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
     const validated = approvalActionSchema.safeParse({ action: 'REJECT', comment: req.body?.comment });
     if (!validated.success) {
       return res.status(400).json({ error: validated.error.errors[0]?.message || 'Rejection reason is required' });
@@ -501,11 +568,15 @@ export async function getLeaveOverviewStats(req, res, next) {
 
 export async function getLeaveCalendarView(req, res, next) {
   try {
-    const { month, year, department, leaveTypeId } = req.query;
+    const parsedQuery = leaveCalendarQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
+    }
+    const { month, year, department, leaveTypeId } = parsedQuery.data;
     const events = await leaveService.getCalendarView({
       tenantId: req.tenantId,
       month,
-      year: parseInt(year, 10) || new Date().getFullYear(),
+      year: year || new Date().getFullYear(),
       department,
       leaveTypeId,
     });
@@ -519,7 +590,11 @@ export async function getLeaveCalendarView(req, res, next) {
 
 export async function getLeaveAuditLogs(req, res, next) {
   try {
-    const { action, page, limit } = req.query;
+    const parsedQuery = leaveAuditLogsQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
+    }
+    const { action, page, limit } = parsedQuery.data;
     const logs = await leaveService.getAuditLogs({
       tenantId: req.tenantId,
       action,

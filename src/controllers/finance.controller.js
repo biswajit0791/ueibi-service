@@ -1,13 +1,19 @@
-import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { env } from '../config/env.js';
 import { findActionToken } from '../lib/actionTokens.js';
 import { computePricing, couponValidationError } from '../lib/pricing.js';
 import { generateRawToken, hashToken } from '../lib/tokens.js';
 import { notifyStakeholders } from '../lib/notify.js';
+import { pricingPreviewSchema, approveSchema, confirmChequeSchema } from '../validations/finance.schema.js';
+import { tokenParamSchema } from '../validations/publicToken.schema.js';
 
 async function resolveFinanceToken(req, res) {
-  const actionToken = await findActionToken(req.params.token, 'FINANCE');
+  const parsedParams = tokenParamSchema.safeParse(req.params);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: 'Invalid parameters', details: parsedParams.error.issues });
+    return null;
+  }
+  const actionToken = await findActionToken(parsedParams.data.token, 'FINANCE');
   if (!actionToken) {
     res.status(404).json({ error: 'Invalid link' });
     return null;
@@ -54,18 +60,16 @@ export async function getFinanceSummary(req, res, next) {
   }
 }
 
-const pricingPreviewSchema = z.object({
-  licenseQuantity: z.number().int().positive(),
-  couponCode: z.string().optional(),
-  gstin: z.string().optional(),
-});
-
 export async function pricingPreview(req, res, next) {
   try {
     const actionToken = await resolveFinanceToken(req, res);
     if (!actionToken) return;
 
-    const { licenseQuantity, couponCode } = pricingPreviewSchema.parse(req.body);
+    const parsed = pricingPreviewSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    }
+    const { licenseQuantity, couponCode } = parsed.data;
     const { coupon, error: couponError } = await lookupCoupon(couponCode);
 
     const pricing = computePricing({
@@ -77,19 +81,9 @@ export async function pricingPreview(req, res, next) {
 
     res.json({ ...pricing, couponValid: !!coupon, couponError });
   } catch (err) {
-    if (err?.name === 'ZodError') {
-      return res.status(400).json({ error: 'Validation failed', details: err.issues });
-    }
     next(err);
   }
 }
-
-const approveSchema = z.object({
-  licenseQuantity: z.number().int().positive(),
-  gstin: z.string().min(1),
-  couponCode: z.string().optional(),
-  paymentMethod: z.enum(['ONLINE', 'CHEQUE']),
-});
 
 async function commitCouponUsage(tx, coupon) {
   if (!coupon) return;
@@ -124,7 +118,11 @@ export async function approve(req, res, next) {
       return res.status(409).json({ error: 'Registration is not pending Finance review' });
     }
 
-    const data = approveSchema.parse(req.body);
+    const parsed = approveSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    }
+    const data = parsed.data;
     const { coupon, error: couponError } = await lookupCoupon(data.couponCode);
     if (data.couponCode && couponError) {
       return res.status(400).json({ error: couponError });
@@ -180,30 +178,27 @@ export async function approve(req, res, next) {
 
     return res.json({ status: 'PENDING_HR_ACTIVATION', paymentReference });
   } catch (err) {
-    if (err?.name === 'ZodError') {
-      return res.status(400).json({ error: 'Validation failed', details: err.issues });
-    }
     next(err);
   }
 }
 
-const confirmChequeSchema = z.object({
-  chequeNumber: z.string().min(1),
-  chequeDate: z.coerce.date(),
-  transactionId: z.string().min(1),
-});
-
 export async function confirmCheque(req, res, next) {
   try {
-    const actionToken = await findActionToken(req.params.token, 'FINANCE');
-    if (!actionToken) return res.status(404).json({ error: 'Invalid link' });
-
+    // Reuses resolveFinanceToken (rather than a bespoke findActionToken call)
+    // so this endpoint gets the same expiry check as pricingPreview/approve —
+    // previously it skipped that check entirely.
+    const actionToken = await resolveFinanceToken(req, res);
+    if (!actionToken) return;
     const { registration } = actionToken;
     if (registration.status !== 'PENDING_CHEQUE_CONFIRMATION') {
       return res.status(409).json({ error: 'Registration is not awaiting cheque confirmation' });
     }
 
-    const data = confirmChequeSchema.parse(req.body);
+    const parsed = confirmChequeSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    }
+    const data = parsed.data;
 
     const rawHrToken = await prisma.$transaction(async (tx) => {
       await tx.companyRegistration.update({
@@ -232,9 +227,6 @@ export async function confirmCheque(req, res, next) {
 
     res.json({ status: 'PENDING_HR_ACTIVATION' });
   } catch (err) {
-    if (err?.name === 'ZodError') {
-      return res.status(400).json({ error: 'Validation failed', details: err.issues });
-    }
     next(err);
   }
 }

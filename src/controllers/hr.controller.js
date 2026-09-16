@@ -1,9 +1,15 @@
 import { prisma } from '../lib/prisma.js';
 import { findActionToken } from '../lib/actionTokens.js';
 import { notifyStakeholders } from '../lib/notify.js';
+import { tokenParamSchema } from '../validations/publicToken.schema.js';
 
 async function resolveHrToken(req, res) {
-  const actionToken = await findActionToken(req.params.token, 'HR');
+  const parsedParams = tokenParamSchema.safeParse(req.params);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: 'Invalid parameters', details: parsedParams.error.issues });
+    return null;
+  }
+  const actionToken = await findActionToken(parsedParams.data.token, 'HR');
   if (!actionToken) {
     res.status(404).json({ error: 'Invalid link' });
     return null;

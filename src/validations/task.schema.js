@@ -98,3 +98,34 @@ export const updateTaskStatusSchema = z.object({
   progress: progressSchema,
 });
 
+export const taskIdParamSchema = z.object({
+  id: z.string().min(1),
+});
+
+export const listTasksQuerySchema = z.object({
+  // 'all' is a real accepted value (elevated/manager tenant-wide view), so
+  // this stays a bounded string rather than a cuid-shaped check.
+  employeeId: z.string().max(100).optional(),
+  fy: z.string().max(20).optional(),
+});
+
+export const taskCommentParamSchema = z.object({
+  id: z.string().min(1),
+  cid: z.string().min(1),
+});
+
+export const taskCommentAttachmentParamSchema = z.object({
+  id: z.string().min(1),
+  cid: z.string().min(1),
+  aid: z.string().min(1),
+});
+
+export const listTaskCommentsQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+});
+
+export const taskCommentAttachmentQuerySchema = z.object({
+  download: z.enum(['true', 'false']).optional(),
+});
+

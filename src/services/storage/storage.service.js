@@ -3,7 +3,7 @@ import { LocalStorageProvider } from './localStorage.provider.js';
 // Configuration & Security Constraints
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB limit
 
-const DISALLOWED_EXTENSIONS = new Set([
+export const DISALLOWED_EXTENSIONS = new Set([
   '.exe', '.bat', '.cmd', '.sh', '.js', '.vbs', '.php', '.py',
   '.dll', '.com', '.scr', '.jar', '.vbe', '.jse', '.wsf', '.wsh',
   '.msi', '.pif', '.reg', '.hta', '.cpl', '.apk'
