@@ -335,7 +335,7 @@ export const swaggerExtensions = {
           },
         },
         financialYear: { type: 'string', example: 'FY 2026-2027' },
-        projects: { type: 'array', items: { type: 'object' } },
+        projects: { type: 'array', items: { type: 'object' }, description: 'Derived from the employee\'s Goal/GoalAssignment records for this financial year (not a separate manually-entered project log).' },
         feedback: {
           type: 'object',
           properties: { count: { type: 'integer' }, averageRating: { type: 'string' }, items: { type: 'array', items: { type: 'object' } } },
@@ -1278,6 +1278,7 @@ export const swaggerExtensions = {
       get: {
         tags: ['Team'],
         summary: 'Standalone project engagements list for one employee/year',
+        description: 'Derived from the employee\'s Goal/GoalAssignment records for this financial year, mapped into a project-engagement shape (title→name, status/progress, owner vs. assignee).',
         operationId: 'getTeamMemberProjects',
         security: [{ userCookie: [] }, { bearerAuth: [] }],
         parameters: [
