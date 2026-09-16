@@ -30,6 +30,10 @@ export const swaggerExtensions = {
       description: 'Team Directory and Employee Detail: server-side filtered team listing, per-employee projects, 360 feedback, appraisal audit, training/certifications (with file attachments), and the achievements/incidents journal',
     },
     {
+      name: 'Reports',
+      description: 'Performance Reports: appraisal-backed analytics, multi-cycle trend, report catalog and CSV exports. Restricted to HR, SUPER_ADMIN, CMD, ADMIN.',
+    },
+    {
       name: 'Disputes',
       description: 'Dispute Center: employee support/grievance tickets with a chat-style resolution log, supporting-evidence attachments, and HR/Admin assignment & status workflow',
     },
@@ -456,6 +460,92 @@ export const swaggerExtensions = {
         size: { type: 'integer', example: 245678 },
       },
     },
+    // Overrides the stale base-spec AnalyticsSummary, which documented
+    // totalEmployees/activeGoals/completedTasks/averageAppraisalRating/
+    // leaveApprovalRate — none of which this endpoint has ever returned.
+    AnalyticsSummary: { $ref: '#/components/schemas/ReportsAnalytics' },
+    ReportsAnalytics: {
+      type: 'object',
+      properties: {
+        totalHeadcount: { type: 'integer', example: 11, description: 'Active, non-deleted employees' },
+        averageGoalProgress: { type: 'integer', example: 61 },
+        departmentPerformance: {
+          type: 'array',
+          description: 'Empty when the tenant has no reviews yet — never placeholder departments.',
+          items: {
+            type: 'object',
+            properties: {
+              dept: { type: 'string', example: 'Engineering' },
+              score: { type: 'number', example: 4.2, description: 'Avg manager score, falling back to avg self score' },
+              avgSelfScore: { type: 'number', nullable: true },
+              avgManagerScore: { type: 'number', nullable: true },
+              avgHrScore: { type: 'number', nullable: true },
+              employees: { type: 'integer', description: 'Active headcount in the department' },
+              completionRate: { type: 'number' },
+            },
+          },
+        },
+        cycle: { type: 'object', nullable: true, properties: { id: { type: 'string' }, name: { type: 'string' }, frequency: { type: 'string' }, status: { type: 'string' } } },
+        reviewSummary: {
+          type: 'object', nullable: true,
+          properties: {
+            totalReviews: { type: 'integer' },
+            byStatus: { type: 'object', properties: { DRAFT: { type: 'integer' }, SUBMITTED: { type: 'integer' }, MANAGER_REVIEWED: { type: 'integer' }, COMPLETED: { type: 'integer' } } },
+            completionRate: { type: 'number' },
+            hikeSummary: { type: 'object', properties: { avgHikePercentage: { type: 'number', nullable: true }, pendingRelease: { type: 'integer' }, released: { type: 'integer' } } },
+          },
+        },
+        goalSummary: {
+          type: 'object',
+          properties: { totalGoals: { type: 'integer' }, completedGoals: { type: 'integer' }, goalCompletionRate: { type: 'number' }, averageGoalProgress: { type: 'integer' } },
+        },
+      },
+    },
+    ReportsTrend: {
+      type: 'object',
+      properties: {
+        sufficientData: { type: 'boolean', description: 'False when fewer than two cycles have reviews' },
+        points: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              cycleId: { type: 'string' },
+              quarter: { type: 'string', example: 'Q3 2026', description: 'Cycle name; also the chart X-axis key' },
+              label: { type: 'string' },
+              frequency: { type: 'string' },
+              startDate: { type: 'string', format: 'date-time' },
+              avg: { type: 'number', example: 4.1 },
+              avgManagerScore: { type: 'number', nullable: true },
+              avgSelfScore: { type: 'number', nullable: true },
+              completionRate: { type: 'number' },
+              totalReviews: { type: 'integer' },
+            },
+          },
+        },
+      },
+    },
+    ReportCatalog: {
+      type: 'object',
+      properties: {
+        cycle: { type: 'object', nullable: true, properties: { id: { type: 'string' }, name: { type: 'string' } } },
+        reports: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              key: { type: 'string', example: 'appraisal-summary' },
+              name: { type: 'string' },
+              description: { type: 'string' },
+              scope: { type: 'string', example: 'cycle' },
+              scopeLabel: { type: 'string', example: 'FY 2026-2027' },
+              format: { type: 'string', example: 'CSV' },
+              rowCount: { type: 'integer', description: 'Live count of rows this report would produce now' },
+            },
+          },
+        },
+      },
+    },
     Dispute: {
       type: 'object',
       properties: {
@@ -528,12 +618,34 @@ export const swaggerExtensions = {
         security: [{ userCookie: [] }, { bearerAuth: [] }],
         parameters: [
           { name: 'includeArchived', in: 'query', schema: { type: 'boolean', default: false }, description: 'Include inactive/archived departments' },
+          { name: 'search', in: 'query', schema: { type: 'string', maxLength: 200 }, description: 'Case-insensitive match on department name or description' },
+          { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1, default: 1 }, description: 'Page number — only applied when `limit` is also supplied' },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 200 }, description: 'Page size. Optional and with NO default: omit it to get every matching department, which is what the department dropdowns rely on. Supplying it switches the response to a single page.' },
         ],
         responses: {
           200: {
-            description: 'List of departments',
-            content: { 'application/json': { schema: { type: 'object', properties: { departments: { type: 'array', items: { $ref: '#/components/schemas/Department' } } } } } },
+            description: 'List of departments (plus pagination metadata; when `limit` is omitted this is the complete list and totalPages is 1)',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    departments: { type: 'array', items: { $ref: '#/components/schemas/Department' } },
+                    pagination: {
+                      type: 'object',
+                      properties: {
+                        page: { type: 'integer' },
+                        limit: { type: 'integer' },
+                        total: { type: 'integer' },
+                        totalPages: { type: 'integer' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
           },
+          400: { $ref: '#/components/responses/ValidationError' },
           401: { $ref: '#/components/responses/Unauthorized' },
         },
       },
@@ -1549,6 +1661,88 @@ export const swaggerExtensions = {
         },
       },
     },
+    // ═══════════════════════════════════════════════════════════════════════════
+    // REPORTS: ANALYTICS, TREND, CATALOG, CSV EXPORTS
+    // ═══════════════════════════════════════════════════════════════════════════
+    '/reports/analytics': {
+      get: {
+        tags: ['Reports'],
+        summary: 'Appraisal-backed analytics for one cycle',
+        description: 'Headcount, per-department average appraisal scores, review status breakdown, hike sign-off progress and goal completion for the selected cycle (defaults to the tenant\'s most recent cycle). Department averages come from real PerformanceReview/ReviewScore data and reuse the same computation as GET /appraisal-cycles/{id}/summary. Returns an empty departmentPerformance array when no reviews exist — it never substitutes placeholder departments. Restricted to HR, SUPER_ADMIN, CMD, ADMIN.',
+        operationId: 'getReportsAnalytics',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [
+          { name: 'cycleId', in: 'query', schema: { type: 'string', maxLength: 100 }, description: 'Appraisal cycle to report on. Omit for the most recent cycle.' },
+          { name: 'department', in: 'query', schema: { type: 'string', maxLength: 200 }, description: 'Optional department filter' },
+        ],
+        responses: {
+          200: { description: 'Analytics summary', content: { 'application/json': { schema: { $ref: '#/components/schemas/ReportsAnalytics' } } } },
+          400: { description: 'Validation failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+          403: { description: 'Forbidden — HR/SUPER_ADMIN/CMD/ADMIN only' },
+          404: { description: 'Appraisal cycle not found' },
+        },
+      },
+    },
+    '/reports/trend': {
+      get: {
+        tags: ['Reports'],
+        summary: 'Organisation performance trend across real appraisal cycles',
+        description: 'One data point per actual appraisal cycle that has reviews, ordered oldest first. Cycles with no reviews are omitted rather than plotted as zero. `sufficientData` is false when fewer than two points exist, so the UI can say so instead of drawing a misleading line.',
+        operationId: 'getReportsTrend',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [
+          { name: 'frequency', in: 'query', schema: { type: 'string', enum: ['ANNUAL', 'QUARTERLY', 'MONTHLY'] }, description: 'Restrict the trend to one cycle cadence' },
+          { name: 'department', in: 'query', schema: { type: 'string', maxLength: 200 } },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 2, maximum: 24, default: 8 }, description: 'How many recent cycles to consider' },
+        ],
+        responses: {
+          200: { description: 'Trend points', content: { 'application/json': { schema: { $ref: '#/components/schemas/ReportsTrend' } } } },
+          400: { description: 'Validation failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+          403: { description: 'Forbidden — HR/SUPER_ADMIN/CMD/ADMIN only' },
+        },
+      },
+    },
+    '/reports/catalog': {
+      get: {
+        tags: ['Reports'],
+        summary: 'Available reports with live row counts',
+        description: 'Lists the downloadable reports and how many rows each would currently produce for the selected scope. All are CSV — no PDF/XLSX generation exists in this service.',
+        operationId: 'getReportCatalog',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [
+          { name: 'cycleId', in: 'query', schema: { type: 'string', maxLength: 100 } },
+          { name: 'department', in: 'query', schema: { type: 'string', maxLength: 200 } },
+        ],
+        responses: {
+          200: { description: 'Report catalog', content: { 'application/json': { schema: { $ref: '#/components/schemas/ReportCatalog' } } } },
+          400: { description: 'Validation failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+          403: { description: 'Forbidden — HR/SUPER_ADMIN/CMD/ADMIN only' },
+          404: { description: 'Appraisal cycle not found' },
+        },
+      },
+    },
+    '/reports/export/{reportKey}': {
+      get: {
+        tags: ['Reports'],
+        summary: 'Download one report as CSV',
+        description: 'Streams a UTF-8 CSV (with BOM, so Excel renders non-ASCII names correctly) as an attachment. `performance-goal-matrix` replaces the former 9-box grid: it plots manager appraisal rating against real goal completion, because no "potential" rating exists in this schema.',
+        operationId: 'exportReport',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [
+          { name: 'reportKey', in: 'path', required: true, schema: { type: 'string', enum: ['appraisal-summary', 'department-summary', 'goal-completion', 'peer-feedback-audit', 'performance-goal-matrix'] } },
+          { name: 'cycleId', in: 'query', schema: { type: 'string', maxLength: 100 } },
+          { name: 'department', in: 'query', schema: { type: 'string', maxLength: 200 } },
+          { name: 'financialYear', in: 'query', schema: { type: 'string', maxLength: 100 }, description: '4-digit appraisal form, e.g. "FY 2026-2027". Converted to the Goal/Task 2-digit form at the query boundary.' },
+        ],
+        responses: {
+          200: { description: 'CSV file', content: { 'text/csv': { schema: { type: 'string', format: 'binary' } } } },
+          400: { description: 'Invalid report key or query', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+          403: { description: 'Forbidden — HR/SUPER_ADMIN/CMD/ADMIN only' },
+          404: { description: 'Appraisal cycle not found' },
+        },
+      },
+    },
+
     // ═══════════════════════════════════════════════════════════════════════════
     // GOALS / APPRAISAL — previously undocumented endpoints
     // ═══════════════════════════════════════════════════════════════════════════
