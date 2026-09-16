@@ -147,9 +147,9 @@ model TenantUser {
   notifications       Notification[]       @relation("UserNotifications")
   createdEvents       HubEvent[]           @relation("EventCreator")
   passwordResetTokens PasswordResetToken[]
-  galleryPosts   GalleryPost[]       @relation("GalleryPostUploader")
-  galleryLikes   GalleryLike[]       @relation("GalleryLikeUser")
-  galleryComments GalleryComment[]   @relation("GalleryCommentAuthor")
+  galleryPosts        GalleryPost[]        @relation("GalleryPostUploader")
+  galleryLikes        GalleryLike[]        @relation("GalleryLikeUser")
+  galleryComments     GalleryComment[]     @relation("GalleryCommentAuthor")
 
   remarks   String?
   docs      Json?
@@ -364,12 +364,12 @@ model Goal {
   goalType            String?          @default("General") // General | Private
   category            String?
   priority            String? // low | medium | high | critical
-  createdBy           String?        // Legacy: creator name string (kept for backward compat)
-  createdById         String?        // FK to TenantUser who created this goal (null = legacy record)
-  createdByUser       TenantUser?    @relation("GoalCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  approvalMode        String?        // MANAGER_APPROVAL | AUTO_APPROVE | null (null = employee self-created)
-  progress            Int            @default(0)
-  status              String         @default("DRAFT") // DRAFT | PENDING_APPROVAL | ACTIVE | PENDING_MANAGER_REVIEW | PENDING_HR_REVIEW | CHANGES_REQUESTED | COMPLETED
+  createdBy           String? // Legacy: creator name string (kept for backward compat)
+  createdById         String? // FK to TenantUser who created this goal (null = legacy record)
+  createdByUser       TenantUser?      @relation("GoalCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  approvalMode        String? // MANAGER_APPROVAL | AUTO_APPROVE | null (null = employee self-created)
+  progress            Int              @default(0)
+  status              String           @default("DRAFT") // DRAFT | PENDING_APPROVAL | ACTIVE | PENDING_MANAGER_REVIEW | PENDING_HR_REVIEW | CHANGES_REQUESTED | COMPLETED
   financialYear       String?
   quarter             String?
   startDate           DateTime?
@@ -378,9 +378,9 @@ model Goal {
   specialNotes        String?          @db.Text
   dueDate             DateTime?
   employeeId          String?
-  employee            TenantUser?    @relation("GoalAssignee", fields: [employeeId], references: [id], onDelete: Cascade)
-  milestones          Int            @default(0)
-  completedMilestones Int            @default(0)
+  employee            TenantUser?      @relation("GoalAssignee", fields: [employeeId], references: [id], onDelete: Cascade)
+  milestones          Int              @default(0)
+  completedMilestones Int              @default(0)
   tasks               Task[]
   comments            GoalComment[]
   auditLogs           GoalAuditLog[]
@@ -1114,6 +1114,7 @@ model PasswordResetToken {
   @@index([expiresAt])
   @@map("password_reset_tokens")
 }
+
 // ── Corporate Gallery ───────────────────────────────────────────────────────
 
 model GalleryPost {
@@ -1178,16 +1179,16 @@ model Department {
   id          String   @id @default(cuid())
   tenantId    String
   tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  name        String                        // e.g. "Engineering", "Design"
+  name        String // e.g. "Engineering", "Design"
   description String?
-  color       String?                       // optional hex e.g. "#6366f1"
-  isActive    Boolean  @default(true)       // soft-delete — false = archived
-  createdBy   String?                       // TenantUser.id (nullable for seeded)
-  sortOrder   Int      @default(0)          // for custom ordering in the dropdown
+  color       String? // optional hex e.g. "#6366f1"
+  isActive    Boolean  @default(true) // soft-delete — false = archived
+  createdBy   String? // TenantUser.id (nullable for seeded)
+  sortOrder   Int      @default(0) // for custom ordering in the dropdown
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  @@unique([tenantId, name])               // no duplicate names within a tenant
+  @@unique([tenantId, name]) // no duplicate names within a tenant
   @@index([tenantId, isActive])
   @@map("departments")
 }

@@ -1,14 +1,14 @@
-import { Router } from 'express';
-import mediaController from '../controllers/media.controller.js';
-import { uploadMiddleware } from '../middleware/upload.js';
-import { uploadRateLimiter } from '../middleware/rateLimit.js';
+import { Router } from "express";
+import mediaController from "../controllers/media.controller.js";
+import { uploadMiddleware } from "../middleware/upload.js";
+import { uploadRateLimiter } from "../middleware/rateLimit.js";
 
 const router = Router();
 
 router.post(
-  '/media/upload',
+  "/media/upload",
   uploadRateLimiter,
-  uploadMiddleware.single('file'),
+  uploadMiddleware.single("file"),
   (req, res) => mediaController.uploadFile(req, res),
 );
 
