@@ -4,14 +4,14 @@ export const teamDirectoryQuerySchema = z.object({
   search: z.string().max(200).optional(),
   department: z.string().max(200).optional(),
   band: z.string().max(50).optional(),
-  financialYear: z.string().max(20).optional(),
+  financialYear: z.string().max(100).optional(),
   includeSelf: z.coerce.boolean().optional().default(false),
   page: z.coerce.number().int().min(1).optional().default(1),
   limit: z.coerce.number().int().min(1).max(100).optional().default(20),
 });
 
 export const teamMemberDetailQuerySchema = z.object({
-  financialYear: z.string().max(20).optional(),
+  financialYear: z.string().max(100).optional(),
 });
 
 export const employeeIdParamSchema = z.object({
@@ -45,7 +45,7 @@ export const trainingRecordCreateSchema = z.object({
   durationHours: z.coerce.number().int().min(0).max(10000).optional(),
   startedAt: z.string().optional(),
   completedAt: z.string().optional(),
-  financialYear: z.string().max(20).optional(),
+  financialYear: z.string().max(100).optional(),
 });
 
 export const trainingRecordUpdateSchema = z.object({
@@ -63,7 +63,7 @@ export const achievementCreateSchema = z.object({
   description: z.string().min(1).max(5000),
   category: z.string().max(100).optional(),
   occurredOn: z.string().min(1),
-  financialYear: z.string().max(20).optional(),
+  financialYear: z.string().max(100).optional(),
 });
 
 export const incidentCreateSchema = z.object({
@@ -71,7 +71,7 @@ export const incidentCreateSchema = z.object({
   description: z.string().min(1).max(5000),
   severity: z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']).optional(),
   occurredOn: z.string().min(1),
-  financialYear: z.string().max(20).optional(),
+  financialYear: z.string().max(100).optional(),
 });
 
 export const incidentUpdateSchema = z.object({

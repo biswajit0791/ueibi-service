@@ -141,10 +141,61 @@ async function resolveFinancialYear(tenantId, financialYear) {
 }
 
 /**
+ * Converts this page's 4-digit financial year ("FY 2026-2027", matched
+ * against AppraisalCycle.name) to the Goals module's 2-digit convention
+ * ("FY 2026-27", from getCurrentFinancialYear()) — mirrors the frontend's
+ * identical toGoalsFinancialYear() in TeamMemberDetail.jsx, converted only
+ * at this one query boundary rather than picking one format everywhere.
+ */
+function toGoalsFinancialYear(fy) {
+  const match = (fy || '').match(/(\d{4})/);
+  if (!match) return fy;
+  const start = parseInt(match[1], 10);
+  return `FY ${start}-${String(start + 1).slice(-2)}`;
+}
+
+/**
+ * "Project Engagements & Contributions" is sourced from real Goal/
+ * GoalAssignment data rather than the Project/ProjectContribution model —
+ * that model has no create endpoint anywhere in the app, so it is
+ * permanently empty by construction. Goals already tracks exactly this
+ * (title, status, progress, who owns/is assigned it) for real.
+ */
+async function loadGoalsAsProjects(tenantId, employeeId, financialYear) {
+  const goals = await prisma.goal.findMany({
+    where: {
+      tenantId,
+      financialYear: toGoalsFinancialYear(financialYear),
+      OR: [{ employeeId }, { assignments: { some: { employeeId } } }],
+    },
+    include: {
+      assignments: { where: { employeeId }, select: { status: true, progress: true } },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  return goals.map((g) => {
+    const assignment = g.assignments[0];
+    const status = assignment?.status || g.status;
+    const outcome = status === 'COMPLETED' ? 'COMPLETED' : status === 'CHANGES_REQUESTED' ? 'ON_HOLD' : 'IN_PROGRESS';
+    return {
+      id: g.id,
+      name: g.title,
+      description: g.description,
+      projectStatus: status,
+      roleOnProject: g.createdById === employeeId ? 'Goal Owner' : 'Assignee',
+      outcome,
+      startDate: g.startDate,
+      endDate: g.targetDate,
+    };
+  });
+}
+
+/**
  * GET /team/:employeeId/detail — aggregate endpoint powering the Team Member
- * Detail drilldown. Projects + 360 feedback + appraisal audit are real;
- * training/journal/advancement are honest "not built yet" stand-ins for
- * follow-up slices, never fake data.
+ * Detail drilldown. Projects (sourced from Goals — see loadGoalsAsProjects)
+ * + 360 feedback + appraisal audit are real; advancement is an honest "not
+ * built yet" stand-in for a follow-up slice, never fake data.
  */
 export async function getTeamMemberDetail(req, res, next) {
   try {
@@ -164,11 +215,7 @@ export async function getTeamMemberDetail(req, res, next) {
     const { cycle, financialYear } = await resolveFinancialYear(req.tenantId, parsedQuery.data.financialYear);
 
     const [projects, nominations, review, trainingRecords, achievements, incidents] = await Promise.all([
-      prisma.projectContribution.findMany({
-        where: { tenantId: req.tenantId, employeeId, financialYear },
-        include: { project: { select: { id: true, name: true, description: true, status: true } } },
-        orderBy: { createdAt: 'desc' },
-      }),
+      loadGoalsAsProjects(req.tenantId, employeeId, financialYear),
       // Not cycle-scoped, matching getReceivedPeerFeedback's fix earlier this
       // session — nominations can be tied to a different cycle than the one
       // being viewed here, and this page has no separate cycle picker.
@@ -273,16 +320,7 @@ export async function getTeamMemberDetail(req, res, next) {
     res.json({
       employee: targetEmployee,
       financialYear,
-      projects: projects.map((p) => ({
-        id: p.id,
-        name: p.project.name,
-        description: p.project.description,
-        projectStatus: p.project.status,
-        roleOnProject: p.roleOnProject,
-        outcome: p.outcome,
-        startDate: p.startDate,
-        endDate: p.endDate,
-      })),
+      projects,
       feedback,
       appraisal,
       training: trainingRecords.map((t) => ({
@@ -328,25 +366,9 @@ export async function getTeamMemberProjects(req, res, next) {
 
     const { financialYear } = await resolveFinancialYear(req.tenantId, parsedQuery.data.financialYear);
 
-    const projects = await prisma.projectContribution.findMany({
-      where: { tenantId: req.tenantId, employeeId, financialYear },
-      include: { project: { select: { id: true, name: true, description: true, status: true } } },
-      orderBy: { createdAt: 'desc' },
-    });
+    const projects = await loadGoalsAsProjects(req.tenantId, employeeId, financialYear);
 
-    res.json({
-      financialYear,
-      projects: projects.map((p) => ({
-        id: p.id,
-        name: p.project.name,
-        description: p.project.description,
-        projectStatus: p.project.status,
-        roleOnProject: p.roleOnProject,
-        outcome: p.outcome,
-        startDate: p.startDate,
-        endDate: p.endDate,
-      })),
-    });
+    res.json({ financialYear, projects });
   } catch (err) {
     next(err);
   }
