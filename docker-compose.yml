@@ -1,52 +1,135 @@
+# UEIBI infrastructure — safe to run on a local machine AND on a live server.
+#
+#   docker compose up -d                  Kafka + Zookeeper (what the app needs)
+#   docker compose --profile dev up -d    ...plus local Mongo/MySQL for offline work
+#
+# Every port binds to 127.0.0.1 on purpose. Kafka speaks PLAINTEXT with no
+# authentication, so publishing it to 0.0.0.0 would let anyone on the internet
+# subscribe to the chat topic and read every message across every tenant, or
+# inject forged events — the API's auth and tenant scoping sit in FRONT of
+# Kafka, not behind it. Loopback costs nothing because the API runs on the same
+# host and dials 127.0.0.1:9092.
+#
+# On Linux, Docker writes its own iptables rules that are evaluated BEFORE UFW,
+# so `ufw deny 9092` does NOT close a port published to 0.0.0.0. The bind
+# address below is the real protection — do not remove it.
+#
+# mongodb and mysql are behind the `dev` profile because the application does
+# not use them: it reads MONGODB_URI (Atlas) and Prisma's provider is
+# postgresql. They stay available for offline local work but never start on a
+# server by accident.
+
 services:
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
     container_name: ueibi-zookeeper
     restart: unless-stopped
+    ports:
+      # Only Kafka needs this, and it reaches it over the compose network.
+      # Exposed on loopback purely for local inspection.
+      - "127.0.0.1:2181:2181"
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
-    ports:
-      - "2181:2181"
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_log:/var/lib/zookeeper/log
+    healthcheck:
+      test: ["CMD-SHELL", "echo ruok | nc -w 2 localhost 2181 | grep imok"]
+      interval: 15s
+      timeout: 10s
+      retries: 6
+      start_period: 20s
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   kafka:
     image: confluentinc/cp-kafka:7.5.0
     container_name: ueibi-kafka
     restart: unless-stopped
     depends_on:
-      - zookeeper
+      zookeeper:
+        condition: service_healthy
     ports:
-      - "9092:9092"
+      # Loopback ONLY — see the header. Changing this to "9092:9092" exposes an
+      # unauthenticated broker, and with it all chat traffic, to the internet.
+      - "127.0.0.1:9092:9092"
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+
+      # PLAINTEXT is what the host-side API uses over loopback;
+      # PLAINTEXT_INTERNAL is for container-to-container traffic if the API is
+      # ever moved into this compose file.
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_INTERNAL://0.0.0.0:29092
+      # Must match how clients dial in — the API uses KAFKA_BROKERS=127.0.0.1:9092.
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://127.0.0.1:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
+
+      # Single broker, so replication factor 1 throughout. This is NOT highly
+      # available: if the broker dies, chat degrades to the direct write-through
+      # path (messages still persist and deliver) rather than failing.
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_MIN_INSYNC_REPLICAS: 1
 
+      # Producers create ueibi-chat-events / ueibi-gallery-events on first use.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: 3
+
+      # PostgreSQL is the source of truth; Kafka only carries the projection
+      # stream, so a week of retention is plenty and bounds disk usage.
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_RETENTION_BYTES: 2147483648
+
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_HEAP_OPTS: "-Xmx1G -Xms512M"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 45s
+    logging: *logging
+
+  # ── Local-only extras (docker compose --profile dev up -d) ─────────────────
+  # Not used by the application. Unauthenticated, so loopback-bound as well.
   mongodb:
     image: mongo:7.0
     container_name: ueibi-mongo
+    profiles: ["dev"]
     restart: unless-stopped
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
     volumes:
       - mongo_data:/data/db
+    logging: *logging
 
   mysql:
     image: mysql:8
     container_name: ueibi-mysql
+    profiles: ["dev"]
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: password
       MYSQL_DATABASE: ueibi_dev
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
+    logging: *logging
 
 volumes:
+  zookeeper_data:
+  zookeeper_log:
+  kafka_data:
   mongo_data:
   mysql_data:
