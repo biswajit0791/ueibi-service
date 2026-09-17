@@ -1,6 +1,7 @@
 import { verifyToken } from '../lib/jwt.js';
 import { parseCookies } from '../lib/adminAuth.js';
 import { prisma } from '../lib/prisma.js';
+import { loadCapabilities } from '../lib/capabilities.js';
 
 export async function requireAuth(req, res, next) {
   try {
@@ -42,12 +43,18 @@ export async function requireAuth(req, res, next) {
       return res.status(403).json({ error: 'Access forbidden: this account is inactive/exited' });
     }
 
+    // Capabilities are read fresh alongside the user (same rationale as
+    // re-checking the user itself): a revoked grant must take effect at once,
+    // not linger until the JWT expires.
+    const capabilities = await loadCapabilities(user.id);
+
     req.user = {
       id: user.id,
       email: user.email,
       role: user.role,
       name: user.name,
       tenantId: user.tenantId,
+      capabilities,
     };
     req.tenantId = user.tenantId;
 

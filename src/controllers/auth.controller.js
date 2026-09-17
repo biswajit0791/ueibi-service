@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { prisma } from '../lib/prisma.js';
 import { signToken } from '../lib/jwt.js';
+import { loadCapabilities } from '../lib/capabilities.js';
 import { env } from '../config/env.js';
 import { generateRawToken, hashToken } from '../lib/tokens.js';
 import { sendMail } from '../lib/mailer.js';
@@ -158,6 +159,8 @@ export async function login(req, res, next) {
       user.email = normalizedEmail;
     }
 
+    const userCapabilities = await loadCapabilities(user.id);
+
     const token = signToken({
       userId: user.id,
       email: user.email,
@@ -182,6 +185,7 @@ export async function login(req, res, next) {
         email: user.email,
         name: user.name,
         role: user.role,
+        capabilities: userCapabilities,
         status: user.status,
         mustChangePassword: user.mustChangePassword,
         tenantId: user.tenantId,
@@ -237,12 +241,15 @@ export async function me(req, res, next) {
     }
 
 
+    const userCapabilities = await loadCapabilities(user.id);
+
     res.json({
       user: {
         id: user.id,
         email: user.email,
         name: user.name,
         role: user.role,
+        capabilities: userCapabilities,
         status: user.status,
         mustChangePassword: user.mustChangePassword,
         tenantId: user.tenantId,

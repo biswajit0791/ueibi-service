@@ -28,6 +28,7 @@ import galleryRoutes from './routes/gallery.routes.js';
 import departmentRoutes from './routes/department.routes.js';
 import mediaRoutes from './routes/media.routes.js';
 import messageRoutes from './routes/message.routes.js';
+import cxoRoutes from './routes/cxo.routes.js';
 import teamRoutes from './routes/team.routes.js';
 import disputeRoutes from './routes/dispute.routes.js';
 import { notFound } from './middleware/notFound.js';
@@ -106,6 +107,7 @@ apiRouter.use(galleryRoutes);
 apiRouter.use(departmentRoutes);
 apiRouter.use(mediaRoutes);
 apiRouter.use(messageRoutes);
+apiRouter.use(cxoRoutes);
 apiRouter.use(teamRoutes);
 apiRouter.use(disputeRoutes);
 if (env.nodeEnv !== 'production') {
