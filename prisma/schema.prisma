@@ -1405,20 +1405,38 @@ model Department {
 }
 
 // ── Chat Messages ──────────────────────────────────────────────────────────
+// ─── Direct Messaging ─────────────────────────────────────────────────────────
+// PostgreSQL is the source of truth for chat. Every write is mirrored into
+// MongoDB (the read model) via a Kafka event; see services/messageMongo.service.js.
+// `conversationId` is deterministic for a 1:1 pair — see lib/conversation.js.
 model Message {
-  id         String   @id @default(cuid())
-  senderId   String
-  text       String   @db.Text
-  mediaUrl   String?
-  mediaType  String?
-  fileName   String?
-  fileSize   Int?
-  isDeleted  Boolean  @default(false)
-  deletedFor String[] @default([])
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id             String        @id @default(cuid())
+  tenantId       String
+  conversationId String
+  senderId       String
+  receiverId     String?
+  text           String        @db.Text
+  mediaUrl       String?
+  mediaType      String?
+  fileName       String?
+  fileSize       Int?
+  status         MessageStatus @default(SENT)
+  deliveredAt    DateTime?
+  readAt         DateTime?
+  isDeleted      Boolean       @default(false)
+  deletedFor     String[]      @default([])
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
 
   @@index([senderId])
   @@index([createdAt])
+  @@index([tenantId, conversationId, createdAt])
+  @@index([tenantId, receiverId, status])
   @@map("messages")
+}
+
+enum MessageStatus {
+  SENT
+  DELIVERED
+  READ
 }

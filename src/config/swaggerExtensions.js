@@ -12,6 +12,69 @@
  */
 
 export const swaggerExtensions = {
+  // OpenAPI 3.0 has no way to describe a WebSocket surface, so the Socket.IO
+  // contract is published as a vendor extension (`x-socket-events` on the root
+  // document) rather than left undocumented. Every client->server payload is
+  // validated with the same Zod schemas the REST controllers use.
+  socketEvents: {
+    transport: 'Socket.IO v4, same origin and port as the REST API',
+    authentication:
+      'The handshake requires a JWT, read from `auth.token`, the `Authorization: Bearer` header, or the `ueibi_session` cookie. ' +
+      'An unauthenticated connection is refused with "Authentication error: Token required". ' +
+      'The socket identity is authoritative: a senderId/userId inside any payload is ignored.',
+    rooms:
+      'On connect the socket joins `tenant_<tenantId>` and `tenant:<tenantId>:user:<userId>`. Chat events are delivered only to the two participants\' per-user rooms, never tenant-wide.',
+    clientToServer: {
+      'chat:send': {
+        description: 'Send a message. Acknowledged with the stored message.',
+        payload: { peerId: 'string (required)', text: 'string, max 4000', clientId: 'string, echoed back for optimistic reconciliation', mediaUrl: 'string|null', mediaType: 'string|null', fileName: 'string|null', fileSize: 'integer|null' },
+        ack: '{ ok: true, message: ChatMessage, clientId } | { ok: false, error, details?, clientId }',
+        validatedBy: 'sendMessageSchema',
+      },
+      'chat:read': {
+        description: 'Mark every message from the peer as READ.',
+        payload: { peerId: 'string (required)' },
+        ack: '{ ok: true, conversationId, read } | { ok: false, error, details? }',
+        validatedBy: 'peerIdBodySchema',
+      },
+      'chat:delete': {
+        description: 'Hide a message for yourself, or retract it for both sides (sender only).',
+        payload: { messageId: 'string (required)', scope: "'me' | 'everyone' (default 'me')" },
+        ack: '{ ok: true, messageId } | { ok: false, error, details? }',
+        validatedBy: 'socketDeleteSchema',
+      },
+      'chat:clear': {
+        description: 'Clear one conversation for yourself; the peer keeps their copy.',
+        payload: { peerId: 'string (required)' },
+        ack: '{ ok: true, conversationId, cleared } | { ok: false, error, details? }',
+        validatedBy: 'peerIdBodySchema',
+      },
+      'chat:typing': {
+        description: 'Transient typing signal. Not persisted and not routed through Kafka. Fire-and-forget: an invalid payload is dropped silently.',
+        payload: { peerId: 'string (required)', typing: 'boolean' },
+        ack: 'none',
+        validatedBy: 'socketTypingSchema',
+      },
+      'chat:presence_check': {
+        description: 'Ask whether one peer is currently online.',
+        payload: { peerId: 'string (required)' },
+        ack: '{ online: boolean } | { ok: false, error, details? }',
+        validatedBy: 'socketPresenceSchema',
+      },
+    },
+    serverToClient: {
+      'chat:message': 'A new message for this conversation (ChatMessage).',
+      'chat:message_deleted': 'A message was retracted for everyone: { messageId, conversationId }.',
+      'chat:message_deleted_for_me': 'Sent only to the user who hid it: { messageId, conversationId }.',
+      'chat:conversation_cleared': 'Sent only to the user who cleared it: { conversationId }.',
+      'chat:conversation_read': 'Read receipt: { conversationId, readerId, readAt }.',
+      'chat:messages_delivered': 'Delivery receipt: { conversationId, messageIds, deliveredAt }.',
+      'chat:typing': '{ conversationId, userId, typing }.',
+      'chat:presence': 'A peer came online or went offline: { userId, online }.',
+      'chat:presence_snapshot': 'Sent once on connect: { online: string[] }.',
+    },
+  },
+
   tags: [
     {
       name: 'Departments',
@@ -37,9 +100,105 @@ export const swaggerExtensions = {
       name: 'Disputes',
       description: 'Dispute Center: employee support/grievance tickets with a chat-style resolution log, supporting-evidence attachments, and HR/Admin assignment & status workflow',
     },
+    {
+      name: 'Chat',
+      description:
+        'Tenant-scoped 1:1 direct messaging. PostgreSQL is the source of truth; every write is fanned out through Apache Kafka, projected into MongoDB (the read model) and pushed to both participants over Socket.IO. ' +
+        'Reads are served from MongoDB and fall back to PostgreSQL automatically — the `source` field on each response reports which store answered. ' +
+        'Identity always comes from the verified session: a `senderId`/`userId` in a request body or socket payload is ignored. ' +
+        'Live events are documented under the `x-socket-events` extension on this spec.',
+    },
   ],
 
   schemas: {
+    // ── Chat schemas ──
+    ChatMessage: {
+      type: 'object',
+      description: 'One direct message, in the shape both the REST and Socket.IO surfaces return.',
+      properties: {
+        id: { type: 'string', example: 'cmu57y5u60000uu5wbvt6jhf5' },
+        tenantId: { type: 'string', example: 'cmtk36q8w0000uugcje3gk1pf' },
+        conversationId: {
+          type: 'string',
+          description: 'Deterministic key for the pair: `<tenantId>:<sortedUserIdA>__<sortedUserIdB>`. Both participants derive the same value.',
+          example: 'cmtk36q8w0000uugcje3gk1pf:cmtk36qg40002uugct2yczbge__cmtk36qm80004uugc0pfwdr3n',
+        },
+        senderId: { type: 'string', example: 'cmtk36qg40002uugct2yczbge' },
+        receiverId: { type: 'string', nullable: true, example: 'cmtk36qm80004uugc0pfwdr3n' },
+        text: { type: 'string', example: 'Can we move the 1:1 to 4pm?' },
+        mediaUrl: { type: 'string', nullable: true, example: '/uploads/1758096000000-123456789.png' },
+        mediaType: { type: 'string', nullable: true, example: 'image/png' },
+        fileName: { type: 'string', nullable: true, example: 'sprint-board.png' },
+        fileSize: { type: 'integer', nullable: true, example: 284913 },
+        status: {
+          type: 'string',
+          enum: ['SENT', 'DELIVERED', 'READ'],
+          description: 'Delivery receipt state. DELIVERED is set when the recipient opens the conversation; READ when they view it.',
+          example: 'DELIVERED',
+        },
+        deliveredAt: { type: 'string', format: 'date-time', nullable: true },
+        readAt: { type: 'string', format: 'date-time', nullable: true },
+        isDeleted: {
+          type: 'boolean',
+          description: 'True when retracted for everyone. Text is replaced and media stripped.',
+          example: false,
+        },
+        createdAt: { type: 'string', format: 'date-time' },
+      },
+    },
+    ChatPeer: {
+      type: 'object',
+      description: 'The other participant, resolved from the tenant user directory.',
+      properties: {
+        id: { type: 'string', example: 'cmtk36qm80004uugc0pfwdr3n' },
+        name: { type: 'string', example: 'Ashish Parida' },
+        designation: { type: 'string', nullable: true, example: 'Developer' },
+        department: { type: 'string', nullable: true, example: 'Tech' },
+        role: { type: 'string', example: 'EMPLOYEE' },
+        profileSnaps: { type: 'array', items: { type: 'string' } },
+      },
+    },
+    ChatConversationSummary: {
+      type: 'object',
+      description: 'One row of the Messages inbox.',
+      properties: {
+        conversationId: { type: 'string' },
+        unread: { type: 'integer', description: 'Messages from the peer not yet marked READ', example: 2 },
+        peer: { $ref: '#/components/schemas/ChatPeer' },
+        lastMessage: { $ref: '#/components/schemas/ChatMessage' },
+      },
+    },
+    SendChatMessageRequest: {
+      type: 'object',
+      required: ['peerId'],
+      description: 'Text, media, or both — a message with neither is rejected.',
+      properties: {
+        peerId: {
+          type: 'string',
+          maxLength: 100,
+          description: 'Recipient user id. Must be an active, non-deleted user in the SAME tenant, and not the caller.',
+          example: 'cmtk36qm80004uugc0pfwdr3n',
+        },
+        text: { type: 'string', maxLength: 4000, example: 'Can we move the 1:1 to 4pm?' },
+        mediaUrl: {
+          type: 'string',
+          nullable: true,
+          maxLength: 2000,
+          description: 'Must be an uploaded file path (`/uploads/...`, `/api/uploads/...`) or an http(s) URL.',
+        },
+        mediaType: { type: 'string', nullable: true, maxLength: 150, example: 'image/png' },
+        fileName: { type: 'string', nullable: true, maxLength: 255 },
+        fileSize: { type: 'integer', nullable: true, maximum: 52428800, description: 'Bytes; 50MB ceiling' },
+      },
+    },
+    PeerIdRequest: {
+      type: 'object',
+      required: ['peerId'],
+      properties: {
+        peerId: { type: 'string', maxLength: 100, example: 'cmtk36qm80004uugc0pfwdr3n' },
+      },
+    },
+
     // ── Department schemas ──
     Department: {
       type: 'object',
@@ -607,6 +766,251 @@ export const swaggerExtensions = {
 
   paths: {
     // ═══════════════════════════════════════════════════════════════════════════
+    // CHAT — 1:1 direct messaging
+    // ═══════════════════════════════════════════════════════════════════════════
+    '/messages': {
+      get: {
+        tags: ['Chat'],
+        summary: 'Fetch a conversation',
+        description:
+          'Returns the message history with one peer, oldest-first, excluding anything the caller deleted for themselves. ' +
+          'Served from MongoDB, falling back to PostgreSQL when Mongo is unreachable — `source` says which answered. ' +
+          'As a side effect, any of the peer\'s messages still marked SENT are moved to DELIVERED.',
+        operationId: 'getChatMessages',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        parameters: [
+          { name: 'peerId', in: 'query', required: true, schema: { type: 'string', maxLength: 100 }, description: 'The other participant. Must be an active user in the caller tenant.' },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 200, default: 100 }, description: 'Newest N messages.' },
+          { name: 'before', in: 'query', schema: { type: 'string', format: 'date-time' }, description: 'Cursor for older pages: return messages created strictly before this timestamp.' },
+        ],
+        responses: {
+          200: {
+            description: 'Conversation history',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean', example: true },
+                    conversationId: { type: 'string' },
+                    source: { type: 'string', enum: ['mongodb', 'postgres'], description: 'Which store served this read' },
+                    data: { type: 'array', items: { $ref: '#/components/schemas/ChatMessage' } },
+                  },
+                },
+              },
+            },
+          },
+          400: { $ref: '#/components/responses/ValidationError' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          404: { description: 'Recipient not found in this organisation' },
+        },
+      },
+      post: {
+        tags: ['Chat'],
+        summary: 'Send a message (REST fallback)',
+        description:
+          'Persists to PostgreSQL, publishes a Kafka event keyed by `conversationId`, and the consumer projects it into MongoDB and pushes it to both participants. ' +
+          'Clients normally send over Socket.IO (`chat:send`); this endpoint exists for when the socket is unavailable. ' +
+          'The sender is always the authenticated user — a `senderId` in the body is ignored.',
+        operationId: 'sendChatMessage',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/SendChatMessageRequest' } } } },
+        responses: {
+          201: {
+            description: 'Message stored and dispatched',
+            content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, data: { $ref: '#/components/schemas/ChatMessage' } } } } },
+          },
+          400: { $ref: '#/components/responses/ValidationError' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          404: { description: 'Recipient not found in this organisation' },
+        },
+      },
+    },
+
+    '/messages/conversations': {
+      get: {
+        tags: ['Chat'],
+        summary: 'Inbox list',
+        description:
+          'Every conversation the caller takes part in, newest activity first, each resolved to the peer profile with the last message and an unread count. Backs the Messages page.',
+        operationId: 'listChatConversations',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        responses: {
+          200: {
+            description: 'Conversation list',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean' },
+                    source: { type: 'string', enum: ['mongodb', 'postgres'] },
+                    conversations: { type: 'array', items: { $ref: '#/components/schemas/ChatConversationSummary' } },
+                  },
+                },
+              },
+            },
+          },
+          401: { $ref: '#/components/responses/Unauthorized' },
+        },
+      },
+    },
+
+    '/messages/unread': {
+      get: {
+        tags: ['Chat'],
+        summary: 'Unread counts per conversation',
+        description: 'Lightweight counts for badges, without loading any message bodies.',
+        operationId: 'getChatUnreadCounts',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        responses: {
+          200: {
+            description: 'Unread counts',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean' },
+                    source: { type: 'string', enum: ['mongodb', 'postgres'] },
+                    conversations: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          conversationId: { type: 'string' },
+                          unread: { type: 'integer', example: 3 },
+                          lastAt: { type: 'string', format: 'date-time' },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          401: { $ref: '#/components/responses/Unauthorized' },
+        },
+      },
+    },
+
+    '/messages/read': {
+      post: {
+        tags: ['Chat'],
+        summary: 'Mark a conversation read',
+        description: 'Marks every message from the peer as READ and emits `chat:conversation_read` so the sender sees the receipt.',
+        operationId: 'markChatConversationRead',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/PeerIdRequest' } } } },
+        responses: {
+          200: {
+            description: 'Marked read',
+            content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, conversationId: { type: 'string' }, read: { type: 'integer', description: 'How many messages changed state' } } } } },
+          },
+          400: { $ref: '#/components/responses/ValidationError' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          404: { description: 'Recipient not found in this organisation' },
+        },
+      },
+    },
+
+    '/messages/clear': {
+      delete: {
+        tags: ['Chat'],
+        summary: 'Clear one conversation for yourself',
+        description:
+          'Hides every message in this conversation from the caller only — the peer keeps their copy and no rows are destroyed. ' +
+          'There is deliberately no endpoint that wipes messages globally. `peerId` may be sent in the body or the query string.',
+        operationId: 'clearChatConversation',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        parameters: [
+          { name: 'peerId', in: 'query', required: false, schema: { type: 'string', maxLength: 100 }, description: 'Alternative to sending peerId in the body.' },
+        ],
+        requestBody: { required: false, content: { 'application/json': { schema: { $ref: '#/components/schemas/PeerIdRequest' } } } },
+        responses: {
+          200: {
+            description: 'Conversation cleared for the caller',
+            content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, conversationId: { type: 'string' }, cleared: { type: 'integer', description: 'Messages hidden' } } } } },
+          },
+          400: { $ref: '#/components/responses/ValidationError' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          404: { description: 'Recipient not found in this organisation' },
+        },
+      },
+    },
+
+    '/messages/{id}/me': {
+      delete: {
+        tags: ['Chat'],
+        summary: 'Delete a message for yourself',
+        description: 'Hides one message from the caller only. Allowed for either participant.',
+        operationId: 'deleteChatMessageForMe',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', maxLength: 100 } }],
+        responses: {
+          200: {
+            description: 'Hidden for the caller',
+            content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, data: { type: 'object', properties: { messageId: { type: 'string' } } } } } } },
+          },
+          400: { $ref: '#/components/responses/ValidationError' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { description: 'Not a participant in this conversation' },
+          404: { $ref: '#/components/responses/NotFound' },
+        },
+      },
+    },
+
+    '/messages/{id}/everyone': {
+      delete: {
+        tags: ['Chat'],
+        summary: 'Retract a message for everyone',
+        description:
+          'Replaces the text with a tombstone and strips any attachment for both participants. **Only the original sender may do this** — a recipient attempting it gets 403.',
+        operationId: 'deleteChatMessageForEveryone',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', maxLength: 100 } }],
+        responses: {
+          200: {
+            description: 'Retracted for both sides',
+            content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, data: { type: 'object', properties: { messageId: { type: 'string' } } } } } } },
+          },
+          400: { $ref: '#/components/responses/ValidationError' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { description: 'Only the sender can delete a message for everyone' },
+          404: { $ref: '#/components/responses/NotFound' },
+        },
+      },
+    },
+
+    '/media/upload': {
+      post: {
+        tags: ['Chat'],
+        summary: 'Upload chat media',
+        description:
+          'Authenticated upload for chat attachments. Max 50MB; images, video, PDF and plain text only. Returns the URL to pass as `mediaUrl` when sending.',
+        operationId: 'uploadChatMedia',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'multipart/form-data': {
+              schema: { type: 'object', required: ['file'], properties: { file: { type: 'string', format: 'binary' } } },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description: 'File stored',
+            content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, data: { type: 'object', properties: { url: { type: 'string' }, fileName: { type: 'string' }, fileSize: { type: 'integer' }, mediaType: { type: 'string' } } } } } } },
+          },
+          400: { description: 'No file, unsupported type, or over the size limit' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          429: { description: 'Upload rate limit exceeded' },
+        },
+      },
+    },
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // DEPARTMENTS
     // ═══════════════════════════════════════════════════════════════════════════
     '/departments': {
@@ -867,7 +1271,7 @@ export const swaggerExtensions = {
         summary: 'List company registrations (Admin view)',
         description: 'Returns list of company registration pipelines with status filtering. Requires admin session cookie.',
         operationId: 'listAdminRegistrations',
-        security: [{ adminSession: [] }],
+        security: [{ adminCookie: [] }],
         parameters: [
           { name: 'status', in: 'query', schema: { type: 'string' }, description: 'Filter by pipeline status' },
           { name: 'search', in: 'query', schema: { type: 'string' }, description: 'Search by company or domain name' },
@@ -885,7 +1289,7 @@ export const swaggerExtensions = {
         tags: ['Registration'],
         summary: 'Get single company registration detail (Admin view)',
         operationId: 'getAdminRegistrationById',
-        security: [{ adminSession: [] }],
+        security: [{ adminCookie: [] }],
         parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
         responses: {
           200: { description: 'Registration detail', content: { 'application/json': { schema: { type: 'object' } } } },
