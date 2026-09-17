@@ -2,6 +2,7 @@ import { Server } from 'socket.io';
 import { env } from '../config/env.js';
 import { verifyToken } from './jwt.js';
 import { parseCookies } from './adminAuth.js';
+import { registerChatHandlers, handleChatDisconnect } from '../services/chatSocket.service.js';
 
 let io;
 
@@ -71,8 +72,10 @@ export function initSocket(server) {
       }
     });
 
+    registerChatHandlers(socket, { tenantId: authTenantId, userId: authUserId });
+
     socket.on('disconnect', () => {
-      // Disconnected
+      handleChatDisconnect({ tenantId: authTenantId, userId: authUserId });
     });
   });
 

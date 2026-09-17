@@ -1839,6 +1839,79 @@ const options = {
           name: 'ueibi_session',
           description: 'User session cookie set by POST /api/auth/login',
         },
+        // Referenced by ~54 operations across the spec (and by every Chat
+        // endpoint) but previously never defined, so Swagger UI offered no way
+        // to authorize with a JWT and those security entries resolved to nothing.
+        bearerAuth: {
+          type: 'http',
+          scheme: 'bearer',
+          bearerFormat: 'JWT',
+          description:
+            'JWT issued by POST /api/auth/login, sent as `Authorization: Bearer <token>`. ' +
+            'The same token authenticates the Socket.IO handshake.',
+        },
+      },
+
+      // Shared response bodies. Several operations already $ref these; without
+      // the definitions those references dangled and rendered as errors.
+      responses: {
+        ValidationError: {
+          description: 'Request failed server-side Zod validation',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: false },
+                  error: { type: 'string', example: 'Validation failed' },
+                  details: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        field: { type: 'string', example: 'peerId' },
+                        message: { type: 'string', example: 'peerId is required' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        Unauthorized: {
+          description: 'Missing, invalid or expired session',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: { error: { type: 'string', example: 'Authentication required' } },
+              },
+            },
+          },
+        },
+        Forbidden: {
+          description: 'Authenticated but not permitted to perform this action',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: { error: { type: 'string', example: 'Access forbidden' } },
+              },
+            },
+          },
+        },
+        NotFound: {
+          description: 'Resource not found within the caller tenant',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: { error: { type: 'string', example: 'Not found' } },
+              },
+            },
+          },
+        },
       },
     },
 
@@ -2463,7 +2536,7 @@ const options = {
           summary: 'Upload verification document file',
           description: 'Uploads a single file (under key `file` in multipart/form-data) to the server. File is stored in ./uploads directory.',
           operationId: 'uploadFile',
-          security: [{ userToken: [] }],
+          security: [{ bearerAuth: [] }, { userCookie: [] }],
           requestBody: {
             required: true,
             content: {
@@ -2511,7 +2584,7 @@ const options = {
           summary: 'Complete employee first-time onboarding',
           description: 'Allows an invited employee to complete onboarding by setting password, phone, personal details, statutory docs, bank details, work history, and uploading verification docs.',
           operationId: 'onboardEmployee',
-          security: [{ userToken: [] }],
+          security: [{ bearerAuth: [] }, { userCookie: [] }],
           requestBody: {
             required: true,
             content: {
@@ -2603,7 +2676,7 @@ const options = {
           summary: 'Update active employee details',
           description: 'Allows HR or Admins to update active employee profile details (Designation, Department, Phone, PAN, Aadhaar, DOB, Joining Date, docs, etc.).',
           operationId: 'updateEmployee',
-          security: [{ userToken: [] }],
+          security: [{ bearerAuth: [] }, { userCookie: [] }],
           parameters: [
             { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Employee User ID' }
           ],
@@ -2650,7 +2723,7 @@ const options = {
           summary: 'Soft-delete active employee record',
           description: 'Allows HR or Admins to soft-delete an active employee profile.',
           operationId: 'deleteEmployee',
-          security: [{ userToken: [] }],
+          security: [{ bearerAuth: [] }, { userCookie: [] }],
           parameters: [
             { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Employee User ID' }
           ],
@@ -2667,7 +2740,7 @@ const options = {
           summary: 'Update ex-employee exit conduct record',
           description: 'Allows HR or Admins to update an ex-employee record exit evaluations.',
           operationId: 'updateExEmployee',
-          security: [{ userToken: [] }],
+          security: [{ bearerAuth: [] }, { userCookie: [] }],
           parameters: [
             { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Ex-Employee Record ID' }
           ],
@@ -2711,7 +2784,7 @@ const options = {
           summary: 'Soft-delete ex-employee record',
           description: 'Allows HR or Admins to soft-delete an ex-employee conduct record.',
           operationId: 'deleteExEmployee',
-          security: [{ userToken: [] }],
+          security: [{ bearerAuth: [] }, { userCookie: [] }],
           parameters: [
             { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Ex-Employee Record ID' }
           ],
@@ -2728,7 +2801,7 @@ const options = {
           summary: 'Update non-joiner / offer record details',
           description: 'Allows HR or Admins to update non-joiner candidate status and offer details.',
           operationId: 'updateNonJoiner',
-          security: [{ userToken: [] }],
+          security: [{ bearerAuth: [] }, { userCookie: [] }],
           parameters: [
             { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Offer Record ID' }
           ],
@@ -2771,7 +2844,7 @@ const options = {
           summary: 'Soft-delete non-joiner / offer record',
           description: 'Allows HR or Admins to soft-delete a non-joiner candidate record.',
           operationId: 'deleteNonJoiner',
-          security: [{ userToken: [] }],
+          security: [{ bearerAuth: [] }, { userCookie: [] }],
           parameters: [
             { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Offer Record ID' }
           ],
@@ -6652,6 +6725,11 @@ if (swaggerExtensions) {
       mergedPaths[path] = { ...(mergedPaths[path] || {}), ...methods };
     }
     options.definition.paths = mergedPaths;
+  }
+  // OpenAPI cannot express a WebSocket API, so the Socket.IO contract rides
+  // along as a root-level vendor extension.
+  if (swaggerExtensions.socketEvents) {
+    options.definition['x-socket-events'] = swaggerExtensions.socketEvents;
   }
 }
 

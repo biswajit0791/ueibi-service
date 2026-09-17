@@ -58,14 +58,10 @@ export const env = {
   kafkaClientId: process.env.KAFKA_CLIENT_ID || "ueibi-service",
   kafkaGroupId: process.env.KAFKA_GROUP_ID || "ueibi-gallery-consumer-group",
   kafkaTopicGallery: process.env.KAFKA_TOPIC_GALLERY || "ueibi-gallery-events",
+  kafkaGroupIdChat: process.env.KAFKA_GROUP_ID_CHAT || "ueibi-chat-consumer-group",
+  kafkaTopicChat: process.env.KAFKA_TOPIC_CHAT || "ueibi-chat-events",
   kafkaSsl: process.env.KAFKA_SSL === "true",
   kafkaSaslMechanism: process.env.KAFKA_SASL_MECHANISM || "plain",
   kafkaSaslUsername: process.env.KAFKA_SASL_USERNAME || "",
   kafkaSaslPassword: process.env.KAFKA_SASL_PASSWORD || "",
-
-  // Redis Configuration
-  redisHost: process.env.REDIS_HOST || "localhost",
-  redisPort: parseInt(process.env.REDIS_PORT || "6379", 10),
-  redisPassword: process.env.REDIS_PASSWORD || "",
-  redisUsername: process.env.REDIS_USERNAME || "default",
 };
