@@ -1,5 +1,5 @@
 import { prisma } from '../lib/prisma.js';
-import { isLeadership, listCapabilityHolders, CAPABILITIES } from '../lib/capabilities.js';
+import { isLeadership, hasCapability, listCapabilityHolders, CAPABILITIES } from '../lib/capabilities.js';
 import { emitToUser } from '../lib/socket.js';
 
 // Business days the SLA promise in the UI is based on ("responds within 5
@@ -174,7 +174,18 @@ export class CxoService {
       take: 200,
     });
 
-    return { scope: asLeader ? 'leadership' : 'mine', messages: rows.map((m) => toWire(m, user.id)) };
+    // An elevated role (ADMIN/SUPER_ADMIN/HR/CMD) gets the leadership VIEW so
+    // there is no bootstrapping dead end, but the inbox only contains messages
+    // addressed or assigned to them. Someone not on the panel therefore sees an
+    // empty list — report that explicitly so the UI can explain why rather than
+    // showing a bare "No messages yet".
+    const onPanel = hasCapability(user, CAPABILITIES.LEADERSHIP);
+
+    return {
+      scope: asLeader ? 'leadership' : 'mine',
+      onPanel,
+      messages: rows.map((m) => toWire(m, user.id)),
+    };
   }
 
   async getMessage({ tenantId, user, id }) {
@@ -305,14 +316,14 @@ export class CxoService {
           where: { tenantId, readByLeadershipAt: null, OR: [{ targetLeaderId: user.id }, { targetLeaderId: null }, { assignedToId: user.id }] },
         }),
       ]);
-      return { scope: 'leadership', open, overdue, unread };
+      return { scope: 'leadership', onPanel: hasCapability(user, CAPABILITIES.LEADERSHIP), open, overdue, unread };
     }
 
     const [open, unread] = await Promise.all([
       prisma.cxoMessage.count({ where: { tenantId, raisedById: user.id, status: { not: 'CLOSED' } } }),
       prisma.cxoMessage.count({ where: { tenantId, raisedById: user.id, readByEmployeeAt: null, status: 'REPLIED' } }),
     ]);
-    return { scope: 'mine', open, overdue: 0, unread };
+    return { scope: 'mine', onPanel: false, open, overdue: 0, unread };
   }
 }
 

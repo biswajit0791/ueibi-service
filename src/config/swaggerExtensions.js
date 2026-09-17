@@ -1085,7 +1085,7 @@ export const swaggerExtensions = {
         responses: {
           200: {
             description: 'Messages visible to the caller',
-            content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, scope: { type: 'string', enum: ['mine', 'leadership'] }, messages: { type: 'array', items: { $ref: '#/components/schemas/CxoMessage' } } } } } },
+            content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, scope: { type: 'string', enum: ['mine', 'leadership'] }, onPanel: { type: 'boolean', description: 'True when the caller holds the LEADERSHIP capability. An elevated role (SUPER_ADMIN/ADMIN/HR/CMD) gets the leadership view so there is no bootstrapping dead end, but employees address a specific leader - so onPanel=false with an empty list means "nobody can write to you yet", not "no activity".' }, messages: { type: 'array', items: { $ref: '#/components/schemas/CxoMessage' } } } } } },
           },
           400: { $ref: '#/components/responses/ValidationError' },
           401: { $ref: '#/components/responses/Unauthorized' },
@@ -1188,7 +1188,7 @@ export const swaggerExtensions = {
         responses: {
           200: {
             description: 'Counts',
-            content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, scope: { type: 'string', enum: ['mine', 'leadership'] }, open: { type: 'integer' }, overdue: { type: 'integer' }, unread: { type: 'integer' } } } } },
+            content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, scope: { type: 'string', enum: ['mine', 'leadership'] }, onPanel: { type: 'boolean' }, open: { type: 'integer' }, overdue: { type: 'integer' }, unread: { type: 'integer' } } } } },
           },
           401: { $ref: '#/components/responses/Unauthorized' },
         },
