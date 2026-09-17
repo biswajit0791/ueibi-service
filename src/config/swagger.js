@@ -2862,7 +2862,7 @@ const options = {
           tags: ['Dev'],
           summary: 'List notification logs (dev only)',
           description: 'Returns the latest 50 notification logs. Disabled in production.',
-          operationId: 'listNotifications',
+          operationId: 'listDevNotificationLogs',
           parameters: [
             { name: 'email', in: 'query', schema: { type: 'string' }, description: 'Filter by recipient email' },
             { name: 'registrationId', in: 'query', schema: { type: 'string' }, description: 'Filter by registration ID' },

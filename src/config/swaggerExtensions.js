@@ -101,6 +101,18 @@ export const swaggerExtensions = {
       description: 'Dispute Center: employee support/grievance tickets with a chat-style resolution log, supporting-evidence attachments, and HR/Admin assignment & status workflow',
     },
     {
+      name: 'CXO Connect',
+      description:
+        'Employee → leadership channel. A ticket with a reply thread: an employee writes to a named leader, leadership acknowledges, replies and closes. '
+        + 'Leadership is a CAPABILITY granted on top of the user’s HR role (see the Capabilities endpoints), never a UserRole value — a Chief People Officer stays HR or EMPLOYEE in HR terms. '
+        + 'Messages may be sent anonymously: the sender is stored so abuse is investigable and the employee can follow their own thread, but the API never exposes them to anyone else, including SUPER_ADMIN.',
+    },
+    {
+      name: 'Dashboards',
+      description:
+        'Role-scoped aggregate dashboards. Each endpoint is gated by authorizeDashboard() and reads its scope entirely from the session — they take no query, path or body input. Every dashboard is exposed under two equivalent paths.',
+    },
+    {
       name: 'Chat',
       description:
         'Tenant-scoped 1:1 direct messaging. PostgreSQL is the source of truth; every write is fanned out through Apache Kafka, projected into MongoDB (the read model) and pushed to both participants over Socket.IO. ' +
@@ -111,6 +123,86 @@ export const swaggerExtensions = {
   ],
 
   schemas: {
+    // ── CXO Connect schemas ──
+    CxoPerson: {
+      type: 'object',
+      description: 'The sender. On an anonymous message this is {id: null, name: "Anonymous"} for every viewer except the sender themselves.',
+      properties: {
+        id: { type: 'string', nullable: true, example: 'cmtk36qm80004uugc0pfwdr3n' },
+        name: { type: 'string', example: 'Arjun Sharma' },
+        designation: { type: 'string', nullable: true, example: 'Software Engineer' },
+        department: { type: 'string', nullable: true, example: 'Engineering' },
+      },
+    },
+    CxoReply: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        body: { type: 'string', example: 'Thank you! Glad it is working well for you.' },
+        isLeadershipResponse: {
+          type: 'boolean',
+          description: 'True for an official response from leadership; false for the employee’s own follow-up. Only a leadership response moves the ticket to REPLIED.',
+        },
+        author: { $ref: '#/components/schemas/CxoPerson' },
+        isMine: { type: 'boolean' },
+        createdAt: { type: 'string', format: 'date-time' },
+      },
+    },
+    CxoMessage: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        ticketNumber: { type: 'string', example: 'CXO-2026-0042' },
+        subject: { type: 'string', example: 'Appreciation for WFH Policy Update' },
+        body: { type: 'string' },
+        category: { type: 'string', enum: ['APPRECIATION', 'SUGGESTION', 'CONCERN', 'QUESTION'] },
+        status: { type: 'string', enum: ['PENDING', 'ACKNOWLEDGED', 'REPLIED', 'CLOSED'] },
+        isAnonymous: { type: 'boolean' },
+        isMine: { type: 'boolean', description: 'True when the viewer raised this message.' },
+        from: { $ref: '#/components/schemas/CxoPerson' },
+        targetLeader: { $ref: '#/components/schemas/CxoPerson' },
+        assignedTo: { $ref: '#/components/schemas/CxoPerson' },
+        dueAt: { type: 'string', format: 'date-time', nullable: true, description: 'SLA deadline, 5 business days from creation.' },
+        isOverdue: { type: 'boolean', description: 'Past dueAt and still awaiting a response.' },
+        closedAt: { type: 'string', format: 'date-time', nullable: true },
+        lastReplyAt: { type: 'string', format: 'date-time', nullable: true },
+        replyCount: { type: 'integer', example: 2 },
+        replies: {
+          type: 'array',
+          description: 'Present on the single-message endpoint only.',
+          items: { $ref: '#/components/schemas/CxoReply' },
+        },
+        createdAt: { type: 'string', format: 'date-time' },
+      },
+    },
+    CreateCxoMessageRequest: {
+      type: 'object',
+      required: ['subject', 'body'],
+      properties: {
+        subject: { type: 'string', minLength: 3, maxLength: 150 },
+        body: { type: 'string', minLength: 10, maxLength: 5000 },
+        category: { type: 'string', enum: ['APPRECIATION', 'SUGGESTION', 'CONCERN', 'QUESTION'], default: 'SUGGESTION' },
+        isAnonymous: { type: 'boolean', default: false, description: 'Hides the sender from leadership. The employee still sees and can follow their own thread.' },
+        targetLeaderId: {
+          type: 'string',
+          nullable: true,
+          description: 'Must hold the LEADERSHIP capability. Omit to address the whole panel.',
+        },
+      },
+    },
+    CxoLeader: {
+      type: 'object',
+      description: 'A holder of the LEADERSHIP capability, as shown in the employee’s recipient picker.',
+      properties: {
+        id: { type: 'string' },
+        name: { type: 'string', example: 'Kavitha Rao' },
+        email: { type: 'string' },
+        role: { type: 'string', description: 'Their unchanged HR role, e.g. HR or EMPLOYEE.', example: 'HR' },
+        title: { type: 'string', nullable: true, description: 'Title on the grant, e.g. "Chief People Officer". Falls back to the HR designation.' },
+        department: { type: 'string', nullable: true },
+      },
+    },
+
     // ── Chat schemas ──
     ChatMessage: {
       type: 'object',
@@ -765,6 +857,399 @@ export const swaggerExtensions = {
   },
 
   paths: {
+    // ═══════════════════════════════════════════════════════════════════════════
+    // DASHBOARDS — role-scoped aggregates (no input; scope comes from the session)
+    // ═══════════════════════════════════════════════════════════════════════════
+    '/dashboard/super-admin': {
+      get: {
+        tags: ['Dashboards'],
+        summary: 'SUPER_ADMIN dashboard',
+        description: 'Platform-wide totals across every tenant: tenant count, user count, registrations and the most recent active tenants. The only dashboard that is NOT tenant-scoped. Access: SUPER_ADMIN only. Takes no query, path or body input \u2014 the scope comes entirely from the session.',
+        operationId: 'getSuperAdminDashboard',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        responses: {
+          200: {
+            description: 'SUPER_ADMIN dashboard payload',
+            content: { 'application/json': { schema: { type: 'object', properties: { dashboard: { type: 'string', example: 'SUPER_ADMIN' }, totalTenants: { type: 'integer' }, totalUsers: { type: 'integer' }, totalRegistrations: { type: 'integer' }, recentTenants: { type: 'array', items: { type: 'object' } } } } } },
+          },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { description: 'Your role may not view this dashboard' },
+        },
+      },
+    },
+    '/super-admin/dashboard': {
+      get: {
+        tags: ['Dashboards'],
+        summary: 'SUPER_ADMIN dashboard',
+        description: 'Platform-wide totals across every tenant: tenant count, user count, registrations and the most recent active tenants. The only dashboard that is NOT tenant-scoped. Access: SUPER_ADMIN only. Alias of GET /dashboard/super-admin; identical response. Takes no query, path or body input \u2014 the scope comes entirely from the session.',
+        operationId: 'getSuperAdminDashboardAlias',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        responses: {
+          200: {
+            description: 'SUPER_ADMIN dashboard payload',
+            content: { 'application/json': { schema: { type: 'object', properties: { dashboard: { type: 'string', example: 'SUPER_ADMIN' }, totalTenants: { type: 'integer' }, totalUsers: { type: 'integer' }, totalRegistrations: { type: 'integer' }, recentTenants: { type: 'array', items: { type: 'object' } } } } } },
+          },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { description: 'Your role may not view this dashboard' },
+        },
+      },
+    },
+    '/dashboard/admin': {
+      get: {
+        tags: ['Dashboards'],
+        summary: 'ADMIN dashboard',
+        description: 'Tenant headcount and the active appraisal cycle with its progress. Access: SUPER_ADMIN, ADMIN. Takes no query, path or body input \u2014 the scope comes entirely from the session.',
+        operationId: 'getAdminDashboard',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        responses: {
+          200: {
+            description: 'ADMIN dashboard payload',
+            content: { 'application/json': { schema: { type: 'object', properties: { dashboard: { type: 'string', example: 'ADMIN' }, tenantId: { type: 'string' }, totalHeadcount: { type: 'integer' }, activeCycle: { type: 'object', nullable: true } } } } },
+          },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { description: 'Your role may not view this dashboard' },
+        },
+      },
+    },
+    '/admin/dashboard': {
+      get: {
+        tags: ['Dashboards'],
+        summary: 'ADMIN dashboard',
+        description: 'Tenant headcount and the active appraisal cycle with its progress. Access: SUPER_ADMIN, ADMIN. Alias of GET /dashboard/admin; identical response. Takes no query, path or body input \u2014 the scope comes entirely from the session.',
+        operationId: 'getAdminDashboardAlias',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        responses: {
+          200: {
+            description: 'ADMIN dashboard payload',
+            content: { 'application/json': { schema: { type: 'object', properties: { dashboard: { type: 'string', example: 'ADMIN' }, tenantId: { type: 'string' }, totalHeadcount: { type: 'integer' }, activeCycle: { type: 'object', nullable: true } } } } },
+          },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { description: 'Your role may not view this dashboard' },
+        },
+      },
+    },
+    '/dashboard/hr': {
+      get: {
+        tags: ['Dashboards'],
+        summary: 'HR dashboard',
+        description: 'Employee totals, review summary and a department breakdown for the active cycle. Access: SUPER_ADMIN, ADMIN, HR. Takes no query, path or body input \u2014 the scope comes entirely from the session.',
+        operationId: 'getHrDashboard',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        responses: {
+          200: {
+            description: 'HR dashboard payload',
+            content: { 'application/json': { schema: { type: 'object', properties: { dashboard: { type: 'string', example: 'HR' }, tenantId: { type: 'string' }, totalEmployees: { type: 'integer' }, activeCycle: { type: 'object', nullable: true }, reviewsSummary: { type: 'object' }, departmentBreakdown: { type: 'array', items: { type: 'object' } } } } } },
+          },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { description: 'Your role may not view this dashboard' },
+        },
+      },
+    },
+    '/hr/dashboard': {
+      get: {
+        tags: ['Dashboards'],
+        summary: 'HR dashboard',
+        description: 'Employee totals, review summary and a department breakdown for the active cycle. Access: SUPER_ADMIN, ADMIN, HR. Alias of GET /dashboard/hr; identical response. Takes no query, path or body input \u2014 the scope comes entirely from the session.',
+        operationId: 'getHrDashboardAlias',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        responses: {
+          200: {
+            description: 'HR dashboard payload',
+            content: { 'application/json': { schema: { type: 'object', properties: { dashboard: { type: 'string', example: 'HR' }, tenantId: { type: 'string' }, totalEmployees: { type: 'integer' }, activeCycle: { type: 'object', nullable: true }, reviewsSummary: { type: 'object' }, departmentBreakdown: { type: 'array', items: { type: 'object' } } } } } },
+          },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { description: 'Your role may not view this dashboard' },
+        },
+      },
+    },
+    '/dashboard/finance': {
+      get: {
+        tags: ['Dashboards'],
+        summary: 'FINANCE dashboard',
+        description: 'Licence utilisation: seats purchased against seats active. Access: SUPER_ADMIN, ADMIN, HR, FINANCE. Takes no query, path or body input \u2014 the scope comes entirely from the session.',
+        operationId: 'getFinanceDashboard',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        responses: {
+          200: {
+            description: 'FINANCE dashboard payload',
+            content: { 'application/json': { schema: { type: 'object', properties: { dashboard: { type: 'string', example: 'FINANCE' }, tenantId: { type: 'string' }, companyName: { type: 'string' }, licenseLimit: { type: 'integer' }, activeSeats: { type: 'integer' } } } } },
+          },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { description: 'Your role may not view this dashboard' },
+        },
+      },
+    },
+    '/finance/dashboard': {
+      get: {
+        tags: ['Dashboards'],
+        summary: 'FINANCE dashboard',
+        description: 'Licence utilisation: seats purchased against seats active. Access: SUPER_ADMIN, ADMIN, HR, FINANCE. Alias of GET /dashboard/finance; identical response. Takes no query, path or body input \u2014 the scope comes entirely from the session.',
+        operationId: 'getFinanceDashboardAlias',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        responses: {
+          200: {
+            description: 'FINANCE dashboard payload',
+            content: { 'application/json': { schema: { type: 'object', properties: { dashboard: { type: 'string', example: 'FINANCE' }, tenantId: { type: 'string' }, companyName: { type: 'string' }, licenseLimit: { type: 'integer' }, activeSeats: { type: 'integer' } } } } },
+          },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { description: 'Your role may not view this dashboard' },
+        },
+      },
+    },
+    '/dashboard/manager': {
+      get: {
+        tags: ['Dashboards'],
+        summary: 'MANAGER dashboard',
+        description: 'The manager\u2019s direct reports with their goal and review progress. Access: SUPER_ADMIN, ADMIN, HR, FINANCE, MANAGER. Takes no query, path or body input \u2014 the scope comes entirely from the session.',
+        operationId: 'getManagerDashboard',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        responses: {
+          200: {
+            description: 'MANAGER dashboard payload',
+            content: { 'application/json': { schema: { type: 'object', properties: { dashboard: { type: 'string', example: 'MANAGER' }, tenantId: { type: 'string' } } } } },
+          },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { description: 'Your role may not view this dashboard' },
+        },
+      },
+    },
+    '/manager/dashboard': {
+      get: {
+        tags: ['Dashboards'],
+        summary: 'MANAGER dashboard',
+        description: 'The manager\u2019s direct reports with their goal and review progress. Access: SUPER_ADMIN, ADMIN, HR, FINANCE, MANAGER. Alias of GET /dashboard/manager; identical response. Takes no query, path or body input \u2014 the scope comes entirely from the session.',
+        operationId: 'getManagerDashboardAlias',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        responses: {
+          200: {
+            description: 'MANAGER dashboard payload',
+            content: { 'application/json': { schema: { type: 'object', properties: { dashboard: { type: 'string', example: 'MANAGER' }, tenantId: { type: 'string' } } } } },
+          },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { description: 'Your role may not view this dashboard' },
+        },
+      },
+    },
+    '/dashboard/employee': {
+      get: {
+        tags: ['Dashboards'],
+        summary: 'EMPLOYEE dashboard',
+        description: 'The signed-in employee\u2019s own goals, tasks and review status. Access: every authenticated tenant role. Takes no query, path or body input \u2014 the scope comes entirely from the session.',
+        operationId: 'getEmployeeDashboard',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        responses: {
+          200: {
+            description: 'EMPLOYEE dashboard payload',
+            content: { 'application/json': { schema: { type: 'object', properties: { dashboard: { type: 'string', example: 'EMPLOYEE' }, tenantId: { type: 'string' } } } } },
+          },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { description: 'Your role may not view this dashboard' },
+        },
+      },
+    },
+    '/employee/dashboard': {
+      get: {
+        tags: ['Dashboards'],
+        summary: 'EMPLOYEE dashboard',
+        description: 'The signed-in employee\u2019s own goals, tasks and review status. Access: every authenticated tenant role. Alias of GET /dashboard/employee; identical response. Takes no query, path or body input \u2014 the scope comes entirely from the session.',
+        operationId: 'getEmployeeDashboardAlias',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        responses: {
+          200: {
+            description: 'EMPLOYEE dashboard payload',
+            content: { 'application/json': { schema: { type: 'object', properties: { dashboard: { type: 'string', example: 'EMPLOYEE' }, tenantId: { type: 'string' } } } } },
+          },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { description: 'Your role may not view this dashboard' },
+        },
+      },
+    },
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CXO CONNECT — employee ↔ leadership
+    // ═══════════════════════════════════════════════════════════════════════════
+    '/cxo/messages': {
+      get: {
+        tags: ['CXO Connect'],
+        summary: 'List messages',
+        description:
+          'An employee sees the messages they raised. A leadership-capability holder sees their inbox: messages addressed to them, unaddressed messages, and anything assigned to them. '
+          + 'A leader can pass scope=mine to see the messages they raised themselves instead. Anonymous senders are redacted for everyone but the sender.',
+        operationId: 'listCxoMessages',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        parameters: [
+          { name: 'status', in: 'query', schema: { type: 'string', enum: ['PENDING', 'ACKNOWLEDGED', 'REPLIED', 'CLOSED'] } },
+          { name: 'category', in: 'query', schema: { type: 'string', enum: ['APPRECIATION', 'SUGGESTION', 'CONCERN', 'QUESTION'] } },
+          { name: 'scope', in: 'query', schema: { type: 'string', enum: ['mine', 'leadership'] }, description: 'Leaders only: "mine" returns messages they raised rather than the inbox.' },
+        ],
+        responses: {
+          200: {
+            description: 'Messages visible to the caller',
+            content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, scope: { type: 'string', enum: ['mine', 'leadership'] }, messages: { type: 'array', items: { $ref: '#/components/schemas/CxoMessage' } } } } } },
+          },
+          400: { $ref: '#/components/responses/ValidationError' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+        },
+      },
+      post: {
+        tags: ['CXO Connect'],
+        summary: 'Raise a message to leadership',
+        description: 'Creates a ticket, sets a 5-business-day SLA and notifies the addressed leader (or the whole panel) over Socket.IO.',
+        operationId: 'createCxoMessage',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/CreateCxoMessageRequest' } } } },
+        responses: {
+          201: { description: 'Created', content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, data: { $ref: '#/components/schemas/CxoMessage' } } } } } },
+          400: { $ref: '#/components/responses/ValidationError' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+        },
+      },
+    },
+
+    '/cxo/messages/{id}': {
+      get: {
+        tags: ['CXO Connect'],
+        summary: 'Read one message with its replies',
+        description: 'Accessible to the employee who raised it and to leadership. Marks the thread read for whichever side is viewing.',
+        operationId: 'getCxoMessage',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'The thread', content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, data: { $ref: '#/components/schemas/CxoMessage' } } } } } },
+          400: { $ref: '#/components/responses/ValidationError' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { description: 'Not the sender and not leadership' },
+          404: { $ref: '#/components/responses/NotFound' },
+        },
+      },
+      patch: {
+        tags: ['CXO Connect'],
+        summary: 'Update status or reassign',
+        description: 'Leadership only. Acknowledge, close, or hand the thread to another panel member.',
+        operationId: 'updateCxoMessage',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { type: 'object', properties: { status: { type: 'string', enum: ['PENDING', 'ACKNOWLEDGED', 'REPLIED', 'CLOSED'] }, assignedToId: { type: 'string', description: 'Must hold the LEADERSHIP capability.' } } } } },
+        },
+        responses: {
+          200: { description: 'Updated', content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, data: { $ref: '#/components/schemas/CxoMessage' } } } } } },
+          400: { $ref: '#/components/responses/ValidationError' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { description: 'Only leadership can update a message' },
+          404: { $ref: '#/components/responses/NotFound' },
+        },
+      },
+    },
+
+    '/cxo/messages/{id}/replies': {
+      post: {
+        tags: ['CXO Connect'],
+        summary: 'Reply to a message',
+        description:
+          'Leadership replying produces an official response (isLeadershipResponse=true) and moves the ticket to REPLIED. '
+          + 'The employee replying on their own thread is a follow-up and does not change the status. A follow-up on an anonymous thread stays anonymous.',
+        operationId: 'replyToCxoMessage',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['body'], properties: { body: { type: 'string', minLength: 1, maxLength: 5000 } } } } } },
+        responses: {
+          201: { description: 'Reply created', content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, data: { $ref: '#/components/schemas/CxoReply' } } } } } },
+          400: { description: 'Validation failed, or the thread is closed' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { description: 'Not a participant' },
+          404: { $ref: '#/components/responses/NotFound' },
+        },
+      },
+    },
+
+    '/cxo/leaders': {
+      get: {
+        tags: ['CXO Connect'],
+        summary: 'Leaders an employee can write to',
+        description: 'Holders of the LEADERSHIP capability in this tenant, excluding deleted and exited users. Empty until an admin grants it to someone.',
+        operationId: 'listCxoLeaders',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        responses: {
+          200: { description: 'The leadership panel', content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, leaders: { type: 'array', items: { $ref: '#/components/schemas/CxoLeader' } } } } } } },
+          401: { $ref: '#/components/responses/Unauthorized' },
+        },
+      },
+    },
+
+    '/cxo/stats': {
+      get: {
+        tags: ['CXO Connect'],
+        summary: 'Counts for the nav badge',
+        description: 'Scope-aware: leadership gets open/overdue/unread across their inbox, an employee gets their own open threads and unread replies.',
+        operationId: 'getCxoStats',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        responses: {
+          200: {
+            description: 'Counts',
+            content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, scope: { type: 'string', enum: ['mine', 'leadership'] }, open: { type: 'integer' }, overdue: { type: 'integer' }, unread: { type: 'integer' } } } } },
+          },
+          401: { $ref: '#/components/responses/Unauthorized' },
+        },
+      },
+    },
+
+    '/cxo/capabilities': {
+      get: {
+        tags: ['CXO Connect'],
+        summary: 'List LEADERSHIP capability holders',
+        operationId: 'listCxoCapabilityHolders',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        responses: {
+          200: { description: 'Holders', content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, holders: { type: 'array', items: { $ref: '#/components/schemas/CxoLeader' } } } } } } },
+          401: { $ref: '#/components/responses/Unauthorized' },
+        },
+      },
+    },
+
+    '/cxo/capabilities/grant': {
+      post: {
+        tags: ['CXO Connect'],
+        summary: 'Grant the LEADERSHIP capability',
+        description:
+          'SUPER_ADMIN / ADMIN only. Additive: the UserRole, reporting line and existing permissions are unchanged. '
+          + 'Idempotent - re-granting updates the title rather than creating a second row. '
+          + 'LEADERSHIP is deliberately not a UserRole value: normalizeRole() maps that string to SUPER_ADMIN, so making it a role would grant every leader super-admin dashboard visibility.',
+        operationId: 'grantLeadershipCapability',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { type: 'object', required: ['userId'], properties: { userId: { type: 'string' }, capability: { type: 'string', enum: ['LEADERSHIP'], default: 'LEADERSHIP' }, title: { type: 'string', nullable: true, maxLength: 100, example: 'Chief People Officer' } } } } },
+        },
+        responses: {
+          201: { description: 'Granted', content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, data: { type: 'object', properties: { userId: { type: 'string' }, capability: { type: 'string' }, title: { type: 'string', nullable: true } } } } } } } },
+          400: { description: 'Validation failed, or the user has exited' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { description: 'Only an admin can grant capabilities' },
+          404: { description: 'User not found in this organisation' },
+        },
+      },
+    },
+
+    '/cxo/capabilities/revoke': {
+      post: {
+        tags: ['CXO Connect'],
+        summary: 'Revoke the LEADERSHIP capability',
+        description: 'SUPER_ADMIN / ADMIN only. Takes effect on the next request - capabilities are re-read from the database on every authenticated call, not carried in the JWT.',
+        operationId: 'revokeLeadershipCapability',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['userId'], properties: { userId: { type: 'string' }, capability: { type: 'string', enum: ['LEADERSHIP'], default: 'LEADERSHIP' } } } } } },
+        responses: {
+          200: { description: 'Revoked', content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, data: { type: 'object', properties: { userId: { type: 'string' }, capability: { type: 'string' } } } } } } } },
+          400: { $ref: '#/components/responses/ValidationError' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { description: 'Only an admin can revoke capabilities' },
+          404: { description: 'That capability is not granted to this user' },
+        },
+      },
+    },
+
     // ═══════════════════════════════════════════════════════════════════════════
     // CHAT — 1:1 direct messaging
     // ═══════════════════════════════════════════════════════════════════════════

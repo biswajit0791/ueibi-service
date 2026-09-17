@@ -69,6 +69,10 @@ model Tenant {
   disputeMessages     DisputeMessage[]
 
   @@map("tenants")
+  userCapabilities   UserCapability[]
+  cxoMessages        CxoMessage[]
+  cxoMessageReplies  CxoMessageReply[]
+
 }
 
 enum EmploymentType {
@@ -116,6 +120,12 @@ model TenantUser {
   esic    String?
 
   // Smart HR Relations
+  capabilities               UserCapability[] @relation("UserCapabilities")
+  cxoMessagesRaised          CxoMessage[]     @relation("CxoRaisedBy")
+  cxoMessagesTargeted        CxoMessage[]     @relation("CxoTargetLeader")
+  cxoMessagesAssigned        CxoMessage[]     @relation("CxoAssignee")
+  cxoReplies                 CxoMessageReply[] @relation("CxoReplyAuthor")
+  capabilitiesGranted        UserCapability[] @relation("CapabilityGrantedBy")
   bankDetails                BankDetails?
   workHistory                WorkHistory[]
   exitDetails                ExitDetails?
@@ -1405,6 +1415,129 @@ model Department {
 }
 
 // ── Chat Messages ──────────────────────────────────────────────────────────
+// ─── CXO Connect ──────────────────────────────────────────────────────────────
+// Employee → leadership channel. Structurally a ticket with a reply thread,
+// mirroring the Dispute module rather than inventing a second pattern.
+//
+// Anonymity: `raisedById` is ALWAYS stored, so abuse can be handled and the
+// employee can follow their own thread under "My Messages". When
+// `isAnonymous` is set the API never exposes the sender to leadership — the
+// redaction lives in the service layer, not the schema.
+model CxoMessage {
+  id           String  @id @default(cuid())
+  tenantId     String
+  tenant       Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticketNumber String  @unique
+
+  subject  String
+  body     String          @db.Text
+  category CxoCategory     @default(SUGGESTION)
+  status   CxoStatus       @default(PENDING)
+
+  isAnonymous Boolean @default(false)
+
+  raisedById String
+  raisedBy   TenantUser @relation("CxoRaisedBy", fields: [raisedById], references: [id], onDelete: Cascade)
+
+  // The leader this was addressed to. Nullable so a thread survives that
+  // person leaving the company or losing the capability.
+  targetLeaderId String?
+  targetLeader   TenantUser? @relation("CxoTargetLeader", fields: [targetLeaderId], references: [id], onDelete: SetNull)
+
+  // Whoever actually picked it up; usually the target, but reassignable.
+  assignedToId String?
+  assignedTo   TenantUser? @relation("CxoAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+
+  dueAt      DateTime?  // SLA — the "responds within 5 business days" promise
+  closedAt   DateTime?
+  lastReplyAt DateTime?
+
+  // Unread bookkeeping, one side each.
+  readByEmployeeAt   DateTime?
+  readByLeadershipAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  replies CxoMessageReply[]
+
+  @@index([tenantId, status, createdAt])
+  @@index([tenantId, targetLeaderId, status])
+  @@index([tenantId, raisedById, createdAt])
+  @@map("cxo_messages")
+}
+
+model CxoMessageReply {
+  id        String     @id @default(cuid())
+  tenantId  String
+  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  messageId String
+  message   CxoMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  authorId String
+  author   TenantUser @relation("CxoReplyAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+
+  body String  @db.Text
+  // Distinguishes an official response from the employee's follow-up, so the
+  // UI can style it and status transitions can key off it.
+  isLeadershipResponse Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([messageId, createdAt])
+  @@map("cxo_message_replies")
+}
+
+enum CxoCategory {
+  APPRECIATION
+  SUGGESTION
+  CONCERN
+  QUESTION
+}
+
+enum CxoStatus {
+  PENDING
+  ACKNOWLEDGED
+  REPLIED
+  CLOSED
+}
+
+// ─── Cross-cutting Capabilities ───────────────────────────────────────────────
+// `TenantUser.role` is ONE value and encodes the HR hierarchy: who can create
+// whom, who approves leave, who sees payroll. Some responsibilities are
+// orthogonal to that — a Chief People Officer is an HR or EMPLOYEE in HR terms
+// AND sits on the leadership panel. Forcing that into `role` would make them
+// pick one identity and would break roleHierarchy.js.
+//
+// Capabilities are therefore ADDITIVE grants layered on top of `role`. Checks
+// read `isElevated(user.role) || hasCapability(user, 'LEADERSHIP')`.
+//
+// NOTE: deliberately NOT a UserRole value. `dashboardPermissions.normalizeRole`
+// maps the string 'LEADERSHIP' to SUPER_ADMIN, so making it a role would
+// silently grant every leader super-admin dashboard visibility.
+model UserCapability {
+  id          String     @id @default(cuid())
+  tenantId    String
+  tenant      Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId      String
+  user        TenantUser @relation("UserCapabilities", fields: [userId], references: [id], onDelete: Cascade)
+  capability  Capability
+
+  // Shown to employees when choosing who to write to, e.g. "Chief People Officer".
+  title       String?
+  grantedById String?
+  grantedBy   TenantUser? @relation("CapabilityGrantedBy", fields: [grantedById], references: [id], onDelete: SetNull)
+  createdAt   DateTime   @default(now())
+
+  @@unique([userId, capability])
+  @@index([tenantId, capability])
+  @@map("user_capabilities")
+}
+
+enum Capability {
+  LEADERSHIP
+}
+
 // ─── Direct Messaging ─────────────────────────────────────────────────────────
 // PostgreSQL is the source of truth for chat. Every write is mirrored into
 // MongoDB (the read model) via a Kafka event; see services/messageMongo.service.js.
