@@ -101,6 +101,19 @@ export const swaggerExtensions = {
       description: 'Dispute Center: employee support/grievance tickets with a chat-style resolution log, supporting-evidence attachments, and HR/Admin assignment & status workflow',
     },
     {
+      name: 'Sub-Logins',
+      description:
+        'Invite Recruiter / Manager. A sub-login is an ORDINARY TenantUser holding REGISTRY_* capabilities, not a separate account type \u2014 invites go through the same flow that creates any employee, so duplicate handling, the temp password and the invite email are shared. '
+        + '"Recruiter" and "Viewer" are labels for capability sets; the stored role is always a real UserRole (EMPLOYEE or MANAGER). '
+        + 'Registry data is background-check PII, so every grant and revoke is written to an audit trail.',
+    },
+    {
+      name: 'Master Data',
+      description:
+        'Tenant-scoped master lists that feed dropdowns across the product. Reading is open to every authenticated role (the onboarding form needs the list before a new joiner has any elevated permission); creating and updating is SUPER_ADMIN / ADMIN / HR; archiving is SUPER_ADMIN / ADMIN. '
+        + 'Deletes are soft: employee records store these values as strings, so a hard delete would orphan them.',
+    },
+    {
       name: 'CXO Connect',
       description:
         'Employee → leadership channel. A ticket with a reply thread: an employee writes to a named leader, leadership acknowledges, replies and closes. '
@@ -123,6 +136,86 @@ export const swaggerExtensions = {
   ],
 
   schemas: {
+    // ── Goal option schemas ──
+    GoalOption: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        kind: { type: 'string', enum: ['CATEGORY', 'TYPE', 'PRIORITY'] },
+        label: { type: 'string', description: 'Shown in the dropdown, e.g. "Medium".', example: 'Medium' },
+        value: { type: 'string', description: 'Persisted on the Goal, e.g. "medium". Priority values are lowercased.', example: 'medium' },
+        isActive: { type: 'boolean', description: 'False = archived. Leaves the dropdown; goals already using it keep the value.' },
+        sortOrder: { type: 'integer', description: 'Display order. For PRIORITY this is also the SEMANTIC rank, so lists must never be sorted alphabetically.' },
+        color: { type: 'string', nullable: true, example: '#f59e0b' },
+        usageCount: { type: 'integer', description: 'Goals currently holding this value.' },
+      },
+    },
+
+    // ── Sub-Login schemas ──
+    SubLogin: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        name: { type: 'string' },
+        email: { type: 'string' },
+        role: { type: 'string', description: 'The real UserRole \u2014 EMPLOYEE or MANAGER.', example: 'EMPLOYEE' },
+        status: { type: 'string', enum: ['INVITED', 'ACTIVE', 'EXITED'], description: 'INVITED shows as "Pending" until they first sign in.' },
+        accessLabel: { type: 'string', enum: ['Edit & Verify', 'Search & Export', 'Read-only', 'No registry access'], description: 'What the credentials ALLOW. Deliberately avoids role names — a sub-login whose stored role is EMPLOYEE must never appear to be a MANAGER.' },
+        invitedAs: { type: 'string', nullable: true, description: 'The preset used at invite time. May differ from what they hold now if credentials were edited afterwards.' },
+        capabilities: { type: 'array', items: { type: 'string', enum: ['REGISTRY_SEARCH', 'REGISTRY_WRITE', 'REGISTRY_ANALYTICS', 'REGISTRY_EXPORT'] } },
+        title: { type: 'string', nullable: true },
+        grantedAt: { type: 'string', format: 'date-time' },
+      },
+    },
+    InviteSubLoginRequest: {
+      type: 'object',
+      required: ['name', 'email'],
+      properties: {
+        name: { type: 'string', minLength: 2, maxLength: 80 },
+        email: { type: 'string', format: 'email' },
+        preset: { type: 'string', enum: ['RECRUITER', 'MANAGER', 'VIEWER'], description: 'Seeds the role and the default credentials. `capabilities` overrides it.' },
+        capabilities: {
+          type: 'array',
+          description: 'Authoritative. At least one is required.',
+          items: { type: 'string', enum: ['REGISTRY_SEARCH', 'REGISTRY_WRITE', 'REGISTRY_ANALYTICS', 'REGISTRY_EXPORT'] },
+        },
+        designation: { type: 'string', maxLength: 100 },
+        department: { type: 'string', maxLength: 100 },
+      },
+    },
+    CapabilityAuditEntry: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        action: { type: 'string', enum: ['GRANT', 'REVOKE'] },
+        capability: { type: 'string' },
+        at: { type: 'string', format: 'date-time' },
+        actor: { type: 'object', properties: { id: { type: 'string', nullable: true }, name: { type: 'string' }, role: { type: 'string', nullable: true } } },
+        target: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, email: { type: 'string' } } },
+      },
+    },
+
+    // ── Master Data schemas ──
+    BloodGroup: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        name: { type: 'string', example: 'O+', description: 'Not limited to the eight ABO/Rh groups — rare phenotypes such as "Bombay (hh)" are valid.' },
+        isActive: { type: 'boolean', description: 'False = archived. Archived groups leave the dropdown but existing employee records keep the value.' },
+        sortOrder: { type: 'integer', example: 0 },
+        usageCount: { type: 'integer', example: 12, description: 'Active employees currently holding this value.' },
+        createdAt: { type: 'string', format: 'date-time' },
+      },
+    },
+    CreateBloodGroupRequest: {
+      type: 'object',
+      required: ['name'],
+      properties: {
+        name: { type: 'string', maxLength: 30, example: 'O+', description: 'Letters, numbers, spaces and + - ( ) / only.' },
+        sortOrder: { type: 'integer', minimum: 0, maximum: 999 },
+      },
+    },
+
     // ── CXO Connect schemas ──
     CxoPerson: {
       type: 'object',
@@ -857,6 +950,293 @@ export const swaggerExtensions = {
   },
 
   paths: {
+    // ═══════════════════════════════════════════════════════════════════════════
+    // MASTER DATA — goal categories / types / priorities
+    // ═══════════════════════════════════════════════════════════════════════════
+    '/goal-options': {
+      get: {
+        tags: ['Master Data'],
+        summary: 'List goal categories, types and priorities',
+        description:
+          'Backs the Category / Goal Type / Priority dropdowns on the goal form. Readable by every authenticated role, because any employee can create a goal for themselves. '
+          + 'Seeded from the previous hardcoded constants on first read, so an existing tenant sees the same options until an admin edits them. '
+          + 'NOTE: the legacy GET /goals/categories, /goals/types and /goals/priorities endpoints still exist and still return a plain array of strings \u2014 they now read this table.',
+        operationId: 'listGoalOptions',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        parameters: [
+          { name: 'kind', in: 'query', schema: { type: 'string', enum: ['CATEGORY', 'TYPE', 'PRIORITY'] }, description: 'One list only. Omit for all three grouped by kind.' },
+          { name: 'includeArchived', in: 'query', schema: { type: 'string', enum: ['true', 'false'] }, description: 'Defaults to true for the admin screen.' },
+        ],
+        responses: {
+          200: {
+            description: 'Options, ordered by sortOrder',
+            content: { 'application/json': { schema: { type: 'object', properties: { options: { oneOf: [{ type: 'array', items: { $ref: '#/components/schemas/GoalOption' } }, { type: 'object', properties: { CATEGORY: { type: 'array', items: { $ref: '#/components/schemas/GoalOption' } }, TYPE: { type: 'array', items: { $ref: '#/components/schemas/GoalOption' } }, PRIORITY: { type: 'array', items: { $ref: '#/components/schemas/GoalOption' } } } }] } } } } },
+          },
+          400: { $ref: '#/components/responses/ValidationError' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+        },
+      },
+      post: {
+        tags: ['Master Data'],
+        summary: 'Add a goal option',
+        description:
+          'SUPER_ADMIN / ADMIN / HR. Re-adding an archived value restores it instead of returning 409. '
+          + 'Adding a PRIORITY is safe: goal validation checks the tenant\u2019s own active list rather than a fixed enum.',
+        operationId: 'createGoalOption',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { type: 'object', required: ['kind', 'label'], properties: { kind: { type: 'string', enum: ['CATEGORY', 'TYPE', 'PRIORITY'] }, label: { type: 'string', maxLength: 100 }, value: { type: 'string', maxLength: 100, description: 'Defaults to the label. Lowercased for PRIORITY.' }, color: { type: 'string', nullable: true }, sortOrder: { type: 'integer' } } } } },
+        },
+        responses: {
+          201: { description: 'Created', content: { 'application/json': { schema: { type: 'object', properties: { message: { type: 'string' }, option: { $ref: '#/components/schemas/GoalOption' } } } } } },
+          400: { $ref: '#/components/responses/ValidationError' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { $ref: '#/components/responses/Forbidden' },
+          409: { description: 'That option already exists' },
+        },
+      },
+    },
+
+    '/goal-options/{id}': {
+      patch: {
+        tags: ['Master Data'],
+        summary: 'Rename, recolour, reorder or restore a goal option',
+        description:
+          'SUPER_ADMIN / ADMIN / HR. Changing `value` CASCADES to every goal holding the old one \u2014 goals store these as plain strings, so without the cascade they would drop out of the dropdown and out of any filter built on it. '
+          + 'For PRIORITY, `sortOrder` is the ranking, not just display order.',
+        operationId: 'updateGoalOption',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { type: 'object', properties: { label: { type: 'string', maxLength: 100 }, value: { type: 'string', maxLength: 100 }, color: { type: 'string', nullable: true }, sortOrder: { type: 'integer' }, isActive: { type: 'boolean', description: 'true restores an archived option.' } } } } },
+        },
+        responses: {
+          200: { description: 'Updated', content: { 'application/json': { schema: { type: 'object', properties: { message: { type: 'string' }, option: { $ref: '#/components/schemas/GoalOption' } } } } } },
+          400: { $ref: '#/components/responses/ValidationError' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { $ref: '#/components/responses/Forbidden' },
+          404: { $ref: '#/components/responses/NotFound' },
+          409: { description: 'Another option already uses that value' },
+        },
+      },
+      delete: {
+        tags: ['Master Data'],
+        summary: 'Archive a goal option',
+        description:
+          'SUPER_ADMIN / ADMIN / HR. Soft-delete: the option leaves the dropdown but goals keep their value, and the response reports how many. '
+          + 'Refused with 400 if it is the last active option for that list \u2014 a dropdown must never be empty.',
+        operationId: 'archiveGoalOption',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'Archived', content: { 'application/json': { schema: { type: 'object', properties: { message: { type: 'string' }, option: { $ref: '#/components/schemas/GoalOption' }, usageCount: { type: 'integer' } } } } } },
+          400: { description: 'Validation failed, or this is the last active option' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { $ref: '#/components/responses/Forbidden' },
+          404: { $ref: '#/components/responses/NotFound' },
+        },
+      },
+    },
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SUB-LOGINS — Invite Recruiter / Manager
+    // ═══════════════════════════════════════════════════════════════════════════
+    '/sublogins': {
+      get: {
+        tags: ['Sub-Logins'],
+        summary: 'List sub-logins and seat counters',
+        description: 'Everyone in the tenant holding at least one REGISTRY_* capability, collapsed to one row per person, plus the three stat-card counters.',
+        operationId: 'listSubLogins',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        responses: {
+          200: {
+            description: 'Seats and counters',
+            content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, subLogins: { type: 'array', items: { $ref: '#/components/schemas/SubLogin' } }, stats: { type: 'object', properties: { authorized: { type: 'integer' }, active: { type: 'integer' }, pending: { type: 'integer' } } } } } } },
+          },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { $ref: '#/components/responses/Forbidden' },
+        },
+      },
+      post: {
+        tags: ['Sub-Logins'],
+        summary: 'Invite a recruiter / manager / viewer',
+        description:
+          'SUPER_ADMIN / ADMIN / HR. Delegates user creation to the existing employee invite flow rather than duplicating it, then attaches the chosen credentials. '
+          + 'If the email already belongs to a team member, no new user is created \u2014 the credentials are granted to their existing account and the response sets alreadyExisted:true (200 instead of 201).',
+        operationId: 'inviteSubLogin',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/InviteSubLoginRequest' } } } },
+        responses: {
+          201: { description: 'Invited and credentials granted' },
+          200: { description: 'Existing team member \u2014 credentials granted to their account' },
+          400: { $ref: '#/components/responses/ValidationError' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { description: 'Your role cannot invite this person or grant one of these credentials' },
+        },
+      },
+    },
+
+    '/sublogins/{id}': {
+      patch: {
+        tags: ['Sub-Logins'],
+        summary: 'Replace a credential set',
+        description: 'Sends the full desired set: anything missing from it is revoked, anything new is granted. Both directions are audited.',
+        operationId: 'updateSubLogin',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'The TenantUser id.' }],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { type: 'object', required: ['capabilities'], properties: { capabilities: { type: 'array', items: { type: 'string', enum: ['REGISTRY_SEARCH', 'REGISTRY_WRITE', 'REGISTRY_ANALYTICS', 'REGISTRY_EXPORT'] } }, title: { type: 'string', nullable: true } } } } },
+        },
+        responses: {
+          200: { description: 'Applied', content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, added: { type: 'array', items: { type: 'string' } }, removed: { type: 'array', items: { type: 'string' } } } } } } },
+          400: { $ref: '#/components/responses/ValidationError' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { description: 'Your role cannot grant or revoke one of these credentials' },
+        },
+      },
+      delete: {
+        tags: ['Sub-Logins'],
+        summary: 'Revoke all registry credentials',
+        description: 'Removes every REGISTRY_* capability. The TenantUser is NOT deleted \u2014 they keep their account, their role and everything else. Takes effect on their next request, since capabilities are re-read per request rather than carried in the JWT.',
+        operationId: 'revokeSubLogin',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'Revoked' },
+          400: { $ref: '#/components/responses/ValidationError' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { $ref: '#/components/responses/Forbidden' },
+        },
+      },
+    },
+
+    '/sublogins/presets': {
+      get: {
+        tags: ['Sub-Logins'],
+        summary: 'Platform role presets',
+        description:
+          'The three dropdown options. Each maps to a REAL UserRole plus a default capability set. Viewer differs from Recruiter by REGISTRY_EXPORT \u2014 a Viewer can look but cannot take the data away.',
+        operationId: 'listSubLoginPresets',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        responses: {
+          200: {
+            description: 'Presets',
+            content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, presets: { type: 'array', items: { type: 'object', properties: { key: { type: 'string', enum: ['RECRUITER', 'MANAGER', 'VIEWER'] }, label: { type: 'string' }, role: { type: 'string' }, capabilities: { type: 'array', items: { type: 'string' } } } } } } } } },
+          },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { $ref: '#/components/responses/Forbidden' },
+        },
+      },
+    },
+
+    '/sublogins/audit': {
+      get: {
+        tags: ['Sub-Logins'],
+        summary: 'Credential grant/revoke audit trail',
+        description:
+          'Who widened or removed access to registry data, and when. Kept even after the capability row is deleted, so a revoke does not erase the history of the grant.',
+        operationId: 'listSubLoginAudit',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        parameters: [
+          { name: 'userId', in: 'query', schema: { type: 'string' }, description: 'Limit to one person.' },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 500, default: 100 } },
+        ],
+        responses: {
+          200: { description: 'Audit entries, newest first', content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, entries: { type: 'array', items: { $ref: '#/components/schemas/CapabilityAuditEntry' } } } } } } },
+          400: { $ref: '#/components/responses/ValidationError' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { $ref: '#/components/responses/Forbidden' },
+        },
+      },
+    },
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // MASTER DATA — blood groups
+    // ═══════════════════════════════════════════════════════════════════════════
+    '/blood-groups': {
+      get: {
+        tags: ['Master Data'],
+        summary: 'List blood groups',
+        description:
+          'Feeds the Blood Group dropdown on the onboarding form and employee records. Open to every authenticated role. '
+          + 'The eight ABO/Rh groups are auto-seeded on first access so a new tenant never sees an empty dropdown.',
+        operationId: 'listBloodGroups',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        parameters: [
+          { name: 'includeArchived', in: 'query', schema: { type: 'string', enum: ['true', 'false'] }, description: 'Include archived groups (admin screen only).' },
+          { name: 'search', in: 'query', schema: { type: 'string', maxLength: 50 } },
+        ],
+        responses: {
+          200: {
+            description: 'Blood groups, ordered by sortOrder then name',
+            content: { 'application/json': { schema: { type: 'object', properties: { bloodGroups: { type: 'array', items: { $ref: '#/components/schemas/BloodGroup' } } } } } },
+          },
+          400: { $ref: '#/components/responses/ValidationError' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+        },
+      },
+      post: {
+        tags: ['Master Data'],
+        summary: 'Create a blood group',
+        description:
+          'SUPER_ADMIN / ADMIN / HR. Re-adding a name that exists but is archived RESTORES it and returns 200 rather than colliding with the unique index.',
+        operationId: 'createBloodGroup',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/CreateBloodGroupRequest' } } } },
+        responses: {
+          201: { description: 'Created', content: { 'application/json': { schema: { type: 'object', properties: { message: { type: 'string' }, bloodGroup: { $ref: '#/components/schemas/BloodGroup' } } } } } },
+          200: { description: 'An archived group with that name was restored' },
+          400: { $ref: '#/components/responses/ValidationError' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { $ref: '#/components/responses/Forbidden' },
+          409: { description: 'That blood group already exists' },
+        },
+      },
+    },
+
+    '/blood-groups/{id}': {
+      patch: {
+        tags: ['Master Data'],
+        summary: 'Rename, reorder or restore a blood group',
+        description:
+          'SUPER_ADMIN / ADMIN / HR. A rename also rewrites every employee record holding the old value, because employee records store the group as a string rather than a foreign key. Pass isActive:true to restore an archived group.',
+        operationId: 'updateBloodGroup',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { type: 'object', properties: { name: { type: 'string', maxLength: 30 }, sortOrder: { type: 'integer' }, isActive: { type: 'boolean' } } } } },
+        },
+        responses: {
+          200: { description: 'Updated', content: { 'application/json': { schema: { type: 'object', properties: { message: { type: 'string' }, bloodGroup: { $ref: '#/components/schemas/BloodGroup' } } } } } },
+          400: { $ref: '#/components/responses/ValidationError' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { $ref: '#/components/responses/Forbidden' },
+          404: { $ref: '#/components/responses/NotFound' },
+          409: { description: 'Another blood group already uses that name' },
+        },
+      },
+      delete: {
+        tags: ['Master Data'],
+        summary: 'Archive a blood group',
+        description:
+          'SUPER_ADMIN / ADMIN only (not HR). Soft-delete: the group leaves the dropdown but employee records keep their value. The response reports how many records still hold it.',
+        operationId: 'archiveBloodGroup',
+        security: [{ bearerAuth: [] }, { userCookie: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'Archived', content: { 'application/json': { schema: { type: 'object', properties: { message: { type: 'string' }, bloodGroup: { $ref: '#/components/schemas/BloodGroup' }, usageCount: { type: 'integer' } } } } } },
+          400: { $ref: '#/components/responses/ValidationError' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { $ref: '#/components/responses/Forbidden' },
+          404: { $ref: '#/components/responses/NotFound' },
+        },
+      },
+    },
+
     // ═══════════════════════════════════════════════════════════════════════════
     // DASHBOARDS — role-scoped aggregates (no input; scope comes from the session)
     // ═══════════════════════════════════════════════════════════════════════════

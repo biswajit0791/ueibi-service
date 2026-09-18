@@ -22,7 +22,7 @@ import {
 } from '../controllers/employee.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
-import { authorize } from '../middleware/rbac.js';
+import { authorize, authorizeRoleOrCapability } from '../middleware/rbac.js';
 
 const router = Router();
 
@@ -42,17 +42,17 @@ router.post('/employees/:id/exit', requireAuth, requireTenant, authorize('SUPER_
 router.post('/employees/:id/reactivate', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), reactivateEmployee);
 
 // ── Ex-Employees ─────────────────────────────────────────────────────────────
-router.get('/employees/ex', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), listExEmployees);
-router.post('/employees/ex', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), addExEmployee);
-router.post('/employees/ex/bulk', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), bulkAddExEmployees);
-router.patch('/employees/ex/:id', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), updateExEmployee);
+router.get('/employees/ex', requireAuth, requireTenant, authorizeRoleOrCapability(['SUPER_ADMIN', 'ADMIN', 'HR'], ['REGISTRY_SEARCH', 'REGISTRY_WRITE']), listExEmployees);
+router.post('/employees/ex', requireAuth, requireTenant, authorizeRoleOrCapability(['SUPER_ADMIN', 'ADMIN', 'HR'], ['REGISTRY_WRITE']), addExEmployee);
+router.post('/employees/ex/bulk', requireAuth, requireTenant, authorizeRoleOrCapability(['SUPER_ADMIN', 'ADMIN', 'HR'], ['REGISTRY_WRITE']), bulkAddExEmployees);
+router.patch('/employees/ex/:id', requireAuth, requireTenant, authorizeRoleOrCapability(['SUPER_ADMIN', 'ADMIN', 'HR'], ['REGISTRY_WRITE']), updateExEmployee);
 router.delete('/employees/ex/:id', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), deleteExEmployee);
 
 // ── Non-Joiners / Offers ─────────────────────────────────────────────────────
-router.get('/employees/offers', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), listNonJoiners);
-router.post('/employees/offers', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), addNonJoiner);
-router.post('/employees/offers/bulk', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), bulkAddNonJoiners);
-router.patch('/employees/offers/:id', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), updateNonJoiner);
+router.get('/employees/offers', requireAuth, requireTenant, authorizeRoleOrCapability(['SUPER_ADMIN', 'ADMIN', 'HR'], ['REGISTRY_SEARCH', 'REGISTRY_WRITE']), listNonJoiners);
+router.post('/employees/offers', requireAuth, requireTenant, authorizeRoleOrCapability(['SUPER_ADMIN', 'ADMIN', 'HR'], ['REGISTRY_WRITE']), addNonJoiner);
+router.post('/employees/offers/bulk', requireAuth, requireTenant, authorizeRoleOrCapability(['SUPER_ADMIN', 'ADMIN', 'HR'], ['REGISTRY_WRITE']), bulkAddNonJoiners);
+router.patch('/employees/offers/:id', requireAuth, requireTenant, authorizeRoleOrCapability(['SUPER_ADMIN', 'ADMIN', 'HR'], ['REGISTRY_WRITE']), updateNonJoiner);
 router.delete('/employees/offers/:id', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), deleteNonJoiner);
 
 // Single-employee detail — registered LAST among /employees GET routes so it

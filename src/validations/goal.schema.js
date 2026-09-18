@@ -5,9 +5,14 @@ export const createGoalSchema = z.object({
   description: z.string().max(3000, "Description cannot exceed 3000 characters").nullable().optional(),
   category: z.string().max(100).nullable().optional(),
   goalType: z.string().max(100).nullable().optional(),
+  // Priority is a tenant-managed master list, so this can no longer be a fixed
+  // z.enum — an admin adding "Urgent" would otherwise get a 400 on every save.
+  // Shape validation only here (lowercased, bounded); membership of the
+  // tenant's own active list is checked in the controller, which is the only
+  // place that knows the tenant. The four seeded values still pass unchanged.
   priority: z.preprocess(
-    (val) => (typeof val === 'string' ? val.toLowerCase() : val),
-    z.enum(['low', 'medium', 'high', 'critical'])
+    (val) => (typeof val === 'string' ? val.toLowerCase().trim() : val),
+    z.string().min(1).max(50)
   ).optional().default('medium'),
   financialYear: z.string().max(50).nullable().optional(),
   quarter: z.string().max(50).nullable().optional(),
@@ -49,8 +54,8 @@ export const updateGoalSchema = z.object({
   category: z.string().max(100).nullable().optional(),
   goalType: z.string().max(100).nullable().optional(),
   priority: z.preprocess(
-    (val) => (typeof val === 'string' ? val.toLowerCase() : val),
-    z.enum(['low', 'medium', 'high', 'critical'])
+    (val) => (typeof val === 'string' ? val.toLowerCase().trim() : val),
+    z.string().min(1).max(50)
   ).optional(),
   financialYear: z.string().max(50).nullable().optional(),
   quarter: z.string().max(50).nullable().optional(),
