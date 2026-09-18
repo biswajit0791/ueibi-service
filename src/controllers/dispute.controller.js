@@ -20,7 +20,21 @@ const DISPUTE_INCLUDE = {
   raisedBy: { select: PERSON_SELECT },
   subjectEmployee: { select: PERSON_SELECT },
   assignedTo: { select: PERSON_SELECT },
+  // Every employee the ticket is about. `subjectEmployee` above stays the
+  // primary one so existing consumers are untouched; `subjects` carries the
+  // whole set, including that primary.
+  subjects: {
+    select: { employeeId: true, employee: { select: PERSON_SELECT } },
+    orderBy: { createdAt: 'asc' },
+  },
 };
+
+/** The ids of every employee a ticket is about, primary subject included. */
+function subjectIdsOf(dispute) {
+  const ids = (dispute?.subjects || []).map((s) => s.employeeId);
+  if (dispute?.subjectEmployeeId) ids.push(dispute.subjectEmployeeId);
+  return [...new Set(ids.filter(Boolean))];
+}
 
 /**
  * Loads a tenant-scoped dispute and enforces view access: elevated
@@ -40,7 +54,12 @@ async function loadDisputeOrFail(req, res, id) {
     res.status(404).json({ error: 'Dispute not found' });
     return null;
   }
-  const allowed = isElevated(req.user.role) || dispute.raisedById === req.user.id || dispute.subjectEmployeeId === req.user.id || dispute.assignedToId === req.user.id;
+  // A ticket naming several employees must open for every one of them, not
+  // only whoever happens to be the primary subject.
+  const allowed = isElevated(req.user.role)
+    || dispute.raisedById === req.user.id
+    || subjectIdsOf(dispute).includes(req.user.id)
+    || dispute.assignedToId === req.user.id;
   if (!allowed) {
     res.status(404).json({ error: 'Dispute not found' });
     return null;
@@ -51,7 +70,7 @@ async function loadDisputeOrFail(req, res, id) {
 /** Every user (raiser, subject employee, assignee) who should hear about
  * activity on a ticket, excluding a given actor and de-duplicated. */
 function stakeholdersOf(dispute, excludeId) {
-  const ids = new Set([dispute.raisedById, dispute.subjectEmployeeId, dispute.assignedToId].filter(Boolean));
+  const ids = new Set([dispute.raisedById, ...subjectIdsOf(dispute), dispute.assignedToId].filter(Boolean));
   ids.delete(excludeId);
   return [...ids];
 }
@@ -81,7 +100,17 @@ export async function listDisputes(req, res, next) {
 
     const where = isElevated(req.user.role)
       ? { tenantId: req.tenantId }
-      : { tenantId: req.tenantId, OR: [{ raisedById: req.user.id }, { subjectEmployeeId: req.user.id }, { assignedToId: req.user.id }] };
+      : {
+          tenantId: req.tenantId,
+          OR: [
+            { raisedById: req.user.id },
+            { subjectEmployeeId: req.user.id },
+            // A ticket that names several employees must list for each of them,
+            // not only the primary subject.
+            { subjects: { some: { employeeId: req.user.id } } },
+            { assignedToId: req.user.id },
+          ],
+        };
 
     if (status) where.status = status;
     if (priority) where.priority = priority;
@@ -132,17 +161,34 @@ export async function createDispute(req, res, next) {
     }
 
     const elevated = isElevated(req.user.role);
-    let subjectEmployeeId = req.user.id;
-    if (elevated && parsed.data.subjectEmployeeId) {
-      const subject = await prisma.tenantUser.findFirst({
-        where: { id: parsed.data.subjectEmployeeId, tenantId: req.tenantId, isDeleted: false },
+
+    // Non-elevated users can only ever raise a ticket about themselves — the
+    // requested list is ignored for them, exactly as the single-id field was.
+    const requestedIds = elevated
+      ? [...new Set([
+          ...(parsed.data.subjectEmployeeIds || []),
+          ...(parsed.data.subjectEmployeeId ? [parsed.data.subjectEmployeeId] : []),
+        ])]
+      : [];
+
+    let subjectIds = [req.user.id];
+    if (requestedIds.length > 0) {
+      const found = await prisma.tenantUser.findMany({
+        where: { id: { in: requestedIds }, tenantId: req.tenantId, isDeleted: false },
         select: { id: true },
       });
-      if (!subject) {
-        return res.status(400).json({ error: 'subjectEmployeeId does not refer to a valid employee in this tenant' });
+      const foundIds = new Set(found.map((u) => u.id));
+      const invalid = requestedIds.filter((id) => !foundIds.has(id));
+      if (invalid.length > 0) {
+        return res.status(400).json({
+          error: 'One or more selected employees are not valid in this tenant',
+          details: invalid,
+        });
       }
-      subjectEmployeeId = subject.id;
+      // Preserve the order the user picked them in; the first is the primary.
+      subjectIds = requestedIds.filter((id) => foundIds.has(id));
     }
+    const subjectEmployeeId = subjectIds[0];
 
     if (req.file && !ATTACHMENT_MIME_ALLOWLIST.has(req.file.mimetype)) {
       return res.status(400).json({ error: 'Only PDF, JPEG, or PNG files are allowed' });
@@ -160,6 +206,9 @@ export async function createDispute(req, res, next) {
         priority: parsed.data.priority || 'MEDIUM',
         raisedById: req.user.id,
         subjectEmployeeId,
+        subjects: {
+          create: subjectIds.map((employeeId) => ({ tenantId: req.tenantId, employeeId })),
+        },
       },
       include: DISPUTE_INCLUDE,
     });

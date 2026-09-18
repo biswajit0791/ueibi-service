@@ -26,56 +26,56 @@ enum UserStatus {
 }
 
 model Tenant {
-  id                  String                   @id @default(cuid())
-  companyName         String
-  domainName          String                   @unique
-  tenantCode          String                   @unique
-  licenseLimit        Int                      @default(0)
-  createdAt           DateTime                 @default(now())
-  updatedAt           DateTime                 @updatedAt
-  users               TenantUser[]
-  registrationId      String?                  @unique
-  registration        CompanyRegistration?     @relation(fields: [registrationId], references: [id])
-  exEmployeeRecords   ExEmployeeRecord[]
-  nonJoinerRecords    NonJoinerRecord[]
-  notifications       Notification[]
-  goals               Goal[]
-  goalAssignments     GoalAssignment[]
-  tasks               Task[]
-  policies            Policy[]
-  policyAssignments   PolicyAssignment[]
-  policyAcceptances   PolicyAcceptance[]
-  policyAuditLogs     PolicyAuditLog[]
-  appraisalCycles     AppraisalCycle[]
-  appraisalParameters AppraisalParameter[]
-  peerNominations     PeerNomination[]
-  hubEvents           HubEvent[]
-  leaveTypes          LeaveType[]
-  leaveBalances       LeaveBalance[]
-  wfhPolicy           WfhPolicy?
-  wfhBalances         WfhBalance[]
-  leaveRequests       LeaveRequest[]
-  leaveAuditLogs      LeaveAuditLog[]
-  leaveAdjustments    LeaveBalanceAdjustment[]
-  galleryPosts        GalleryPost[]
-  departments         Department[]
-  projects            Project[]
+  id                   String                   @id @default(cuid())
+  companyName          String
+  domainName           String                   @unique
+  tenantCode           String                   @unique
+  licenseLimit         Int                      @default(0)
+  createdAt            DateTime                 @default(now())
+  updatedAt            DateTime                 @updatedAt
+  users                TenantUser[]
+  registrationId       String?                  @unique
+  registration         CompanyRegistration?     @relation(fields: [registrationId], references: [id])
+  exEmployeeRecords    ExEmployeeRecord[]
+  nonJoinerRecords     NonJoinerRecord[]
+  notifications        Notification[]
+  goals                Goal[]
+  goalAssignments      GoalAssignment[]
+  tasks                Task[]
+  policies             Policy[]
+  policyAssignments    PolicyAssignment[]
+  policyAcceptances    PolicyAcceptance[]
+  policyAuditLogs      PolicyAuditLog[]
+  appraisalCycles      AppraisalCycle[]
+  appraisalParameters  AppraisalParameter[]
+  peerNominations      PeerNomination[]
+  hubEvents            HubEvent[]
+  leaveTypes           LeaveType[]
+  leaveBalances        LeaveBalance[]
+  wfhPolicy            WfhPolicy?
+  wfhBalances          WfhBalance[]
+  leaveRequests        LeaveRequest[]
+  leaveAuditLogs       LeaveAuditLog[]
+  leaveAdjustments     LeaveBalanceAdjustment[]
+  galleryPosts         GalleryPost[]
+  departments          Department[]
+  projects             Project[]
   projectContributions ProjectContribution[]
-  entityAttachments   EntityAttachment[]
-  trainingRecords     TrainingRecord[]
-  achievements        Achievement[]
-  incidents           Incident[]
-  disputes            Dispute[]
-  disputeMessages     DisputeMessage[]
+  entityAttachments    EntityAttachment[]
+  trainingRecords      TrainingRecord[]
+  achievements         Achievement[]
+  incidents            Incident[]
+  disputes             Dispute[]
+  disputeMessages      DisputeMessage[]
+  disputeSubjects      DisputeSubject[]
+  userCapabilities     UserCapability[]
+  bloodGroups          BloodGroup[]
+  goalOptions          GoalOption[]
+  capabilityAuditLogs  CapabilityAuditLog[]
+  cxoMessages          CxoMessage[]
+  cxoMessageReplies    CxoMessageReply[]
 
   @@map("tenants")
-  userCapabilities   UserCapability[]
-  bloodGroups        BloodGroup[]
-  goalOptions        GoalOption[]
-  capabilityAuditLogs CapabilityAuditLog[]
-  cxoMessages        CxoMessage[]
-  cxoMessageReplies  CxoMessageReply[]
-
 }
 
 enum EmploymentType {
@@ -123,14 +123,14 @@ model TenantUser {
   esic    String?
 
   // Smart HR Relations
-  capabilities               UserCapability[] @relation("UserCapabilities")
-  cxoMessagesRaised          CxoMessage[]     @relation("CxoRaisedBy")
-  cxoMessagesTargeted        CxoMessage[]     @relation("CxoTargetLeader")
-  cxoMessagesAssigned        CxoMessage[]     @relation("CxoAssignee")
-  cxoReplies                 CxoMessageReply[] @relation("CxoReplyAuthor")
-  capabilitiesGranted        UserCapability[] @relation("CapabilityGrantedBy")
-  capabilityAuditTarget      CapabilityAuditLog[] @relation("CapabilityAuditTarget")
-  capabilityAuditActor       CapabilityAuditLog[] @relation("CapabilityAuditActor")
+  capabilities               UserCapability[]         @relation("UserCapabilities")
+  cxoMessagesRaised          CxoMessage[]             @relation("CxoRaisedBy")
+  cxoMessagesTargeted        CxoMessage[]             @relation("CxoTargetLeader")
+  cxoMessagesAssigned        CxoMessage[]             @relation("CxoAssignee")
+  cxoReplies                 CxoMessageReply[]        @relation("CxoReplyAuthor")
+  capabilitiesGranted        UserCapability[]         @relation("CapabilityGrantedBy")
+  capabilityAuditTarget      CapabilityAuditLog[]     @relation("CapabilityAuditTarget")
+  capabilityAuditActor       CapabilityAuditLog[]     @relation("CapabilityAuditActor")
   bankDetails                BankDetails?
   workHistory                WorkHistory[]
   exitDetails                ExitDetails?
@@ -165,6 +165,7 @@ model TenantUser {
   reportedIncidents          Incident[]               @relation("IncidentReporter")
   disputesRaised             Dispute[]                @relation("DisputeRaisedBy")
   disputeSubjectOf           Dispute[]                @relation("DisputeSubjectEmployee")
+  disputeSubjectLinks        DisputeSubject[]         @relation("DisputeSubjectLink")
   disputesAssigned           Dispute[]                @relation("DisputeAssignee")
   disputeMessagesSent        DisputeMessage[]         @relation("DisputeMessageSender")
   // Policies & Compliance Relations
@@ -1020,10 +1021,10 @@ model Incident {
 
 // ── Dispute Center (support tickets) ──────────────────────────────────────
 model Dispute {
-  id            String  @id @default(cuid())
-  tenantId      String
-  tenant        Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  ticketNumber  String  @unique
+  id           String @id @default(cuid())
+  tenantId     String
+  tenant       Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticketNumber String @unique
 
   subject     String
   description String @db.Text
@@ -1048,10 +1049,34 @@ model Dispute {
 
   messages DisputeMessage[]
 
+  // Every employee this ticket is about. `subjectEmployeeId` above remains the
+  // primary subject so existing queries, filters and notifications are
+  // unaffected; this table carries the full set when one issue covers several
+  // people. The primary subject also has a row here, so reads need only one
+  // source of truth.
+  subjects DisputeSubject[]
+
   @@index([tenantId, status])
   @@index([raisedById])
   @@index([subjectEmployeeId])
   @@map("disputes")
+}
+
+model DisputeSubject {
+  id         String     @id @default(cuid())
+  tenantId   String
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  disputeId  String
+  dispute    Dispute    @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+  employeeId String
+  employee   TenantUser @relation("DisputeSubjectLink", fields: [employeeId], references: [id], onDelete: Cascade)
+  createdAt  DateTime   @default(now())
+
+  @@unique([disputeId, employeeId])
+  @@index([tenantId])
+  @@index([disputeId])
+  @@index([employeeId])
+  @@map("dispute_subjects")
 }
 
 model DisputeMessage {
@@ -1411,18 +1436,18 @@ model GalleryComment {
 // Goal.category / Goal.goalType / Goal.priority hold the `value` as a plain
 // string (no FK), so archiving is a soft-delete and renaming cascades.
 model GoalOption {
-  id        String         @id @default(cuid())
-  tenantId  String
-  tenant    Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  kind      GoalOptionKind
+  id       String         @id @default(cuid())
+  tenantId String
+  tenant   Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kind     GoalOptionKind
 
-  label     String // shown in the dropdown, e.g. "Medium"
-  value     String // persisted on the Goal, e.g. "medium"
+  label String // shown in the dropdown, e.g. "Medium"
+  value String // persisted on the Goal, e.g. "medium"
 
-  isActive  Boolean  @default(true) // soft-delete: existing goals keep the value
+  isActive  Boolean @default(true) // soft-delete: existing goals keep the value
   // Display order. For PRIORITY this is also the SEMANTIC rank (low < critical),
   // which is why lists must be ordered by this and never alphabetically.
-  sortOrder Int      @default(0)
+  sortOrder Int     @default(0)
   // Optional accent for the chips/badges. Without one the UI falls back.
   color     String?
 
@@ -1491,15 +1516,15 @@ model Department {
 // `isAnonymous` is set the API never exposes the sender to leadership — the
 // redaction lives in the service layer, not the schema.
 model CxoMessage {
-  id           String  @id @default(cuid())
+  id           String @id @default(cuid())
   tenantId     String
-  tenant       Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  ticketNumber String  @unique
+  tenant       Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticketNumber String @unique
 
   subject  String
-  body     String          @db.Text
-  category CxoCategory     @default(SUGGESTION)
-  status   CxoStatus       @default(PENDING)
+  body     String      @db.Text
+  category CxoCategory @default(SUGGESTION)
+  status   CxoStatus   @default(PENDING)
 
   isAnonymous Boolean @default(false)
 
@@ -1515,8 +1540,8 @@ model CxoMessage {
   assignedToId String?
   assignedTo   TenantUser? @relation("CxoAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
 
-  dueAt      DateTime?  // SLA — the "responds within 5 business days" promise
-  closedAt   DateTime?
+  dueAt       DateTime? // SLA — the "responds within 5 business days" promise
+  closedAt    DateTime?
   lastReplyAt DateTime?
 
   // Unread bookkeeping, one side each.
@@ -1544,7 +1569,7 @@ model CxoMessageReply {
   authorId String
   author   TenantUser @relation("CxoReplyAuthor", fields: [authorId], references: [id], onDelete: Cascade)
 
-  body String  @db.Text
+  body                 String  @db.Text
   // Distinguishes an official response from the employee's follow-up, so the
   // UI can style it and status transitions can key off it.
   isLeadershipResponse Boolean @default(false)
@@ -1583,18 +1608,18 @@ enum CxoStatus {
 // maps the string 'LEADERSHIP' to SUPER_ADMIN, so making it a role would
 // silently grant every leader super-admin dashboard visibility.
 model UserCapability {
-  id          String     @id @default(cuid())
-  tenantId    String
-  tenant      Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  userId      String
-  user        TenantUser @relation("UserCapabilities", fields: [userId], references: [id], onDelete: Cascade)
-  capability  Capability
+  id         String     @id @default(cuid())
+  tenantId   String
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId     String
+  user       TenantUser @relation("UserCapabilities", fields: [userId], references: [id], onDelete: Cascade)
+  capability Capability
 
   // Shown to employees when choosing who to write to, e.g. "Chief People Officer".
   title       String?
   grantedById String?
   grantedBy   TenantUser? @relation("CapabilityGrantedBy", fields: [grantedById], references: [id], onDelete: SetNull)
-  createdAt   DateTime   @default(now())
+  createdAt   DateTime    @default(now())
 
   @@unique([userId, capability])
   @@index([tenantId, capability])
@@ -1606,9 +1631,9 @@ model UserCapability {
 // ex-employee conduct records, so "who widened access to this, and when" has to
 // survive the revoke.
 model CapabilityAuditLog {
-  id         String     @id @default(cuid())
-  tenantId   String
-  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   action     String // GRANT | REVOKE
   capability Capability
@@ -1618,12 +1643,12 @@ model CapabilityAuditLog {
   targetUser   TenantUser @relation("CapabilityAuditTarget", fields: [targetUserId], references: [id], onDelete: Cascade)
 
   // Who did it. Nullable so the log survives that account being removed.
-  actorId    String?
-  actor      TenantUser? @relation("CapabilityAuditActor", fields: [actorId], references: [id], onDelete: SetNull)
-  actorRole  String?
+  actorId   String?
+  actor     TenantUser? @relation("CapabilityAuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  actorRole String?
 
-  title      String?
-  createdAt  DateTime   @default(now())
+  title     String?
+  createdAt DateTime @default(now())
 
   @@index([tenantId, createdAt])
   @@index([targetUserId, createdAt])
