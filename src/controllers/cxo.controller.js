@@ -2,7 +2,7 @@ import cxoService from '../services/cxo.service.js';
 import {
   grantCapability,
   revokeCapability,
-  canManageCapabilities,
+  canGrantCapability,
   listCapabilityHolders,
 } from '../lib/capabilities.js';
 import { formatIssues } from '../validations/message.schema.js';
@@ -121,15 +121,20 @@ export class CxoController {
 
   async grant(req, res) {
     try {
-      if (!canManageCapabilities(req.user)) {
-        return fail(res, Object.assign(new Error('Only an admin can grant capabilities'), { status: 403 }));
-      }
       const parsed = grantCapabilitySchema.safeParse(req.body || {});
       if (!parsed.success) return invalid(res, parsed.error);
+
+      // Per-capability, NOT a blanket "can manage capabilities" check: HR may
+      // grant registry credentials but must never be able to grant LEADERSHIP,
+      // which decides who reads the CXO inbox.
+      if (!canGrantCapability(req.user, parsed.data.capability)) {
+        return fail(res, Object.assign(new Error(`Your role cannot grant ${parsed.data.capability}`), { status: 403 }));
+      }
 
       const granted = await grantCapability({
         tenantId: req.user.tenantId,
         grantedById: req.user.id,
+        actor: req.user,
         ...parsed.data,
       });
       res.status(201).json({ success: true, data: { userId: granted.userId, capability: granted.capability, title: granted.title } });
@@ -138,13 +143,14 @@ export class CxoController {
 
   async revoke(req, res) {
     try {
-      if (!canManageCapabilities(req.user)) {
-        return fail(res, Object.assign(new Error('Only an admin can revoke capabilities'), { status: 403 }));
-      }
       const parsed = revokeCapabilitySchema.safeParse(req.body || {});
       if (!parsed.success) return invalid(res, parsed.error);
 
-      const data = await revokeCapability({ tenantId: req.user.tenantId, ...parsed.data });
+      if (!canGrantCapability(req.user, parsed.data.capability)) {
+        return fail(res, Object.assign(new Error(`Your role cannot revoke ${parsed.data.capability}`), { status: 403 }));
+      }
+
+      const data = await revokeCapability({ tenantId: req.user.tenantId, actor: req.user, ...parsed.data });
       res.status(200).json({ success: true, data });
     } catch (err) { fail(res, err); }
   }

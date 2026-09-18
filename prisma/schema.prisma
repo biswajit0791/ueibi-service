@@ -70,6 +70,9 @@ model Tenant {
 
   @@map("tenants")
   userCapabilities   UserCapability[]
+  bloodGroups        BloodGroup[]
+  goalOptions        GoalOption[]
+  capabilityAuditLogs CapabilityAuditLog[]
   cxoMessages        CxoMessage[]
   cxoMessageReplies  CxoMessageReply[]
 
@@ -126,6 +129,8 @@ model TenantUser {
   cxoMessagesAssigned        CxoMessage[]     @relation("CxoAssignee")
   cxoReplies                 CxoMessageReply[] @relation("CxoReplyAuthor")
   capabilitiesGranted        UserCapability[] @relation("CapabilityGrantedBy")
+  capabilityAuditTarget      CapabilityAuditLog[] @relation("CapabilityAuditTarget")
+  capabilityAuditActor       CapabilityAuditLog[] @relation("CapabilityAuditActor")
   bankDetails                BankDetails?
   workHistory                WorkHistory[]
   exitDetails                ExitDetails?
@@ -1396,6 +1401,68 @@ model GalleryComment {
 // Used to drive dropdowns across Employee Records, UER Team, Leave, etc.
 // Names are stored as strings on employee records (no FK) — renaming a dept
 // does NOT retroactively change historical employee records.
+// ─── Goal Option Master Lists ─────────────────────────────────────────────────
+// Backs the Category / Goal Type / Priority dropdowns on the goal form.
+// One table with a `kind` discriminator rather than three near-identical tables:
+// same CRUD, same admin UI, one migration.
+//
+// `label` and `value` are separate because priority DISPLAYS "Medium" but is
+// STORED on the Goal as "medium". For category and type they are the same.
+// Goal.category / Goal.goalType / Goal.priority hold the `value` as a plain
+// string (no FK), so archiving is a soft-delete and renaming cascades.
+model GoalOption {
+  id        String         @id @default(cuid())
+  tenantId  String
+  tenant    Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kind      GoalOptionKind
+
+  label     String // shown in the dropdown, e.g. "Medium"
+  value     String // persisted on the Goal, e.g. "medium"
+
+  isActive  Boolean  @default(true) // soft-delete: existing goals keep the value
+  // Display order. For PRIORITY this is also the SEMANTIC rank (low < critical),
+  // which is why lists must be ordered by this and never alphabetically.
+  sortOrder Int      @default(0)
+  // Optional accent for the chips/badges. Without one the UI falls back.
+  color     String?
+
+  createdBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, kind, value])
+  @@index([tenantId, kind, isActive])
+  @@map("goal_options")
+}
+
+enum GoalOptionKind {
+  CATEGORY
+  TYPE
+  PRIORITY
+}
+
+// ─── Blood Group Master List ──────────────────────────────────────────────────
+// Tenant-scoped, RBAC-managed list that feeds the Blood Group dropdown on the
+// onboarding form and employee records. Modelled on Department rather than a
+// hard-coded enum: the eight ABO/Rh groups cover almost everyone, but rare
+// phenotypes exist (Bombay/hh is notably present in India, Rh-null elsewhere),
+// and a fixed enum would need a migration every time one is needed.
+model BloodGroup {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String // e.g. "O+", "AB-", "Bombay (hh)"
+  isActive  Boolean  @default(true) // soft-delete — false = archived, keeps historical employee values valid
+  sortOrder Int      @default(0)
+  createdBy String? // TenantUser.id (null for seeded rows)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, name])
+  @@index([tenantId, isActive])
+  @@map("blood_groups")
+}
+
 model Department {
   id          String   @id @default(cuid())
   tenantId    String
@@ -1534,8 +1601,47 @@ model UserCapability {
   @@map("user_capabilities")
 }
 
+// Every grant and revoke of a capability, kept even after the capability row
+// itself is deleted. Registry capabilities open access to PAN numbers and
+// ex-employee conduct records, so "who widened access to this, and when" has to
+// survive the revoke.
+model CapabilityAuditLog {
+  id         String     @id @default(cuid())
+  tenantId   String
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  action     String // GRANT | REVOKE
+  capability Capability
+
+  // Who it was granted to / taken from.
+  targetUserId String
+  targetUser   TenantUser @relation("CapabilityAuditTarget", fields: [targetUserId], references: [id], onDelete: Cascade)
+
+  // Who did it. Nullable so the log survives that account being removed.
+  actorId    String?
+  actor      TenantUser? @relation("CapabilityAuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  actorRole  String?
+
+  title      String?
+  createdAt  DateTime   @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([targetUserId, createdAt])
+  @@map("capability_audit_logs")
+}
+
 enum Capability {
-  LEADERSHIP
+  LEADERSHIP // CXO Connect inbox
+
+  // ── Registry / sub-login credentials ──
+  // These back the "Granular Registry Credentials" checkboxes on the
+  // Invite Recruiter modal. They are capabilities rather than roles because
+  // "Recruiter" and "Viewer" are not UserRole values, and because a recruiter
+  // needs registry access WITHOUT being made an admin.
+  REGISTRY_SEARCH // run a registry search
+  REGISTRY_WRITE // add & edit active employee registry records
+  REGISTRY_ANALYTICS // verification analytics & billing history
+  REGISTRY_EXPORT // download/export search results (separates Recruiter from Viewer)
 }
 
 // ─── Direct Messaging ─────────────────────────────────────────────────────────

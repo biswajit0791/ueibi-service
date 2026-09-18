@@ -12,6 +12,7 @@ import {
   listGoalsQuerySchema,
 } from '../validations/goal.schema.js';
 import { goalService, GOAL_CATEGORIES, GOAL_TYPES, GOAL_PRIORITIES, GOAL_STATUS } from '../services/goal.service.js';
+import goalOptionService from '../services/goalOption.service.js';
 import { ELEVATED_ROLES, SUPER_ELEVATED_ROLES, hasRole, canViewDashboard } from '../lib/roles.js';
 import { getCurrentFinancialYear, getCurrentQuarter } from '../lib/financialYear.js';
 import { GOAL_EDITABLE_STATUSES } from '../lib/workflowStatus.js';
@@ -25,16 +26,40 @@ async function checkIsSubordinate(managerId, targetId, tenantId) {
 
 // ── Metadata Endpoints ─────────────────────────────────────────────────────
 
+// These three now read the tenant's own master lists instead of a hardcoded
+// constant. The RESPONSE SHAPE IS UNCHANGED on purpose — GoalForm.jsx and any
+// other consumer keep working with no edit. The constants survive as the seed
+// for a tenant that has never configured its lists.
 export async function getGoalCategories(req, res) {
-  res.json({ categories: GOAL_CATEGORIES });
+  try {
+    res.json({ categories: await goalOptionService.listValues({ tenantId: req.tenantId, kind: 'CATEGORY' }) });
+  } catch {
+    res.json({ categories: GOAL_CATEGORIES });
+  }
 }
 
 export async function getGoalTypes(req, res) {
-  res.json({ types: GOAL_TYPES });
+  try {
+    res.json({ types: await goalOptionService.listValues({ tenantId: req.tenantId, kind: 'TYPE' }) });
+  } catch {
+    res.json({ types: GOAL_TYPES });
+  }
 }
 
 export async function getGoalPriorities(req, res) {
-  res.json({ priorities: GOAL_PRIORITIES });
+  try {
+    res.json({ priorities: await goalOptionService.listValues({ tenantId: req.tenantId, kind: 'PRIORITY' }) });
+  } catch {
+    res.json({ priorities: GOAL_PRIORITIES });
+  }
+}
+
+/** Full option objects (label, colour, order) for the admin screen and chips. */
+export async function getGoalOptions(req, res, next) {
+  try {
+    const options = await goalOptionService.listAllWithUsage({ tenantId: req.tenantId });
+    res.json({ options });
+  } catch (err) { next(err); }
 }
 
 /**
@@ -173,12 +198,33 @@ export async function getAssignableUsers(req, res, next) {
  *
  * In all cases, createdById is stored for proper audit trail.
  */
+/**
+ * Priority moved from a fixed z.enum to a tenant-managed master list, so
+ * membership has to be checked here — the schema cannot know the tenant.
+ *
+ * Only validates a priority the caller actually SET. An update that leaves
+ * priority alone is untouched, so a goal created before an option was archived
+ * can still be edited. Returns null when fine, or a 400 body when not.
+ */
+async function checkPriorityAllowed(tenantId, priority) {
+  if (priority === undefined || priority === null || priority === '') return null;
+  const allowed = await goalOptionService.allowedValues({ tenantId, kind: 'PRIORITY' });
+  if (allowed.includes(priority)) return null;
+  return {
+    error: 'Validation failed',
+    details: [{ field: 'priority', message: `Priority must be one of: ${allowed.join(', ')}` }],
+  };
+}
+
 export async function createGoal(req, res, next) {
   try {
     const parsed = createGoalSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
+
+    const priorityError = await checkPriorityAllowed(req.tenantId, parsed.data.priority);
+    if (priorityError) return res.status(400).json(priorityError);
 
     const {
       title,
@@ -763,6 +809,9 @@ export async function updateGoal(req, res, next) {
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
+
+    const priorityError = await checkPriorityAllowed(req.tenantId, parsed.data.priority);
+    if (priorityError) return res.status(400).json(priorityError);
 
     const existing = await prisma.goal.findFirst({
       where: { id, tenantId: req.tenantId },

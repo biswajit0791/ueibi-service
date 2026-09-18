@@ -18,12 +18,80 @@ import { ELEVATED_ROLES, hasRole } from './roles.js';
 
 export const CAPABILITIES = {
   LEADERSHIP: 'LEADERSHIP',
+  // Registry / sub-login credentials — the checkboxes on the Invite Recruiter
+  // modal. Capabilities rather than roles because "Recruiter" and "Viewer" are
+  // not UserRole values, and a recruiter needs registry access without being
+  // made an admin.
+  REGISTRY_SEARCH: 'REGISTRY_SEARCH',
+  REGISTRY_WRITE: 'REGISTRY_WRITE',
+  REGISTRY_ANALYTICS: 'REGISTRY_ANALYTICS',
+  REGISTRY_EXPORT: 'REGISTRY_EXPORT',
 };
 
 export const ALL_CAPABILITIES = Object.values(CAPABILITIES);
 
-/** Roles that may grant or revoke capabilities. */
-export const CAPABILITY_ADMIN_ROLES = ['SUPER_ADMIN', 'ADMIN'];
+export const REGISTRY_CAPABILITIES = [
+  CAPABILITIES.REGISTRY_SEARCH,
+  CAPABILITIES.REGISTRY_WRITE,
+  CAPABILITIES.REGISTRY_ANALYTICS,
+  CAPABILITIES.REGISTRY_EXPORT,
+];
+
+/**
+ * Who may grant each capability.
+ *
+ * HR can hand out registry credentials because HR already invites Managers and
+ * Employees — blocking them would make the invite modal half-work. LEADERSHIP
+ * stays with ADMIN/SUPER_ADMIN, since it decides who reads the CXO inbox.
+ */
+export const CAPABILITY_GRANT_ROLES = {
+  [CAPABILITIES.LEADERSHIP]: ['SUPER_ADMIN', 'ADMIN'],
+  [CAPABILITIES.REGISTRY_SEARCH]: ['SUPER_ADMIN', 'ADMIN', 'HR'],
+  [CAPABILITIES.REGISTRY_WRITE]: ['SUPER_ADMIN', 'ADMIN', 'HR'],
+  [CAPABILITIES.REGISTRY_ANALYTICS]: ['SUPER_ADMIN', 'ADMIN', 'HR'],
+  [CAPABILITIES.REGISTRY_EXPORT]: ['SUPER_ADMIN', 'ADMIN', 'HR'],
+};
+
+/** Roles that may grant or revoke at least one capability. */
+export const CAPABILITY_ADMIN_ROLES = ['SUPER_ADMIN', 'ADMIN', 'HR'];
+
+/** True when this user may grant/revoke this specific capability. */
+export function canGrantCapability(user, capability) {
+  const allowed = CAPABILITY_GRANT_ROLES[capability];
+  return Array.isArray(allowed) && hasRole(user?.role, allowed);
+}
+
+/**
+ * Presets behind the "Platform Role Assignment" dropdown.
+ *
+ * The preset only seeds the checkboxes — the capabilities actually sent are the
+ * source of truth, so a preset and a hand-ticked set never disagree.
+ * `role` is a real UserRole value; "Recruiter" and "Viewer" deliberately are not.
+ */
+export const SUBLOGIN_PRESETS = {
+  RECRUITER: {
+    label: 'Recruiter (Search focused)',
+    role: 'EMPLOYEE',
+    capabilities: [CAPABILITIES.REGISTRY_SEARCH, CAPABILITIES.REGISTRY_EXPORT],
+  },
+  MANAGER: {
+    label: 'Manager (Edit and Verify)',
+    role: 'MANAGER',
+    capabilities: [
+      CAPABILITIES.REGISTRY_SEARCH,
+      CAPABILITIES.REGISTRY_WRITE,
+      CAPABILITIES.REGISTRY_ANALYTICS,
+      CAPABILITIES.REGISTRY_EXPORT,
+    ],
+  },
+  VIEWER: {
+    // Read-only: can look, cannot take the data away. That export line is what
+    // separates a Viewer from a Recruiter.
+    label: 'Viewer (Read-only search)',
+    role: 'EMPLOYEE',
+    capabilities: [CAPABILITIES.REGISTRY_SEARCH],
+  },
+};
 
 /**
  * True when the request's user holds a capability.
@@ -49,6 +117,14 @@ export function isLeadership(user) {
 
 export function canManageCapabilities(user) {
   return hasRole(user?.role, CAPABILITY_ADMIN_ROLES);
+}
+
+/** Convenience for the registry gates: role-based access OR an explicit grant. */
+export function canSearchRegistry(user) {
+  return (
+    hasCapability(user, CAPABILITIES.REGISTRY_SEARCH) ||
+    hasRole(user?.role, ['SUPER_ADMIN', 'ADMIN', 'CMD', 'HR', 'FINANCE'])
+  );
 }
 
 /** Capability strings held by one user. */
@@ -100,7 +176,27 @@ export async function listCapabilityHolders(tenantId, capability) {
   }));
 }
 
-export async function grantCapability({ tenantId, userId, capability, title, grantedById }) {
+async function writeAudit({ tenantId, action, capability, targetUserId, actor, title }) {
+  try {
+    await prisma.capabilityAuditLog.create({
+      data: {
+        tenantId,
+        action,
+        capability,
+        targetUserId,
+        actorId: actor?.id ?? null,
+        actorRole: actor?.role ?? null,
+        title: title ?? null,
+      },
+    });
+  } catch (err) {
+    // The audit write must never block the grant itself, but a failure here is
+    // worth shouting about — it means access changed without a record.
+    console.error('[capabilities] AUDIT WRITE FAILED', { action, capability, targetUserId }, err.message);
+  }
+}
+
+export async function grantCapability({ tenantId, userId, capability, title, grantedById, actor }) {
   const user = await prisma.tenantUser.findFirst({
     where: { id: userId, tenantId, isDeleted: false },
     select: { id: true, name: true, status: true },
@@ -112,14 +208,25 @@ export async function grantCapability({ tenantId, userId, capability, title, gra
     throw Object.assign(new Error('Cannot grant a capability to an exited user'), { status: 400 });
   }
 
-  return prisma.userCapability.upsert({
+  const existing = await prisma.userCapability.findUnique({
+    where: { userId_capability: { userId, capability } },
+    select: { id: true },
+  });
+
+  const row = await prisma.userCapability.upsert({
     where: { userId_capability: { userId, capability } },
     update: { title: title ?? undefined },
     create: { tenantId, userId, capability, title: title ?? null, grantedById },
   });
+
+  // Only log a real widening of access, not a title edit on an existing grant.
+  if (!existing) {
+    await writeAudit({ tenantId, action: 'GRANT', capability, targetUserId: userId, actor, title });
+  }
+  return row;
 }
 
-export async function revokeCapability({ tenantId, userId, capability }) {
+export async function revokeCapability({ tenantId, userId, capability, actor }) {
   const existing = await prisma.userCapability.findFirst({
     where: { userId, capability, tenantId },
     select: { id: true },
@@ -128,5 +235,6 @@ export async function revokeCapability({ tenantId, userId, capability }) {
     throw Object.assign(new Error('That capability is not granted to this user'), { status: 404 });
   }
   await prisma.userCapability.delete({ where: { id: existing.id } });
+  await writeAudit({ tenantId, action: 'REVOKE', capability, targetUserId: userId, actor });
   return { userId, capability };
 }

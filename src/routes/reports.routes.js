@@ -7,7 +7,7 @@ import {
 } from '../controllers/reports.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
-import { authorize } from '../middleware/rbac.js';
+import { authorize, authorizeRoleOrCapability} from '../middleware/rbac.js';
 
 const router = Router();
 
@@ -18,9 +18,13 @@ const router = Router();
 // read the whole organisation's ratings.
 const REPORT_ROLES = ['HR', 'SUPER_ADMIN', 'CMD', 'ADMIN'];
 
-router.get('/reports/analytics', requireAuth, requireTenant, authorize(...REPORT_ROLES), getAnalyticsSummary);
-router.get('/reports/trend', requireAuth, requireTenant, authorize(...REPORT_ROLES), getPerformanceTrend);
-router.get('/reports/catalog', requireAuth, requireTenant, authorize(...REPORT_ROLES), getReportCatalog);
-router.get('/reports/export/:reportKey', requireAuth, requireTenant, authorize(...REPORT_ROLES), exportReport);
+// REGISTRY_ANALYTICS backs the "Can view verification analytics & billing
+// history reports" credential on the sub-login invite.
+router.get('/reports/analytics', requireAuth, requireTenant, authorizeRoleOrCapability(REPORT_ROLES, ['REGISTRY_ANALYTICS']), getAnalyticsSummary);
+router.get('/reports/trend', requireAuth, requireTenant, authorizeRoleOrCapability(REPORT_ROLES, ['REGISTRY_ANALYTICS']), getPerformanceTrend);
+router.get('/reports/catalog', requireAuth, requireTenant, authorizeRoleOrCapability(REPORT_ROLES, ['REGISTRY_ANALYTICS']), getReportCatalog);
+// Export is its own credential: a Viewer may read but must not take the data
+// away, which is what separates Viewer from Recruiter.
+router.get('/reports/export/:reportKey', requireAuth, requireTenant, authorizeRoleOrCapability(REPORT_ROLES, ['REGISTRY_EXPORT']), exportReport);
 
 export default router;
