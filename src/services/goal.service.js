@@ -44,6 +44,63 @@ export const GOAL_STATUS = {
   IN_PROGRESS: 'in_progress',
 };
 
+// ── Multi-assignee roll-up ──────────────────────────────────────────────────
+// A goal can carry several GoalAssignment rows, one per assignee, each with its
+// own tasks and its own position in the workflow. Goal.status is a summary of
+// those rows — never a copy of whichever row was touched last. Writing one
+// assignee's new status straight onto the parent is what used to mark a goal
+// COMPLETED while a co-assignee was still sitting in PENDING_HR_REVIEW.
+const STATUS_RANK = {
+  CHANGES_REQUESTED: 0,
+  REJECTED: 0,
+  DRAFT: 1,
+  PENDING_APPROVAL: 2,
+  ACTIVE: 3,
+  IN_PROGRESS: 3,
+  ASSIGNED: 3,
+  ACKNOWLEDGED: 3,
+  READY_FOR_SUBMISSION: 4,
+  SUBMITTED: 5,
+  UNDER_REVIEW: 5,
+  PENDING_MANAGER_REVIEW: 5,
+  PENDING_HR_REVIEW: 6,
+  COMPLETED: 7,
+};
+
+// Legacy records store some of these lower-cased ('rejected', 'in_progress'),
+// so rank on the upper-cased form. Anything unrecognised ranks as DRAFT, which
+// holds the parent back rather than letting it race ahead to COMPLETED.
+const rankOf = (status) => {
+  const key = String(status || '').trim().toUpperCase();
+  return Object.prototype.hasOwnProperty.call(STATUS_RANK, key) ? STATUS_RANK[key] : STATUS_RANK.DRAFT;
+};
+
+/**
+ * The parent status of a goal is its least-advanced assignment: the goal is
+ * COMPLETED only once every assignee is, and one assignee with changes
+ * requested holds the whole goal back. Goals with no assignment rows (the
+ * legacy single-employee shape) keep the status passed in.
+ */
+export function rollUpGoalStatus(assignments, fallbackStatus) {
+  const rows = (assignments || []).filter((a) => a && a.status);
+  if (rows.length === 0) return fallbackStatus;
+  return rows.reduce((lowest, a) => (rankOf(a.status) < rankOf(lowest.status) ? a : lowest), rows[0]).status;
+}
+
+/** Parent progress is the mean of the assignees' progress, for the same reason. */
+export function rollUpGoalProgress(assignments, fallbackProgress) {
+  const rows = (assignments || []).filter(Boolean);
+  if (rows.length === 0) return fallbackProgress;
+  return Math.round(rows.reduce((sum, a) => sum + (Number(a.progress) || 0), 0) / rows.length);
+}
+
+const isOneOf = (status, allowed) => allowed.includes(String(status || '').trim().toUpperCase());
+
+/** Awaiting a manager's post-submission review. */
+const MANAGER_REVIEWABLE = ['PENDING_MANAGER_REVIEW', 'SUBMITTED'];
+/** Awaiting HR's final sign-off. HR can also act on a goal still sitting with a manager. */
+const HR_REVIEWABLE = ['PENDING_HR_REVIEW', 'PENDING_MANAGER_REVIEW', 'SUBMITTED'];
+
 // Statuses that allow employees to work on tasks
 export const WORKABLE_STATUSES = new Set([
   'DRAFT',
@@ -114,6 +171,61 @@ export class GoalService {
    * @param {{ id, employeeId, createdById, createdBy, assignments? }} goal
    * @returns {Promise<boolean>}
    */
+  /**
+   * Which assignees a review action applies to.
+   *
+   * The Approve buttons on the goal card are goal-level — they sign off the
+   * goal, not one row of it — and send no targetEmployeeId. Acting on a single
+   * arbitrary assignment there left co-assignees stranded in review while the
+   * goal read COMPLETED, so with no explicit target every assignee currently
+   * awaiting this stage is reviewed together. An explicit targetEmployeeId
+   * still scopes the action to that one person.
+   */
+  resolveReviewTargets(goal, targetEmployeeId, reviewableStatuses, stageLabel) {
+    const rows = goal.assignments || [];
+    const explicit = targetEmployeeId && rows.some((a) => a.employeeId === targetEmployeeId)
+      ? targetEmployeeId
+      : null;
+
+    if (explicit) {
+      const row = rows.find((a) => a.employeeId === explicit);
+      if (!isOneOf(row.status, reviewableStatuses)) {
+        throw { status: 400, message: `Goal is not currently awaiting ${stageLabel} (Status: ${row.status})` };
+      }
+      return [explicit];
+    }
+
+    if (rows.length > 0) {
+      const pending = rows.filter((a) => isOneOf(a.status, reviewableStatuses)).map((a) => a.employeeId);
+      if (pending.length === 0) {
+        const summary = rollUpGoalStatus(rows, goal.status);
+        throw { status: 400, message: `Goal is not currently awaiting ${stageLabel} (Status: ${summary})` };
+      }
+      return pending;
+    }
+
+    // Legacy goal with no assignment rows: fall back to the single employee.
+    if (!isOneOf(goal.status, reviewableStatuses)) {
+      throw { status: 400, message: `Goal is not currently awaiting ${stageLabel} (Status: ${goal.status})` };
+    }
+    return [goal.employeeId].filter(Boolean);
+  }
+
+  /**
+   * Re-reads the assignment rows after they have been mutated and rolls them up
+   * onto the parent goal, so the parent always reflects every assignee.
+   */
+  async rolledUpParentData(goalId, fallbackStatus, fallbackProgress) {
+    const rows = await prisma.goalAssignment.findMany({
+      where: { goalId },
+      select: { status: true, progress: true },
+    });
+    return {
+      status: rollUpGoalStatus(rows, fallbackStatus),
+      progress: rollUpGoalProgress(rows, fallbackProgress),
+    };
+  }
+
   async canAccessGoal(goal, user, tenantId) {
     if (!goal) return false;
     if (hasRole(user.role, ELEVATED_ROLES)) return true;
@@ -474,9 +586,13 @@ export class GoalService {
       console.warn('[GoalService] Notice updating goal assignment on submit:', err.message);
     }
 
+    // Only this assignee submitted. Roll the parent up rather than declaring the
+    // whole goal submitted on their behalf.
+    const parentData = await this.rolledUpParentData(goalId, newStatus, 100);
+
     const updated = await prisma.goal.update({
       where: { id: goalId },
-      data: { status: newStatus, progress: 100 },
+      data: parentData,
       include: {
         employee: true,
         assignments: {
@@ -593,23 +709,14 @@ export class GoalService {
       throw { status: 403, message: 'Access forbidden: you are not authorized to review this goal as manager' };
     }
 
-    const targetAssignment = goal.assignments?.find(a => a.employeeId === targetEmpId);
-    const currentStatus = targetAssignment?.status || goal.status;
-    if (
-      currentStatus !== GOAL_STATUS.PENDING_MANAGER_REVIEW &&
-      currentStatus !== 'submitted' &&
-      currentStatus !== 'PENDING_MANAGER_REVIEW'
-    ) {
-      throw { status: 400, message: `Goal is not currently awaiting manager review (Status: ${currentStatus})` };
-    }
+    const reviewedEmpIds = this.resolveReviewTargets(goal, targetEmployeeId, MANAGER_REVIEWABLE, 'manager review');
     const isApprove = action === 'APPROVE';
     const newStatus = isApprove ? GOAL_STATUS.PENDING_HR_REVIEW : GOAL_STATUS.CHANGES_REQUESTED;
 
-    // Update assignment status independently
-    if (targetEmpId) {
+    if (reviewedEmpIds.length > 0) {
       try {
         await prisma.goalAssignment.updateMany({
-          where: { goalId, employeeId: targetEmpId },
+          where: { goalId, employeeId: { in: reviewedEmpIds } },
           data: { status: newStatus },
         });
       } catch (err) {
@@ -617,10 +724,12 @@ export class GoalService {
       }
     }
 
+    const parentData = await this.rolledUpParentData(goalId, newStatus, goal.progress);
+
     const updated = await prisma.goal.update({
       where: { id: goalId },
       data: {
-        status: newStatus,
+        ...parentData,
         specialNotes: comment ? `Manager Note: ${comment}` : goal.specialNotes,
       },
       include: {
@@ -648,11 +757,11 @@ export class GoalService {
       previousValue: { status: goal.status },
     });
 
-    // Notify Employee
-    if (targetEmpId) {
+    // Notify every assignee whose submission was actually reviewed.
+    for (const empId of reviewedEmpIds) {
       await this.notify({
         tenantId,
-        recipientId: targetEmpId,
+        recipientId: empId,
         type: 'goal_update',
         title: isApprove ? `Manager Approved: "${goal.title}"` : `Revisions Requested: "${goal.title}"`,
         body: isApprove
@@ -665,6 +774,13 @@ export class GoalService {
 
     // If Manager Approved → notify HR
     if (isApprove) {
+      const nameFor = (id) =>
+        goal.assignments?.find((a) => a.employeeId === id)?.employee?.name
+        || (goal.employee?.id === id ? goal.employee?.name : null)
+        || 'an employee';
+      const reviewedNames = reviewedEmpIds.length === 1
+        ? `${nameFor(reviewedEmpIds[0])}'s goal`
+        : `${reviewedEmpIds.length} assignees' goal`;
       const hrUsers = await prisma.tenantUser.findMany({
         where: { tenantId, role: { in: HR_ROLES } },
         select: { id: true },
@@ -675,7 +791,7 @@ export class GoalService {
           recipientId: hr.id,
           type: 'goal_update',
           title: `Action Required: HR Final Approval for "${goal.title}"`,
-          body: `Manager ${user.name} approved ${targetUser?.name || 'employee'}'s goal. Please provide final sign-off.`,
+          body: `Manager ${user.name} approved ${reviewedNames}. Please provide final sign-off.`,
           entityType: 'goal',
           entityId: goal.id,
         });
@@ -717,41 +833,29 @@ export class GoalService {
       throw { status: 403, message: 'Access forbidden: HR authorization required for final sign-off' };
     }
 
-    const targetEmpId = targetEmployeeId || goal.employeeId || goal.assignments?.[0]?.employeeId;
-    const targetAssignment = goal.assignments?.find(a => a.employeeId === targetEmpId);
-    const currentStatus = targetAssignment?.status || goal.status;
-    if (
-      currentStatus !== GOAL_STATUS.PENDING_HR_REVIEW &&
-      currentStatus !== GOAL_STATUS.PENDING_MANAGER_REVIEW &&
-      currentStatus !== 'submitted' &&
-      currentStatus !== 'PENDING_HR_REVIEW' &&
-      currentStatus !== 'PENDING_MANAGER_REVIEW'
-    ) {
-      throw { status: 400, message: `Goal is not currently in a reviewable state (Status: ${currentStatus})` };
-    }
+    const reviewedEmpIds = this.resolveReviewTargets(goal, targetEmployeeId, HR_REVIEWABLE, 'HR sign-off');
     const isApprove = action === 'APPROVE';
     const newStatus = isApprove ? GOAL_STATUS.COMPLETED : GOAL_STATUS.CHANGES_REQUESTED;
 
-    // Update assignment status independently
-    if (targetEmpId) {
+    if (reviewedEmpIds.length > 0) {
       try {
         await prisma.goalAssignment.updateMany({
-          where: { goalId, employeeId: targetEmpId },
-          data: {
-            status: newStatus,
-            progress: isApprove ? 100 : undefined,
-          },
+          where: { goalId, employeeId: { in: reviewedEmpIds } },
+          data: isApprove ? { status: newStatus, progress: 100 } : { status: newStatus },
         });
       } catch (err) {
         console.warn('[GoalService] Notice updating goal assignment on HR review:', err.message);
       }
     }
 
+    // The goal only becomes COMPLETED once every assignee is signed off; an
+    // assignee who has not submitted yet keeps it in review.
+    const parentData = await this.rolledUpParentData(goalId, newStatus, isApprove ? 100 : goal.progress);
+
     const updated = await prisma.goal.update({
       where: { id: goalId },
       data: {
-        status: newStatus,
-        progress: isApprove ? 100 : goal.progress,
+        ...parentData,
         specialNotes: comment ? `HR Note: ${comment}` : goal.specialNotes,
       },
       include: {
@@ -774,16 +878,17 @@ export class GoalService {
       performedById: user.id,
       action: isApprove ? 'HR_APPROVED' : 'HR_CHANGES_REQUESTED',
       details: isApprove
-        ? `HR Partner ${user.name} approved and finalized goal as COMPLETED.${comment ? ` Remarks: "${comment}"` : ''}`
-        : `HR Partner ${user.name} requested changes. Reason: "${comment}"`,
+        ? `HR Partner ${user.name} signed off ${reviewedEmpIds.length} assignee(s).${comment ? ` Remarks: "${comment}"` : ''}`
+        : `HR Partner ${user.name} requested changes from ${reviewedEmpIds.length} assignee(s). Reason: "${comment}"`,
       previousValue: { status: goal.status },
     });
 
-    // Notify Employee
-    if (targetEmpId) {
+    // Notify every assignee HR just signed off — approving a shared goal from the
+    // goal card clears all of them, so all of them hear about it.
+    for (const empId of reviewedEmpIds) {
       await this.notify({
         tenantId,
-        recipientId: targetEmpId,
+        recipientId: empId,
         type: 'goal_update',
         title: isApprove ? `Goal Completed: "${goal.title}"` : `HR Requested Changes: "${goal.title}"`,
         body: isApprove
@@ -857,9 +962,11 @@ export class GoalService {
       console.warn('[GoalService] Notice updating goal assignment on resubmit:', err.message);
     }
 
+    const parentData = await this.rolledUpParentData(goalId, newStatus, goal.progress);
+
     const updated = await prisma.goal.update({
       where: { id: goalId },
-      data: { status: newStatus },
+      data: { status: parentData.status },
       include: {
         employee: true,
         assignments: {
