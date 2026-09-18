@@ -901,7 +901,18 @@ export const swaggerExtensions = {
         priority: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH'] },
         status: { type: 'string', enum: ['OPEN', 'IN_PROGRESS', 'RESOLVED'] },
         raisedBy: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, email: { type: 'string' }, designation: { type: 'string', nullable: true } } },
-        subjectEmployee: { type: 'object', nullable: true, properties: { id: { type: 'string' }, name: { type: 'string' }, email: { type: 'string' }, designation: { type: 'string', nullable: true } } },
+        subjectEmployee: { type: 'object', nullable: true, description: 'The primary subject. Retained for backward compatibility; prefer `subjects` for the full list.', properties: { id: { type: 'string' }, name: { type: 'string' }, email: { type: 'string' }, designation: { type: 'string', nullable: true } } },
+        subjects: {
+          type: 'array',
+          description: 'Every employee this ticket is about, in the order they were selected. The first entry is the primary subject and also appears as `subjectEmployee`.',
+          items: {
+            type: 'object',
+            properties: {
+              employeeId: { type: 'string' },
+              employee: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, email: { type: 'string' }, designation: { type: 'string', nullable: true } } },
+            },
+          },
+        },
         assignedTo: { type: 'object', nullable: true, properties: { id: { type: 'string' }, name: { type: 'string' }, email: { type: 'string' }, designation: { type: 'string', nullable: true } } },
         resolvedAt: { type: 'string', format: 'date-time', nullable: true },
         resolutionNotes: { type: 'string', nullable: true },
@@ -927,7 +938,13 @@ export const swaggerExtensions = {
         description: { type: 'string', minLength: 1, maxLength: 5000 },
         category: { type: 'string', maxLength: 100, example: 'Review Dispute' },
         priority: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH'], default: 'MEDIUM' },
-        subjectEmployeeId: { type: 'string', description: 'Elevated roles (HR/Admin/CMD/Super Admin) only — file on behalf of another tenant employee. Regular users always target themselves regardless of this field.' },
+        subjectEmployeeId: { type: 'string', description: 'Elevated roles (HR/Admin/CMD/Super Admin) only — file on behalf of another tenant employee. Regular users always target themselves regardless of this field. Superseded by subjectEmployeeIds, but still accepted.' },
+        subjectEmployeeIds: {
+          type: 'array',
+          maxItems: 25,
+          items: { type: 'string' },
+          description: 'Elevated roles only — every employee this ticket is about, when one issue covers more than one person. The first id becomes the primary subject. Over multipart/form-data, repeat the field once per id; a comma-separated string or a JSON array in a single field is also accepted. Ignored for regular users, who always file about themselves.',
+        },
       },
     },
     UpdateDisputeRequest: {
@@ -2847,7 +2864,7 @@ export const swaggerExtensions = {
       post: {
         tags: ['Disputes'],
         summary: 'Raise a new dispute ticket',
-        description: 'Any authenticated tenant user may file a ticket. Regular users can only target themselves as subjectEmployeeId; HR/Admin/CMD/Super Admin may file on behalf of another employee. Accepts an optional multipart evidence file (field name "file"; PDF/JPEG/PNG, 10MB max) alongside JSON fields, or JSON-only with no file.',
+        description: 'Any authenticated tenant user may file a ticket. Regular users always file about themselves; HR/Admin/CMD/Super Admin may file on behalf of one or several employees via subjectEmployeeIds. Accepts an optional multipart evidence file (field name "file"; PDF/JPEG/PNG, 10MB max) alongside JSON fields, or JSON-only with no file.',
         operationId: 'createDispute',
         security: [{ userCookie: [] }, { bearerAuth: [] }],
         requestBody: {
@@ -2859,7 +2876,7 @@ export const swaggerExtensions = {
         },
         responses: {
           201: { description: 'Ticket created', content: { 'application/json': { schema: { type: 'object', properties: { dispute: { $ref: '#/components/schemas/Dispute' } } } } } },
-          400: { description: 'Validation failed, disallowed MIME type, or invalid subjectEmployeeId', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+          400: { description: 'Validation failed, disallowed MIME type, or one or more selected employees are not valid in this tenant', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
         },
       },
     },
