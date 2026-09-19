@@ -1,11 +1,34 @@
+import crypto from 'node:crypto';
+import Razorpay from 'razorpay';
 import { prisma } from '../lib/prisma.js';
 import { env } from '../config/env.js';
 import { findActionToken } from '../lib/actionTokens.js';
 import { computePricing, couponValidationError } from '../lib/pricing.js';
 import { generateRawToken, hashToken } from '../lib/tokens.js';
 import { notifyStakeholders } from '../lib/notify.js';
-import { pricingPreviewSchema, approveSchema, confirmChequeSchema } from '../validations/finance.schema.js';
+import {
+  pricingPreviewSchema,
+  approveSchema,
+  confirmChequeSchema,
+  createOrderSchema,
+  verifyPaymentSchema,
+} from '../validations/finance.schema.js';
 import { tokenParamSchema } from '../validations/publicToken.schema.js';
+
+// Lazily initialised Razorpay instance — created on first use so the server
+// still boots cleanly when keys are missing (non-payment workflows unaffected).
+let _razorpay = null;
+function getRazorpay() {
+  if (_razorpay) return _razorpay;
+  if (!env.razorpayKeyId || !env.razorpayKeySecret) {
+    throw Object.assign(
+      new Error('Razorpay credentials are not configured. Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in .env'),
+      { statusCode: 500 },
+    );
+  }
+  _razorpay = new Razorpay({ key_id: env.razorpayKeyId, key_secret: env.razorpayKeySecret });
+  return _razorpay;
+}
 
 async function resolveFinanceToken(req, res) {
   const parsedParams = tokenParamSchema.safeParse(req.params);
@@ -118,6 +141,15 @@ export async function approve(req, res, next) {
       return res.status(409).json({ error: 'Registration is not pending Finance review' });
     }
 
+    // ── Block direct ONLINE approvals — they MUST go through Razorpay ──
+    const preCheck = approveSchema.safeParse(req.body);
+    if (preCheck.success && preCheck.data.paymentMethod === 'ONLINE') {
+      return res.status(400).json({
+        error: 'Online payments must be completed via Razorpay checkout. '
+             + 'Use POST …/create-order followed by POST …/verify-payment instead.',
+      });
+    }
+
     const parsed = approveSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
@@ -149,9 +181,8 @@ export async function approve(req, res, next) {
       financeApprovedAt: new Date(),
     };
 
-    const paymentReference = data.paymentMethod === 'CHEQUE'
-      ? `CHQ-PENDING-${Date.now().toString(36).toUpperCase()}`
-      : `STUB-${Date.now().toString(36).toUpperCase()}`;
+    // Only CHEQUE payments reach this code path now (ONLINE is blocked above)
+    const paymentReference = `CHQ-PENDING-${Date.now().toString(36).toUpperCase()}`;
 
     const rawHrToken = await prisma.$transaction(async (tx) => {
       await tx.companyRegistration.update({
@@ -226,6 +257,172 @@ export async function confirmCheque(req, res, next) {
     });
 
     res.json({ status: 'PENDING_HR_ACTIVATION' });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Razorpay — Create Order
+// POST /api/finance/registrations/:token/create-order
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function createOrder(req, res, next) {
+  try {
+    const actionToken = await resolveFinanceToken(req, res);
+    if (!actionToken) return;
+    const { registration } = actionToken;
+
+    if (registration.status !== 'PENDING_FINANCE_REVIEW') {
+      return res.status(409).json({ error: 'Registration is not pending Finance review' });
+    }
+
+    const parsed = createOrderSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    }
+    const data = parsed.data;
+
+    const { coupon, error: couponError } = await lookupCoupon(data.couponCode);
+    if (data.couponCode && couponError) {
+      return res.status(400).json({ error: couponError });
+    }
+
+    // Server-authoritative pricing — NEVER trust a client-supplied total.
+    const pricing = computePricing({
+      quantity: data.licenseQuantity,
+      unitPrice: env.licenseUnitPrice,
+      coupon,
+      gstRate: env.gstRate,
+    });
+
+    const amountInPaise = Math.round(pricing.total * 100);
+    const receipt = `reg-${registration.id.slice(-8)}-${Date.now().toString(36)}`;
+
+    const razorpay = getRazorpay();
+    const order = await razorpay.orders.create({
+      amount: amountInPaise,
+      currency: 'INR',
+      receipt,
+      notes: {
+        registrationId: registration.id,
+        companyName: registration.companyName,
+        licenseQuantity: String(data.licenseQuantity),
+      },
+    });
+
+    // Return ONLY the public data the frontend checkout needs.
+    res.json({
+      orderId: order.id,
+      amount: order.amount,
+      currency: order.currency,
+      keyId: env.razorpayKeyId,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Razorpay — Verify Payment & Advance to HR
+// POST /api/finance/registrations/:token/verify-payment
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function verifyPayment(req, res, next) {
+  try {
+    const actionToken = await resolveFinanceToken(req, res);
+    if (!actionToken) return;
+    const { registration } = actionToken;
+
+    if (registration.status !== 'PENDING_FINANCE_REVIEW') {
+      return res.status(409).json({ error: 'Registration is not pending Finance review' });
+    }
+
+    const parsed = verifyPaymentSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    }
+    const data = parsed.data;
+
+    // ── 1. Cryptographic signature verification ──
+    const expectedSig = crypto
+      .createHmac('sha256', env.razorpayKeySecret)
+      .update(`${data.razorpay_order_id}|${data.razorpay_payment_id}`)
+      .digest('hex');
+
+    if (expectedSig !== data.razorpay_signature) {
+      return res.status(400).json({ error: 'Payment verification failed — signature mismatch' });
+    }
+
+    // ── 2. Server-side pricing recalculation (never trust client totals) ──
+    const { coupon, error: couponError } = await lookupCoupon(data.couponCode);
+    if (data.couponCode && couponError) {
+      return res.status(400).json({ error: couponError });
+    }
+
+    const pricing = computePricing({
+      quantity: data.licenseQuantity,
+      unitPrice: env.licenseUnitPrice,
+      coupon,
+      gstRate: env.gstRate,
+    });
+
+    // ── 3. Cross-check the Razorpay order amount matches our pricing ──
+    const razorpay = getRazorpay();
+    const order = await razorpay.orders.fetch(data.razorpay_order_id);
+    const expectedPaise = Math.round(pricing.total * 100);
+
+    if (order.amount !== expectedPaise) {
+      return res.status(400).json({
+        error: `Amount mismatch: Razorpay order is ₹${(order.amount / 100).toFixed(2)} but server pricing is ₹${pricing.total.toFixed(2)}`,
+      });
+    }
+
+    // ── 4. Atomic commit: update registration + consume coupon + generate HR token ──
+    const basePricingData = {
+      gstin: data.gstin,
+      licenseQuantity: data.licenseQuantity,
+      unitPrice: pricing.unitPrice,
+      couponId: coupon?.id || null,
+      discountAmount: pricing.discountAmount,
+      subtotalAmount: pricing.subtotal,
+      gstRate: pricing.gstRate,
+      gstAmount: pricing.gstAmount,
+      totalAmount: pricing.total,
+      paymentMethod: 'ONLINE',
+      financeApprovedAt: new Date(),
+    };
+
+    const rawHrToken = await prisma.$transaction(async (tx) => {
+      await tx.companyRegistration.update({
+        where: { id: registration.id },
+        data: {
+          ...basePricingData,
+          paymentReference: data.razorpay_order_id,
+          transactionId: data.razorpay_payment_id,
+          status: 'PENDING_HR_ACTIVATION',
+        },
+      });
+      await commitCouponUsage(tx, coupon);
+      return advanceToHr(tx, registration.id);
+    });
+
+    // ── 5. Notify all stakeholders ──
+    const updated = await prisma.companyRegistration.findUnique({ where: { id: registration.id } });
+    await notifyStakeholders({
+      registration: updated,
+      event: 'FINANCE_APPROVED_ONLINE',
+      subject: `Finance Approved: ${registration.companyName} - Pending HR Activation`,
+      message: `Finance has approved pricing and verified Razorpay payment for ${registration.companyName}. It is now pending HR activation.`,
+      actionRole: 'HR',
+      actionUrl: `${env.frontendOrigin}/hr/registrations/${rawHrToken}`,
+    });
+
+    res.json({
+      status: 'PENDING_HR_ACTIVATION',
+      paymentReference: data.razorpay_order_id,
+      transactionId: data.razorpay_payment_id,
+    });
   } catch (err) {
     next(err);
   }

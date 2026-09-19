@@ -33,6 +33,10 @@ export const env = {
   licenseUnitPrice: parseFloat(process.env.LICENSE_UNIT_PRICE || "3999"),
   gstRate: parseFloat(process.env.GST_RATE || "0.18"),
 
+  // Razorpay Test Mode (backend-only — NEVER expose keySecret to clients)
+  razorpayKeyId: process.env.RAZORPAY_KEY_ID || "",
+  razorpayKeySecret: process.env.RAZORPAY_KEY_SECRET || "",
+
   otpTtlMinutes: parseInt(process.env.OTP_TTL_MINUTES || "10", 10),
   otpMaxAttempts: parseInt(process.env.OTP_MAX_ATTEMPTS || "5", 10),
   actionTokenTtlDays: parseInt(process.env.ACTION_TOKEN_TTL_DAYS || "14", 10),
