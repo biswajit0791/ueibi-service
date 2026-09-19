@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import request from 'supertest';
+import http from 'node:http';
 import app from '../src/app.js';
 
 console.log('--- RUNNING CORPORATE GALLERY STORAGE & SERVING VERIFICATION ---');
@@ -16,60 +16,81 @@ if (!fs.existsSync(galleryDir)) {
   console.log('PASS 1: uploads/corporate-gallery directory exists:', galleryDir);
 }
 
-// 2. Test static serving on both /uploads and /api/uploads
-const testFileName = `test-verify-${Date.now()}.png`;
-const testFilePath = path.join(galleryDir, testFileName);
-// 1x1 transparent PNG buffer
-const pngBuffer = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
-fs.writeFileSync(testFilePath, pngBuffer);
+// Start server on temporary port
+const server = http.createServer(app);
+await new Promise((resolve) => server.listen(4009, resolve));
+const baseUrl = 'http://localhost:4009';
 
 try {
-  // Test /uploads/corporate-gallery/<testFileName>
-  const resUploads = await request(app).get(`/uploads/corporate-gallery/${testFileName}`);
-  if (resUploads.status === 200 && resUploads.headers['content-type'].includes('image/png')) {
-    console.log('PASS 2a: GET /uploads/corporate-gallery serves image with 200 OK & Content-Type: image/png');
-  } else {
-    console.error('FAIL 2a: GET /uploads/corporate-gallery returned', resUploads.status, resUploads.headers['content-type']);
+  // 2. Test static serving on both /uploads and /api/uploads
+  const testFileName = `test-verify-${Date.now()}.png`;
+  const testFilePath = path.join(galleryDir, testFileName);
+  // 1x1 transparent PNG buffer
+  const pngBuffer = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+  fs.writeFileSync(testFilePath, pngBuffer);
+
+  try {
+    // Test /uploads/corporate-gallery/<testFileName>
+    const resUploads = await fetch(`${baseUrl}/uploads/corporate-gallery/${testFileName}`);
+    const contentTypeUploads = resUploads.headers.get('content-type') || '';
+    const corpHeader = resUploads.headers.get('cross-origin-resource-policy') || '';
+    const corsHeader = resUploads.headers.get('access-control-allow-origin') || '';
+
+    if (resUploads.status === 200 && contentTypeUploads.includes('image/png')) {
+      console.log('PASS 2a: GET /uploads/corporate-gallery serves image with 200 OK & Content-Type: image/png');
+    } else {
+      console.error('FAIL 2a: GET /uploads/corporate-gallery returned', resUploads.status, contentTypeUploads);
+    }
+
+    if (corpHeader === 'cross-origin' && corsHeader === '*') {
+      console.log('PASS 2b: Cross-Origin-Resource-Policy and Access-Control-Allow-Origin headers present');
+    } else {
+      console.error('FAIL 2b: Missing CORS headers', { corpHeader, corsHeader });
+    }
+
+    // Test /api/uploads/corporate-gallery/<testFileName>
+    const resApiUploads = await fetch(`${baseUrl}/api/uploads/corporate-gallery/${testFileName}`);
+    const contentTypeApi = resApiUploads.headers.get('content-type') || '';
+
+    if (resApiUploads.status === 200 && contentTypeApi.includes('image/png')) {
+      console.log('PASS 2c: GET /api/uploads/corporate-gallery serves image with 200 OK & Content-Type: image/png');
+    } else {
+      console.error('FAIL 2c: GET /api/uploads/corporate-gallery returned', resApiUploads.status, contentTypeApi);
+    }
+  } finally {
+    if (fs.existsSync(testFilePath)) {
+      fs.unlinkSync(testFilePath);
+    }
   }
 
-  // Verify CORS & CORP headers
-  if (resUploads.headers['cross-origin-resource-policy'] === 'cross-origin' && resUploads.headers['access-control-allow-origin'] === '*') {
-    console.log('PASS 2b: Cross-Origin-Resource-Policy and Access-Control-Allow-Origin headers present');
+  // 3. Test invalid file rejection (malicious .exe file)
+  const formData = new FormData();
+  formData.append('image', new Blob(['binary executable content'], { type: 'application/x-msdownload' }), 'hack.exe');
+  formData.append('title', 'Hack attempt');
+
+  const resInvalid = await fetch(`${baseUrl}/api/gallery/posts`, {
+    method: 'POST',
+    body: formData,
+  });
+  const invalidBody = await resInvalid.json().catch(() => ({}));
+  console.log('INFO: Upload invalid file response status:', resInvalid.status, invalidBody);
+
+  if (resInvalid.status === 400 || resInvalid.status === 401) {
+    console.log('PASS 3: Invalid file upload rejected with status', resInvalid.status);
   } else {
-    console.error('FAIL 2b: Missing CORS headers', resUploads.headers);
+    console.error('FAIL 3: Unexpected status for invalid upload:', resInvalid.status);
   }
 
-  // Test /api/uploads/corporate-gallery/<testFileName>
-  const resApiUploads = await request(app).get(`/api/uploads/corporate-gallery/${testFileName}`);
-  if (resApiUploads.status === 200 && resApiUploads.headers['content-type'].includes('image/png')) {
-    console.log('PASS 2c: GET /api/uploads/corporate-gallery serves image with 200 OK & Content-Type: image/png');
+  // 4. Verify no .exe file was written to corporate-gallery
+  const filesInDir = fs.readdirSync(galleryDir);
+  const hasExe = filesInDir.some(f => f.endsWith('.exe'));
+  if (!hasExe) {
+    console.log('PASS 4: No executable file written to corporate-gallery');
   } else {
-    console.error('FAIL 2c: GET /api/uploads/corporate-gallery returned', resApiUploads.status, resApiUploads.headers['content-type']);
+    console.error('FAIL 4: Executable file found in corporate-gallery!');
   }
 } finally {
-  if (fs.existsSync(testFilePath)) {
-    fs.unlinkSync(testFilePath);
-  }
-}
-
-// 3. Test upload rejection for invalid file types
-const resInvalid = await request(app)
-  .post('/api/gallery/posts')
-  .set('Authorization', 'Bearer fake-token-for-filter-test')
-  .attach('image', Buffer.from('executable binary code'), 'malicious.exe');
-
-console.log('INFO: Upload invalid file test response status:', resInvalid.status, resInvalid.body);
-if (resInvalid.status === 400 || resInvalid.status === 401) {
-  console.log('PASS 3: Invalid file upload safely rejected');
-}
-
-// 4. Verify no .exe file was created in corporate-gallery
-const filesInDir = fs.readdirSync(galleryDir);
-const hasExe = filesInDir.some(f => f.endsWith('.exe'));
-if (!hasExe) {
-  console.log('PASS 4: No executable file written to corporate-gallery');
-} else {
-  console.error('FAIL 4: Executable file found in corporate-gallery!');
+  await new Promise((resolve) => server.close(resolve));
 }
 
 console.log('--- ALL CHECKS COMPLETED ---');
