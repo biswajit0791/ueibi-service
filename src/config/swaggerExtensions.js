@@ -2835,6 +2835,77 @@ export const swaggerExtensions = {
       },
     },
 
+    '/platform/tenants/{id}/suspend': {
+      post: {
+        tags: ['Platform'],
+        operationId: 'suspendTenant',
+        summary: 'Suspend a customer company',
+        description: 'PLATFORM_OWNER only. Freezes a tenant: its users are refused at login AND on every subsequent request with an existing token, receiving code TENANT_SUSPENDED rather than a generic 401. The change and its audit row are written in one transaction. The platform tenant itself can never be suspended.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object', required: ['reason'],
+          properties: { reason: { type: 'string', minLength: 5, maxLength: 500, description: 'Required — recorded on the audit row.' } },
+        } } } },
+        responses: {
+          200: { description: 'Suspended', content: { 'application/json': { schema: { type: 'object', properties: { tenant: { type: 'object' } } } } } },
+          400: { description: 'Validation failed, or the platform tenant was targeted' },
+          403: { description: 'Not a platform owner' },
+          404: { description: 'Company not found' },
+          409: { description: 'Already suspended' },
+        },
+      },
+    },
+    '/platform/tenants/{id}/restore': {
+      post: {
+        tags: ['Platform'],
+        operationId: 'restoreTenant',
+        summary: 'Restore a suspended company',
+        description: 'PLATFORM_OWNER only. Returns the tenant to ACTIVE and clears suspendedAt/suspendedReason. Writes an audit row.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'Restored', content: { 'application/json': { schema: { type: 'object', properties: { tenant: { type: 'object' } } } } } },
+          403: { description: 'Not a platform owner' },
+          404: { description: 'Company not found' },
+          409: { description: 'Not currently suspended' },
+        },
+      },
+    },
+    '/platform/audit': {
+      get: {
+        tags: ['Platform'],
+        operationId: 'getPlatformAudit',
+        summary: 'What the platform operator has done',
+        description: 'PLATFORM_OWNER only. The five existing audit models are tenant-scoped and record what happens inside a company; this records what the operator does TO a company. Mutations are logged, reads are not. actorId is not a foreign key, so a row outlives the account that created it and still renders (as "Deleted account").',
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: 'action', in: 'query', schema: { type: 'string', maxLength: 60 }, description: 'e.g. TENANT_SUSPENDED' },
+          { name: 'tenantId', in: 'query', schema: { type: 'string', maxLength: 60 } },
+          { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1, default: 1 } },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 50 } },
+        ],
+        responses: {
+          200: { description: 'Audit rows, newest first', content: { 'application/json': { schema: {
+            type: 'object',
+            properties: {
+              items: { type: 'array', items: { type: 'object', properties: {
+                id: { type: 'string' }, actorId: { type: 'string' },
+                actor: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, email: { type: 'string', nullable: true } } },
+                action: { type: 'string' }, targetType: { type: 'string' }, targetId: { type: 'string', nullable: true },
+                tenantId: { type: 'string', nullable: true },
+                beforeValue: { type: 'object', nullable: true }, afterValue: { type: 'object', nullable: true },
+                reason: { type: 'string', nullable: true }, ipAddress: { type: 'string', nullable: true },
+                createdAt: { type: 'string', format: 'date-time' },
+              } } },
+              pagination: { type: 'object', properties: { page: { type: 'integer' }, limit: { type: 'integer' }, total: { type: 'integer' }, totalPages: { type: 'integer' } } },
+            },
+          } } } },
+          403: { description: 'Not a platform owner' },
+        },
+      },
+    },
+
     // ═══════════════════════════════════════════════════════════════════════════
     // COMMON DASHBOARD SUMMARY
     // ═══════════════════════════════════════════════════════════════════════════

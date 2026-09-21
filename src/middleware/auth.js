@@ -33,7 +33,14 @@ export async function requireAuth(req, res, next) {
     // still-valid JWT. Values from the DB win over the token payload.
     const user = await prisma.tenantUser.findUnique({
       where: { id: decoded.userId },
-      select: { id: true, email: true, role: true, name: true, tenantId: true, status: true, isDeleted: true },
+      select: {
+        id: true, email: true, role: true, name: true, tenantId: true,
+        status: true, isDeleted: true,
+        // Read alongside the user for the same reason the user is re-read: a
+        // suspension must take effect on the next request, not whenever the
+        // JWT happens to expire.
+        tenant: { select: { status: true } },
+      },
     });
 
     if (!user || user.isDeleted) {
@@ -41,6 +48,12 @@ export async function requireAuth(req, res, next) {
     }
     if (user.status === 'EXITED') {
       return res.status(403).json({ error: 'Access forbidden: this account is inactive/exited' });
+    }
+    if (user.tenant?.status === 'SUSPENDED') {
+      return res.status(403).json({
+        error: 'This company account is suspended. Please contact your administrator.',
+        code: 'TENANT_SUSPENDED',
+      });
     }
 
     // Capabilities are read fresh alongside the user (same rationale as
