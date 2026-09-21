@@ -8,6 +8,10 @@ datasource db {
 }
 
 enum UserRole {
+  // SUPER_ADMIN is the highest role WITHIN a company. PLATFORM_OWNER sits
+  // outside the company hierarchy entirely — it is the operator of the platform
+  // and holds no company-level permissions (see lib/roles.js, where it is
+  // deliberately absent from ELEVATED_ROLES and friends).
   SUPER_ADMIN
   ADMIN
   CMD
@@ -17,6 +21,7 @@ enum UserRole {
   EMPLOYEE
   STUDENT
   MENTOR
+  PLATFORM_OWNER
 }
 
 enum UserStatus {
@@ -31,6 +36,9 @@ model Tenant {
   domainName           String                   @unique
   tenantCode           String                   @unique
   licenseLimit         Int                      @default(0)
+  // True only for the single internal tenant that houses PLATFORM_OWNER users.
+  // Never set on a customer company.
+  isPlatform           Boolean                  @default(false)
   createdAt            DateTime                 @default(now())
   updatedAt            DateTime                 @updatedAt
   users                TenantUser[]
@@ -75,6 +83,7 @@ model Tenant {
   cxoMessages          CxoMessage[]
   cxoMessageReplies    CxoMessageReply[]
 
+  @@index([isPlatform])
   @@map("tenants")
 }
 

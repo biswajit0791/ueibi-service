@@ -34,6 +34,7 @@ import messageRoutes from './routes/message.routes.js';
 import cxoRoutes from './routes/cxo.routes.js';
 import teamRoutes from './routes/team.routes.js';
 import disputeRoutes from './routes/dispute.routes.js';
+import platformRoutes from './routes/platform.routes.js';
 import { notFound } from './middleware/notFound.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
@@ -116,6 +117,7 @@ apiRouter.use(messageRoutes);
 apiRouter.use(cxoRoutes);
 apiRouter.use(teamRoutes);
 apiRouter.use(disputeRoutes);
+apiRouter.use(platformRoutes);
 if (env.nodeEnv !== 'production') {
   apiRouter.use(devRoutes);
 }

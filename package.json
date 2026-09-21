@@ -13,6 +13,7 @@
     "prisma:deploy": "prisma migrate deploy",
     "prisma:push": "prisma db push",
     "prisma:studio": "prisma studio",
+    "seed:platform-owner": "node scripts/seed-platform-owner.js",
     "list-companies": "node list-companies.js",
     "reset-password": "node reset-password.js",
     "seed-users": "node seed-users.js",

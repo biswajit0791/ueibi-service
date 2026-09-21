@@ -12,6 +12,12 @@
  */
 import { ELEVATED_ROLES, hasRole } from '../lib/roles.js';
 
+// The platform operator is not an employee of any company and must never appear
+// in a directory, assignee picker or goal dropdown. Tenant scoping already keeps
+// them out (they live in their own tenant); this is the belt-and-braces check,
+// so the guarantee does not depend on that placement staying true.
+const NOT_PLATFORM_USER = { role: { not: 'PLATFORM_OWNER' } };
+
 export function buildTeamScopeWhere(user, tenantId, { search, department, includeSelf = false } = {}) {
   const userRole = (user.role || '').toUpperCase();
   const isHrOrAdmin = hasRole(userRole, ELEVATED_ROLES);
@@ -22,6 +28,7 @@ export function buildTeamScopeWhere(user, tenantId, { search, department, includ
       tenantId,
       isDeleted: false,
       status: { in: ['ACTIVE', 'INVITED'] },
+      ...NOT_PLATFORM_USER,
       ...(includeSelf ? {} : { id: { not: user.id } }),
     };
   } else {
@@ -29,6 +36,7 @@ export function buildTeamScopeWhere(user, tenantId, { search, department, includ
       tenantId,
       isDeleted: false,
       status: { in: ['ACTIVE', 'INVITED'] },
+      ...NOT_PLATFORM_USER,
       ...(includeSelf ? {} : { id: { not: user.id } }),
       OR: [
         { managerId: user.id },
