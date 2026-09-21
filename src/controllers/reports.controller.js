@@ -1,5 +1,5 @@
 import { prisma } from '../lib/prisma.js';
-import { computeCycleRollup } from '../services/reportAggregation.service.js';
+import { computeCycleRollup, computeGoalStats } from '../services/reportAggregation.service.js';
 import {
   REPORT_CATALOG,
   buildReport,
@@ -30,23 +30,18 @@ async function resolveCycle(tenantId, cycleId) {
   });
 }
 
-/** Tenant-wide goal completion stats for a financial year. */
+/**
+ * Tenant-wide goal completion stats for a financial year.
+ *
+ * The maths now lives in computeGoalStats (reportAggregation.service.js) so the
+ * dashboard summary shares it; this wrapper keeps the tenant/FY scope that
+ * Reports needs. Behaviour is unchanged.
+ */
 async function getGoalStats(tenantId, financialYear) {
   const goalsFy = financialYear ? toGoalsFinancialYear(financialYear) : undefined;
   // Scoped by Goal.tenantId (not employee.tenantId) so goals with no assignee
   // are still counted — they belong to the tenant either way.
-  const goals = await prisma.goal.findMany({
-    where: { tenantId, ...(goalsFy ? { financialYear: goalsFy } : {}) },
-    select: { progress: true, status: true },
-  });
-  const total = goals.length;
-  const completed = goals.filter((g) => String(g.status).toUpperCase() === 'COMPLETED').length;
-  return {
-    totalGoals: total,
-    completedGoals: completed,
-    goalCompletionRate: total > 0 ? Number(((completed / total) * 100).toFixed(1)) : 0,
-    averageGoalProgress: total > 0 ? Math.round(goals.reduce((s, g) => s + g.progress, 0) / total) : 0,
-  };
+  return computeGoalStats({ tenantId, ...(goalsFy ? { financialYear: goalsFy } : {}) });
 }
 
 /**

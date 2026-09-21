@@ -2836,6 +2836,67 @@ export const swaggerExtensions = {
     },
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // COMMON DASHBOARD SUMMARY
+    // ═══════════════════════════════════════════════════════════════════════════
+    '/dashboard/summary': {
+      get: {
+        tags: ['Reports & Analytics'],
+        operationId: 'getDashboardSummary',
+        summary: 'Everything the Common Dashboard renders, in one request',
+        description: 'Backs /uer/dashboard for every corporate role. The response is scoped to an audience resolved from the caller: SELF (employee - own records), TEAM (manager - self plus direct reports) or TENANT (SUPER_ADMIN/ADMIN/CMD/HR - whole company). An employee never receives tenant-wide figures. Other people’s private tasks are excluded from team and tenant aggregates. Ratings are null rather than defaulted when no rated review exists.',
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: {
+            description: 'Dashboard summary',
+            content: { 'application/json': { schema: {
+              type: 'object',
+              properties: {
+                audience: { type: 'string', enum: ['SELF', 'TEAM', 'TENANT'] },
+                hero: { type: 'object', properties: {
+                  rating: { type: 'number', nullable: true, description: 'The caller’s latest rated review. Null when they have none - never defaulted to a sample value.' },
+                  ratingSource: { type: 'string', nullable: true, enum: ['manager', 'self', null] },
+                  goalSync: { type: 'integer', description: 'Average goal progress across the scope, 0-100' },
+                } },
+                goals: { type: 'object', properties: {
+                  total: { type: 'integer' }, completed: { type: 'integer' },
+                  averageProgress: { type: 'integer' }, completionRate: { type: 'number' },
+                  dueThisQuarter: { type: 'integer' }, onTrack: { type: 'integer' }, behind: { type: 'integer' },
+                } },
+                tasks: { type: 'object', properties: {
+                  total: { type: 'integer' }, done: { type: 'integer' }, percent: { type: 'integer' },
+                  highPriority: { type: 'integer', description: 'Not done, priority high or critical' },
+                  dueThisWeek: { type: 'integer', description: 'Not done, due within 7 days' },
+                } },
+                trend: { type: 'array', description: 'One point per appraisal cycle that actually carries ratings; cycles without any are omitted, matching /reports/trend.', items: { type: 'object', properties: {
+                  quarter: { type: 'string' }, label: { type: 'string' },
+                  avgSelfScore: { type: 'number', nullable: true }, avgManagerScore: { type: 'number', nullable: true },
+                } } },
+                attention: { type: 'array', items: { type: 'object', properties: {
+                  type: { type: 'string', example: 'POLICY' }, id: { type: 'string' },
+                  title: { type: 'string' }, dueAt: { type: 'string', format: 'date-time', nullable: true },
+                } } },
+                hub: { type: 'object', properties: {
+                  birthdays: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, date: { type: 'string' }, daysAway: { type: 'integer' } } } },
+                  events: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, title: { type: 'string' }, startsAt: { type: 'string', format: 'date-time' } } } },
+                } },
+                team: { type: 'array', description: 'Empty for the SELF audience.', items: { type: 'object', properties: {
+                  id: { type: 'string' }, name: { type: 'string' }, initials: { type: 'string' },
+                  designation: { type: 'string' }, department: { type: 'string' },
+                  rating: { type: 'number', nullable: true }, goalsTotal: { type: 'integer' }, goalsCompleted: { type: 'integer' },
+                } } },
+                departments: { type: 'array', description: 'Empty for the SELF audience. Derived from the newest cycle with reviews via the shared Reports rollup.', items: { type: 'object', properties: {
+                  dept: { type: 'string' }, score: { type: 'number' }, employees: { type: 'integer' }, completionRate: { type: 'integer' },
+                } } },
+              },
+            } } },
+          },
+          401: { description: 'Authentication required' },
+          403: { description: 'No tenant context (for example the platform owner, who belongs to no company)' },
+        },
+      },
+    },
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // PLATFORM OPERATOR (PLATFORM_OWNER ONLY)
     // ═══════════════════════════════════════════════════════════════════════════
     '/platform/overview': {
