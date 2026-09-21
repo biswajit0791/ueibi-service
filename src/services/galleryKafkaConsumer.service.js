@@ -6,6 +6,7 @@ import {
   removeLikeFromMongo,
   saveCommentInMongo,
   deleteCommentFromMongo,
+  updateCommentInMongo,
   getPostLikeStatsFromMongo,
 } from './galleryMongo.service.js';
 
@@ -106,6 +107,16 @@ export async function handleGalleryEvent(eventType, payload = {}) {
           text,
           createdAt,
         },
+      });
+      break;
+    }
+
+    case 'GALLERY_COMMENT_UPDATED': {
+      const { commentId, text, editedAt, author, authorId, createdAt } = payload;
+      await updateCommentInMongo({ postgresId: commentId, postId, text, editedAt });
+      emitToTenant(tenantId, 'gallery_comment_updated', {
+        postId,
+        comment: { id: commentId, postId, author, authorId, text, createdAt, editedAt },
       });
       break;
     }

@@ -12,6 +12,7 @@ import {
   removeLikeFromMongo,
   saveCommentInMongo,
   deleteCommentFromMongo,
+  updateCommentInMongo,
 } from '../services/galleryMongo.service.js';
 import {
   ALLOWED_GALLERY_CATEGORIES,
@@ -19,6 +20,7 @@ import {
   addGalleryCommentSchema,
   updateGalleryPostSchema,
   galleryIdParamSchema,
+  galleryCommentUpdateSchema,
 } from '../validations/gallery.schema.js';
 
 // Helper to build full image URL
@@ -575,4 +577,92 @@ export async function deleteGalleryComment(req, res, next) {
 // GET /gallery/categories
 export async function getGalleryCategories(req, res) {
   res.json({ categories: ALLOWED_GALLERY_CATEGORIES });
+}
+
+/**
+ * PATCH /gallery/comments/:id — edit your own comment.
+ *
+ * Permission mirrors deleteGalleryComment exactly: the author, or a privileged
+ * role. Deliberately NOT wider — being able to rewrite someone else's words
+ * under their name is a different thing from being able to remove them, and
+ * only the same roles that can already delete may do it.
+ */
+export async function updateGalleryComment(req, res, next) {
+  try {
+    const tenantId = req.tenantId;
+    const user = req.user;
+
+    const parsedParams = galleryIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid parameters', details: parsedParams.error.issues });
+    }
+    const parsed = galleryCommentUpdateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    }
+    const { id } = parsedParams.data;
+    const text = parsed.data.text.trim();
+
+    const comment = await prisma.galleryComment.findFirst({
+      where: { id, tenantId },
+      include: { author: { select: { id: true, name: true } } },
+    });
+    if (!comment) return res.status(404).json({ error: 'Comment not found' });
+
+    const privilegedRoles = ['HR', 'CMD', 'ADMIN', 'SUPER_ADMIN'];
+    const isAuthor = comment.authorId === user.id;
+    if (!isAuthor && !privilegedRoles.includes(user.role)) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    // Nothing to do — return the comment unchanged rather than recording a
+    // phantom edit that would make the "(edited)" marker lie.
+    if (text === comment.text) {
+      return res.json({
+        comment: {
+          id: comment.id,
+          postId: comment.postId,
+          author: comment.author?.name || 'Team Member',
+          authorId: comment.authorId,
+          text: comment.text,
+          createdAt: comment.createdAt,
+          editedAt: comment.editedAt,
+        },
+      });
+    }
+
+    const editedAt = new Date();
+    const updated = await prisma.galleryComment.update({
+      where: { id },
+      data: { text, editedAt },
+      include: { author: { select: { id: true, name: true } } },
+    });
+
+    const payload = {
+      id: updated.id,
+      postId: updated.postId,
+      author: updated.author?.name || 'Team Member',
+      authorId: updated.authorId,
+      text: updated.text,
+      createdAt: updated.createdAt,
+      editedAt: updated.editedAt,
+    };
+
+    // Same write path as create and delete: Kafka first, direct Mongo write as
+    // the fallback when the broker is down.
+    const kafkaSent = await publishKafkaEvent(
+      env.kafkaTopicGallery,
+      'GALLERY_COMMENT_UPDATED',
+      { commentId: id, tenantId, postId: updated.postId, text: updated.text, editedAt },
+      updated.postId
+    );
+    if (!kafkaSent) {
+      await updateCommentInMongo({ postgresId: id, postId: updated.postId, text: updated.text, editedAt });
+      emitToTenant(tenantId, 'gallery_comment_updated', { postId: updated.postId, comment: payload });
+    }
+
+    res.json({ comment: payload });
+  } catch (err) {
+    next(err);
+  }
 }
