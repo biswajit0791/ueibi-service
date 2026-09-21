@@ -1464,6 +1464,9 @@ model GalleryComment {
   author    TenantUser  @relation("GalleryCommentAuthor", fields: [authorId], references: [id], onDelete: Cascade)
   text      String      @db.Text
   createdAt DateTime    @default(now())
+  /// Null until the comment is edited, so "(edited)" can be shown accurately
+  /// rather than inferred by comparing timestamps.
+  editedAt  DateTime?
 
   @@index([postId])
   @@index([authorId])

@@ -31,6 +31,21 @@ export const addGalleryCommentSchema = z.object({
     .max(1000, 'Comment text must be between 1 and 1000 characters'),
 });
 
+/**
+ * Editing a comment. Same limits as creating one: an edit must not be able to
+ * put text into the record that the create endpoint would have rejected.
+ *
+ * Note this uses Zod 4's `error` key, not v3's `required_error`, which Zod 4
+ * silently ignores.
+ */
+export const galleryCommentUpdateSchema = z.object({
+  text: z
+    .string({ error: 'Comment text is required' })
+    .trim()
+    .min(1, 'Comment text cannot be empty')
+    .max(1000, 'Comment text must be between 1 and 1000 characters'),
+});
+
 export const updateGalleryPostSchema = z.object({
   title: z
     .string()

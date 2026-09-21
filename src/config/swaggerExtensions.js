@@ -2478,6 +2478,33 @@ export const swaggerExtensions = {
       },
     },
     '/gallery/comments/{id}': {
+      patch: {
+        tags: ['Company Hub'],
+        operationId: 'updateGalleryComment',
+        summary: 'Edit a gallery comment',
+        description: 'The comment author, or a privileged role (HR, CMD, ADMIN, SUPER_ADMIN) — exactly the same rule as DELETE. Sets `editedAt`, which stays null on a comment that has never been edited so the UI can show an "(edited)" marker accurately. An edit that does not change the text is a no-op and does not set `editedAt`. Propagates to the Mongo read model via Kafka, with a direct write as fallback, and broadcasts `gallery_comment_updated` over Socket.IO.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object', required: ['text'],
+          properties: { text: { type: 'string', minLength: 1, maxLength: 1000 } },
+        } } } },
+        responses: {
+          200: { description: 'Updated comment', content: { 'application/json': { schema: { type: 'object', properties: { comment: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' }, postId: { type: 'string' },
+              author: { type: 'string' }, authorId: { type: 'string' },
+              text: { type: 'string' },
+              createdAt: { type: 'string', format: 'date-time' },
+              editedAt: { type: 'string', format: 'date-time', nullable: true },
+            },
+          } } } } } },
+          400: { description: 'Validation failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+          403: { description: 'Not the author and not a privileged role' },
+          404: { description: 'Comment not found in this tenant' },
+        },
+      },
       delete: {
         tags: ['Gallery'],
         summary: 'Delete a gallery comment',

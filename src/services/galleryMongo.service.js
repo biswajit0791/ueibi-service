@@ -231,3 +231,25 @@ export async function syncFromPostgres(prisma) {
     console.warn(` [MongoDB] Notice: Backfill skipped (${err.message})`);
   }
 }
+
+/**
+ * Update a comment's text in MongoDB (the read model).
+ *
+ * Mirrors deleteCommentFromMongo: matched by the Postgres id, which is the
+ * stable key across both stores. A miss is not an error — Mongo is a cache of
+ * the Postgres truth, and it is rebuilt from Kafka.
+ */
+export async function updateCommentInMongo({ postgresId, postId, text, editedAt }) {
+  if (!isMongoConnected()) return false;
+  try {
+    const filter = { postgresId: String(postgresId) };
+    if (postId) filter.postId = postId;
+    await GalleryCommentMongo.updateOne(filter, {
+      $set: { text, editedAt: editedAt ? new Date(editedAt) : new Date(), updatedAt: new Date() },
+    });
+    return true;
+  } catch (err) {
+    console.warn(`[Mongo] Failed to update comment: ${err.message}`);
+    return false;
+  }
+}

@@ -14,6 +14,7 @@ import {
   getGalleryComments,
   addGalleryComment,
   deleteGalleryComment,
+  updateGalleryComment,
   getGalleryCategories,
 } from '../controllers/gallery.controller.js';
 
@@ -95,6 +96,7 @@ router.post('/gallery/posts/:id/like', requireAuth, requireTenant, toggleGallery
 // Comment routes
 router.get('/gallery/posts/:id/comments', requireAuth, requireTenant, getGalleryComments);
 router.post('/gallery/posts/:id/comments', requireAuth, requireTenant, addGalleryComment);
+router.patch('/gallery/comments/:id', requireAuth, requireTenant, updateGalleryComment);
 router.delete('/gallery/comments/:id', requireAuth, requireTenant, deleteGalleryComment);
 
 export default router;
