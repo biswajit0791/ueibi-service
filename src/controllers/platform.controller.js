@@ -14,7 +14,17 @@
  *      the operator informed without handing them customer data.
  */
 import { prisma } from '../lib/prisma.js';
-import { platformTenantQuerySchema } from '../validations/platform.schema.js';
+import {
+  platformTenantQuerySchema,
+  tenantIdParamSchema,
+  suspendTenantSchema,
+  platformAuditQuerySchema,
+} from '../validations/platform.schema.js';
+import {
+  recordPlatformAction,
+  listPlatformAudit,
+  PLATFORM_ACTIONS,
+} from '../services/platformAudit.service.js';
 
 /** Tenants that belong to customers — the internal platform tenant is not a company. */
 const CUSTOMER_TENANTS = { isPlatform: false };
@@ -95,6 +105,11 @@ export async function listPlatformTenants(req, res, next) {
           domainName: true,
           licenseLimit: true,
           createdAt: true,
+          // Commercial lifecycle — distinct from the onboarding status below.
+          status: true,
+          suspendedAt: true,
+          suspendedReason: true,
+          planEndsAt: true,
           // Onboarding record: carries the legal entity type, the approval
           // status and what was actually invoiced.
           registration: {
@@ -123,15 +138,154 @@ export async function listPlatformTenants(req, res, next) {
         // industry — the frontend labels it accordingly rather than inventing
         // a sector the schema does not record.
         companyType: t.registration?.companyType || null,
+        // Two different things, kept apart because they answer different
+        // questions: `status` is whether we let them in, `onboardingStatus` is
+        // how far their signup got. A fully onboarded company can be suspended,
+        // and a half-onboarded one is not suspended.
+        status: t.status,
+        suspendedAt: t.suspendedAt,
+        suspendedReason: t.suspendedReason,
+        planEndsAt: t.planEndsAt,
         // Tenants that predate the registration flow have no record; they exist,
-        // so they are active.
-        status: t.registration?.status || 'ACTIVE',
+        // so their onboarding is complete.
+        onboardingStatus: t.registration?.status || 'ACTIVE',
         contractedValue: t.registration?.totalAmount != null
           ? Number(t.registration.totalAmount)
           : null,
       })),
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) || 1 },
     });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TENANT LIFECYCLE
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * POST /platform/tenants/:id/suspend
+ *
+ * Freezes a customer company. Their users can no longer sign in, and are told
+ * why rather than being handed a generic 401 or a half-loaded app.
+ *
+ * The suspension and its audit row are written in one transaction: an
+ * unrecorded suspension, or a record of one that did not happen, are both
+ * worse than failing.
+ */
+export async function suspendTenant(req, res, next) {
+  try {
+    const parsedParams = tenantIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid parameters', details: parsedParams.error.issues });
+    }
+    const parsed = suspendTenantSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    }
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: parsedParams.data.id },
+      select: { id: true, companyName: true, status: true, isPlatform: true },
+    });
+    if (!tenant) {
+      return res.status(404).json({ error: 'Company not found' });
+    }
+    // Suspending the platform's own tenant would lock the operator out of the
+    // console they are using to do it.
+    if (tenant.isPlatform) {
+      return res.status(400).json({ error: 'The platform tenant cannot be suspended' });
+    }
+    if (tenant.status === 'SUSPENDED') {
+      return res.status(409).json({ error: `${tenant.companyName} is already suspended` });
+    }
+
+    const now = new Date();
+    const updated = await prisma.$transaction(async (tx) => {
+      const t = await tx.tenant.update({
+        where: { id: tenant.id },
+        data: { status: 'SUSPENDED', suspendedAt: now, suspendedReason: parsed.data.reason },
+        select: { id: true, companyName: true, status: true, suspendedAt: true, suspendedReason: true },
+      });
+      await recordPlatformAction({
+        tx,
+        req,
+        action: PLATFORM_ACTIONS.TENANT_SUSPENDED,
+        targetType: 'TENANT',
+        targetId: tenant.id,
+        tenantId: tenant.id,
+        beforeValue: { status: tenant.status },
+        afterValue: { status: 'SUSPENDED' },
+        reason: parsed.data.reason,
+      });
+      return t;
+    });
+
+    // Existing JWTs stay valid until they expire, but requireAuth re-reads the
+    // tenant on every request, so access stops on the next call either way.
+    res.json({ tenant: updated });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /platform/tenants/:id/restore
+ *
+ * Returns a suspended company to ACTIVE and clears the suspension metadata.
+ */
+export async function restoreTenant(req, res, next) {
+  try {
+    const parsedParams = tenantIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid parameters', details: parsedParams.error.issues });
+    }
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: parsedParams.data.id },
+      select: { id: true, companyName: true, status: true, suspendedReason: true },
+    });
+    if (!tenant) {
+      return res.status(404).json({ error: 'Company not found' });
+    }
+    if (tenant.status !== 'SUSPENDED') {
+      return res.status(409).json({ error: `${tenant.companyName} is not suspended (status: ${tenant.status})` });
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const t = await tx.tenant.update({
+        where: { id: tenant.id },
+        data: { status: 'ACTIVE', suspendedAt: null, suspendedReason: null },
+        select: { id: true, companyName: true, status: true },
+      });
+      await recordPlatformAction({
+        tx,
+        req,
+        action: PLATFORM_ACTIONS.TENANT_RESTORED,
+        targetType: 'TENANT',
+        targetId: tenant.id,
+        tenantId: tenant.id,
+        beforeValue: { status: 'SUSPENDED', suspendedReason: tenant.suspendedReason },
+        afterValue: { status: 'ACTIVE' },
+      });
+      return t;
+    });
+
+    res.json({ tenant: updated });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** GET /platform/audit — what the operator has done. */
+export async function getPlatformAudit(req, res, next) {
+  try {
+    const parsed = platformAuditQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    }
+    res.json(await listPlatformAudit(parsed.data));
   } catch (err) {
     next(err);
   }

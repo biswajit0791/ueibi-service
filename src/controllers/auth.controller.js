@@ -141,6 +141,23 @@ export async function login(req, res, next) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
+    // ── Suspended company ────────────────────────────────────────────────────
+    // Checked only AFTER the password matched, so this never reveals whether an
+    // address exists to someone guessing. The message is specific on purpose: a
+    // generic 401 would send a paying customer to support thinking their
+    // password broke, when the account is deliberately frozen.
+    const loginTenant = await prisma.tenant.findUnique({
+      where: { id: user.tenantId },
+      select: { status: true, companyName: true },
+    });
+    if (loginTenant && loginTenant.status === 'SUSPENDED') {
+      console.warn(`[AUTH] 403: Tenant "${loginTenant.companyName}" is suspended`);
+      return res.status(403).json({
+        error: 'This company account is suspended. Please contact your administrator.',
+        code: 'TENANT_SUSPENDED',
+      });
+    }
+
     // Auto-activate user if they were in INVITED status
     if (user.status === 'INVITED') {
       await prisma.tenantUser.update({

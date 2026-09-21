@@ -7,6 +7,15 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+/// Commercial lifecycle of a customer company. ACTIVE is the default and is
+/// how every tenant behaved before this existed, so adding it changed nothing.
+enum TenantStatus {
+  ACTIVE
+  TRIAL
+  SUSPENDED
+  EXPIRED
+}
+
 enum UserRole {
   // SUPER_ADMIN is the highest role WITHIN a company. PLATFORM_OWNER sits
   // outside the company hierarchy entirely — it is the operator of the platform
@@ -39,6 +48,11 @@ model Tenant {
   // True only for the single internal tenant that houses PLATFORM_OWNER users.
   // Never set on a customer company.
   isPlatform           Boolean                  @default(false)
+  status               TenantStatus             @default(ACTIVE)
+  /// When a TRIAL lapses. Null means no expiry.
+  planEndsAt           DateTime?
+  suspendedAt          DateTime?
+  suspendedReason      String?
   createdAt            DateTime                 @default(now())
   updatedAt            DateTime                 @updatedAt
   users                TenantUser[]
@@ -84,7 +98,33 @@ model Tenant {
   cxoMessageReplies    CxoMessageReply[]
 
   @@index([isPlatform])
+  @@index([status])
   @@map("tenants")
+}
+
+/// What the platform operator did, as distinct from the five tenant-scoped
+/// audit models which record what happens inside a company.
+///
+/// actorId is intentionally not a relation: an audit row must outlive the
+/// operator account that created it, otherwise deleting a user erases the trail.
+model PlatformAuditLog {
+  id          String   @id @default(cuid())
+  actorId     String
+  action      String
+  targetType  String
+  targetId    String?
+  tenantId    String?
+  beforeValue Json?
+  afterValue  Json?
+  reason      String?
+  ipAddress   String?
+  createdAt   DateTime @default(now())
+
+  @@index([actorId])
+  @@index([tenantId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("platform_audit_logs")
 }
 
 enum EmploymentType {
