@@ -2836,6 +2836,85 @@ export const swaggerExtensions = {
     },
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // PLATFORM OPERATOR (PLATFORM_OWNER ONLY)
+    // ═══════════════════════════════════════════════════════════════════════════
+    '/platform/overview': {
+      get: {
+        tags: ['Platform'],
+        operationId: 'getPlatformOverview',
+        summary: 'Platform-wide headline counts',
+        description: 'PLATFORM_OWNER only. Returns aggregate counts across every company. No company role reaches this endpoint, however elevated it is inside its own tenant — SUPER_ADMIN receives 403. Returns counts only; no tenant-owned record is exposed.',
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: {
+            description: 'Platform counts',
+            content: { 'application/json': { schema: {
+              type: 'object',
+              properties: { overview: {
+                type: 'object',
+                properties: {
+                  companies: { type: 'integer', description: 'Customer tenants, excluding the internal platform tenant' },
+                  activeUsers: { type: 'integer' },
+                  pendingRegistrations: { type: 'integer', description: 'Company registrations not yet ACTIVE' },
+                  licencesPurchased: { type: 'integer' },
+                  licencesUsed: { type: 'integer' },
+                  licenceUtilisation: { type: 'integer', description: 'Percentage, 0 when no licences are purchased' },
+                  contractedValue: { type: 'number', description: 'Sum of licence fees invoiced across ACTIVE registrations. A one-time contracted amount, NOT recurring revenue — the schema has no subscription or plan model.' },
+                  currency: { type: 'string', example: 'INR' },
+                },
+              } },
+            } } },
+          },
+          401: { description: 'Authentication required' },
+          403: { description: 'Not a platform owner' },
+        },
+      },
+    },
+    '/platform/tenants': {
+      get: {
+        tags: ['Platform'],
+        operationId: 'listPlatformTenants',
+        summary: 'List customer companies',
+        description: 'PLATFORM_OWNER only. Company metadata and seat counts. Deliberately exposes no goals, employees, messages or any other tenant-owned data.',
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: 'search', in: 'query', schema: { type: 'string', maxLength: 200 }, description: 'Matches company name, tenant code or domain' },
+          { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1, default: 1 } },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } },
+        ],
+        responses: {
+          200: {
+            description: 'Companies',
+            content: { 'application/json': { schema: {
+              type: 'object',
+              properties: {
+                items: { type: 'array', items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string' },
+                    companyName: { type: 'string' },
+                    tenantCode: { type: 'string' },
+                    domainName: { type: 'string' },
+                    licenseLimit: { type: 'integer', description: 'Seats purchased. Compare against userCount to spot over-licence tenants.' },
+                    userCount: { type: 'integer', description: 'Non-deleted users in this tenant' },
+                    createdAt: { type: 'string', format: 'date-time' },
+                    companyType: { type: 'string', nullable: true, description: 'Legal entity type from the registration (e.g. "Private Limited"). NOT an industry — industry is not stored. Null for tenants predating the registration flow.' },
+                    status: { type: 'string', enum: ['ACTIVE', 'PENDING_FINANCE_REVIEW', 'PENDING_CHEQUE_CONFIRMATION', 'PENDING_HR_ACTIVATION'], description: 'Onboarding status. Defaults to ACTIVE for tenants with no registration record.' },
+                    contractedValue: { type: 'number', nullable: true, description: 'Licence fee invoiced for this company, in INR. Null when there is no registration record.' },
+                  },
+                } },
+                pagination: { type: 'object', properties: { page: { type: 'integer' }, limit: { type: 'integer' }, total: { type: 'integer' }, totalPages: { type: 'integer' } } },
+              },
+            } } },
+          },
+          400: { description: 'Validation failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+          401: { description: 'Authentication required' },
+          403: { description: 'Not a platform owner' },
+        },
+      },
+    },
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // DISPUTES: TICKETS, CHAT LOG, ATTACHMENTS
     // ═══════════════════════════════════════════════════════════════════════════
     '/disputes': {

@@ -28,6 +28,24 @@ export const SUPER_ELEVATED_ROLES = ['SUPER_ADMIN', 'ADMIN', 'CMD'];
 export const MANAGER_OR_ELEVATED_ROLES = [...ELEVATED_ROLES, 'MANAGER'];
 
 /**
+ * Platform-level roles: the operator of the product, not a member of any
+ * customer company.
+ *
+ * PLATFORM_OWNER is deliberately absent from every group above. It is NOT a
+ * higher SUPER_ADMIN — it holds no company-level permission at all, cannot
+ * approve a goal, read an employee record or open a tenant's data. SUPER_ADMIN
+ * remains the top of the hierarchy inside a company. Adding PLATFORM_OWNER to
+ * ELEVATED_ROLES would silently grant it HR powers in whichever tenant row it
+ * happens to live in, which is exactly what this separation avoids.
+ */
+export const PLATFORM_ROLES = ['PLATFORM_OWNER'];
+
+/** True for the platform operator — see PLATFORM_ROLES. */
+export function isPlatformOwner(role) {
+  return hasRole(role, PLATFORM_ROLES);
+}
+
+/**
  * Normalise a role string and test membership against one of the groups above.
  * @param {string|undefined|null} role
  * @param {string[]} group

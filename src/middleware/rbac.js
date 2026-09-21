@@ -1,5 +1,21 @@
 import { canViewDashboard } from '../lib/dashboardPermissions.js';
 import { hasCapability } from '../lib/capabilities.js';
+import { isPlatformOwner } from '../lib/roles.js';
+
+/**
+ * Platform-operator only. Deliberately NOT expressed as authorize('PLATFORM_OWNER',
+ * 'SUPER_ADMIN', ...) — no company role may reach a platform endpoint, however
+ * elevated it is inside its own tenant.
+ */
+export function requirePlatformOwner(req, res, next) {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  if (!isPlatformOwner(req.user.role)) {
+    return res.status(403).json({ error: 'Access forbidden: platform owner authorization required' });
+  }
+  next();
+}
 
 export function authorize(...allowedRoles) {
   const flattened = allowedRoles.flat(Infinity).map(r => String(r || '').toUpperCase());

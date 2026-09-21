@@ -22,6 +22,7 @@ const options = {
     ],
     tags: [
       { name: 'Health', description: 'Server & database health checks' },
+      { name: 'Platform', description: 'Platform operator (PLATFORM_OWNER) view: cross-company counts and company metadata only. No company role can reach these.' },
       { name: 'Registration', description: 'Level 1 — Company registration (OTP verification + signup)' },
       { name: 'Finance', description: 'Level 2 — Finance review, pricing & payment approval' },
       { name: 'HR', description: 'Level 3 — HR activation of company accounts' },
