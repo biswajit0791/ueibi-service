@@ -146,3 +146,29 @@ export async function computeCycleRollup({ tenantId, cycleId, department }) {
     },
   };
 }
+
+/**
+ * Goal completion stats for an arbitrary scope.
+ *
+ * Extracted from reports.controller.js's private getGoalStats so the Reports
+ * module and the dashboard summary compute "average goal progress" from one
+ * implementation rather than two that can drift.
+ *
+ * `where` is supplied by the caller so the same maths can run tenant-wide
+ * (Reports) or narrowed to one viewer's assignments (dashboard). Callers are
+ * responsible for including tenantId — this helper never widens a scope.
+ */
+export async function computeGoalStats(where) {
+  const goals = await prisma.goal.findMany({
+    where,
+    select: { progress: true, status: true },
+  });
+  const total = goals.length;
+  const completed = goals.filter((g) => String(g.status).toUpperCase() === 'COMPLETED').length;
+  return {
+    totalGoals: total,
+    completedGoals: completed,
+    goalCompletionRate: total > 0 ? Number(((completed / total) * 100).toFixed(1)) : 0,
+    averageGoalProgress: total > 0 ? Math.round(goals.reduce((s, g) => s + g.progress, 0) / total) : 0,
+  };
+}
