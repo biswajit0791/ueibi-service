@@ -17,10 +17,36 @@ function addBusinessDays(from, days) {
   return d;
 }
 
+/**
+ * Next ticket number for this tenant, e.g. "CXO-2026-0004".
+ *
+ * Derived from the HIGHEST existing number rather than a row count. A count
+ * reuses a number as soon as ANY earlier message is removed; taking the maximum
+ * only has that problem if the newest message itself is removed, and nothing in
+ * this codebase deletes a CxoMessage (there is no DELETE route and no caller).
+ * A gap-free, never-reused sequence would need a persisted counter, which is
+ * not worth the extra table while deletion is unreachable.
+ *
+ * Uniqueness is scoped per tenant (see the @@unique on CxoMessage), which is
+ * what this format implies — each company has its own 0001. Concurrency is
+ * handled by the caller retrying on P2002, because any read-then-write scheme
+ * can still lose a race between the read and the insert.
+ */
 async function nextTicketNumber(tenantId) {
   const year = new Date().getFullYear();
-  const count = await prisma.cxoMessage.count({ where: { tenantId } });
-  return `CXO-${year}-${String(count + 1).padStart(4, '0')}`;
+  const prefix = `CXO-${year}-`;
+
+  const issued = await prisma.cxoMessage.findMany({
+    where: { tenantId, ticketNumber: { startsWith: prefix } },
+    select: { ticketNumber: true },
+  });
+
+  const highest = issued.reduce((max, row) => {
+    const n = parseInt(row.ticketNumber.slice(prefix.length), 10);
+    return Number.isFinite(n) && n > max ? n : max;
+  }, 0);
+
+  return `${prefix}${String(highest + 1).padStart(4, '0')}`;
 }
 
 /**
@@ -115,21 +141,35 @@ export class CxoService {
       }
     }
 
-    const created = await prisma.cxoMessage.create({
-      data: {
-        tenantId,
-        ticketNumber: await nextTicketNumber(tenantId),
-        subject,
-        body,
-        category,
-        isAnonymous: Boolean(isAnonymous),
-        raisedById,
-        targetLeaderId: targetLeaderId ?? null,
-        assignedToId: targetLeaderId ?? null,
-        dueAt: addBusinessDays(new Date(), SLA_BUSINESS_DAYS),
-      },
-      include: { raisedBy: senderSelect, targetLeader: leaderSelect, assignedTo: leaderSelect },
-    });
+    // Two people raising a message at the same moment can both read the same
+    // highest number before either inserts. Rather than locking, take the
+    // duplicate-key error as the signal to recompute and try again — the window
+    // is tiny, so this converges immediately.
+    let created = null;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        created = await prisma.cxoMessage.create({
+          data: {
+            tenantId,
+            ticketNumber: await nextTicketNumber(tenantId),
+            subject,
+            body,
+            category,
+            isAnonymous: Boolean(isAnonymous),
+            raisedById,
+            targetLeaderId: targetLeaderId ?? null,
+            assignedToId: targetLeaderId ?? null,
+            dueAt: addBusinessDays(new Date(), SLA_BUSINESS_DAYS),
+          },
+          include: { raisedBy: senderSelect, targetLeader: leaderSelect, assignedTo: leaderSelect },
+        });
+        break;
+      } catch (err) {
+        const isDuplicateTicket = err?.code === 'P2002'
+          && (err?.meta?.target || []).includes('ticketNumber');
+        if (!isDuplicateTicket || attempt === 4) throw err;
+      }
+    }
 
     // Notify the addressed leader, or the whole panel when unaddressed.
     const recipients = targetLeaderId

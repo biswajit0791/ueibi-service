@@ -9,6 +9,9 @@ import {
   deleteTrainingRecord,
   uploadEntityAttachment,
   downloadEntityAttachment,
+  listOneOnOnes,
+  createOneOnOne,
+  updateOneOnOne,
   createAchievement,
   createIncident,
   updateIncident,
@@ -39,6 +42,11 @@ router.patch('/team/:employeeId/incidents/:id', requireAuth, requireTenant, upda
 
 // Attachments — shared by training/achievements/incidents (:entityKind is
 // one of those three route-segment names, validated inside the controller).
+// 1:1 meetings — access reuses the same gate as the member profile itself.
+router.get('/team/:employeeId/one-on-ones', requireAuth, requireTenant, listOneOnOnes);
+router.post('/team/:employeeId/one-on-ones', requireAuth, requireTenant, createOneOnOne);
+router.patch('/one-on-ones/:id', requireAuth, requireTenant, updateOneOnOne);
+
 router.post('/team/:entityKind/:id/attachment', requireAuth, requireTenant, upload.single('file'), uploadEntityAttachment);
 router.get('/team/:entityKind/:id/attachment/:attachmentId', requireAuth, requireTenant, downloadEntityAttachment);
 

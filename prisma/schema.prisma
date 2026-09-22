@@ -9,6 +9,12 @@ datasource db {
 
 /// Commercial lifecycle of a customer company. ACTIVE is the default and is
 /// how every tenant behaved before this existed, so adding it changed nothing.
+enum OneOnOneStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+}
+
 enum TenantStatus {
   ACTIVE
   TRIAL
@@ -90,6 +96,7 @@ model Tenant {
   disputes             Dispute[]
   disputeMessages      DisputeMessage[]
   disputeSubjects      DisputeSubject[]
+  oneOnOneMeetings     OneOnOneMeeting[]
   userCapabilities     UserCapability[]
   bloodGroups          BloodGroup[]
   goalOptions          GoalOption[]
@@ -215,6 +222,8 @@ model TenantUser {
   disputesRaised             Dispute[]                @relation("DisputeRaisedBy")
   disputeSubjectOf           Dispute[]                @relation("DisputeSubjectEmployee")
   disputeSubjectLinks        DisputeSubject[]         @relation("DisputeSubjectLink")
+  oneOnOnesOrganised         OneOnOneMeeting[]        @relation("OneOnOneOrganiser")
+  oneOnOnesAttending         OneOnOneMeeting[]        @relation("OneOnOneParticipant")
   disputesAssigned           Dispute[]                @relation("DisputeAssignee")
   disputeMessagesSent        DisputeMessage[]         @relation("DisputeMessageSender")
   // Policies & Compliance Relations
@@ -1379,6 +1388,34 @@ model PolicyAuditLog {
   @@map("policy_audit_logs")
 }
 
+/// A private 1:1 between two colleagues, backing the "Schedule 1:1" action on
+/// the team member profile. Distinct from HubEvent, which is a company-wide
+/// announcement visible to the whole tenant.
+model OneOnOneMeeting {
+  id              String         @id @default(cuid())
+  tenantId        String
+  tenant          Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  organiserId     String
+  organiser       TenantUser     @relation("OneOnOneOrganiser", fields: [organiserId], references: [id], onDelete: Cascade)
+  participantId   String
+  participant     TenantUser     @relation("OneOnOneParticipant", fields: [participantId], references: [id], onDelete: Cascade)
+  scheduledAt     DateTime
+  durationMins    Int            @default(30)
+  agenda          String?        @db.Text
+  location        String?
+  status          OneOnOneStatus @default(SCHEDULED)
+  outcomeNotes    String?        @db.Text
+  cancelledReason String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([tenantId])
+  @@index([organiserId])
+  @@index([participantId])
+  @@index([scheduledAt])
+  @@map("one_on_one_meetings")
+}
+
 model HubEvent {
   id          String     @id @default(cuid())
   tenantId    String
@@ -1571,7 +1608,11 @@ model CxoMessage {
   id           String @id @default(cuid())
   tenantId     String
   tenant       Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  ticketNumber String @unique
+  /// Unique PER TENANT, not globally. The number is generated from a
+  /// per-tenant sequence ("CXO-2026-0001" restarts for each company) and is
+  /// display-only, so a global constraint made every tenant's first message
+  /// collide with the first tenant's.
+  ticketNumber String
 
   subject  String
   body     String      @db.Text
@@ -1605,6 +1646,7 @@ model CxoMessage {
 
   replies CxoMessageReply[]
 
+  @@unique([tenantId, ticketNumber])
   @@index([tenantId, status, createdAt])
   @@index([tenantId, targetLeaderId, status])
   @@index([tenantId, raisedById, createdAt])

@@ -81,3 +81,27 @@ export const incidentUpdateSchema = z.object({
   status: z.enum(['OPEN', 'RESOLVED', 'ESCALATED']).optional(),
   resolutionNotes: z.string().max(5000).optional(),
 }).refine((d) => Object.keys(d).length > 0, { message: 'At least one field must be provided' });
+
+// ── 1:1 meetings ────────────────────────────────────────────────────────────
+// Zod 4 here: `error`, not v3's `required_error`, which Zod 4 ignores silently.
+
+export const oneOnOneIdParamSchema = z.object({
+  id: z.string().min(1),
+});
+
+export const oneOnOneCreateSchema = z.object({
+  scheduledAt: z.string({ error: 'A date and time is required' }).min(1),
+  durationMins: z.coerce.number().int().min(5).max(480).optional(),
+  agenda: z.string().max(2000).optional(),
+  location: z.string().max(300).optional(),
+});
+
+export const oneOnOneUpdateSchema = z.object({
+  scheduledAt: z.string().min(1).optional(),
+  durationMins: z.coerce.number().int().min(5).max(480).optional(),
+  agenda: z.string().max(2000).optional(),
+  location: z.string().max(300).optional(),
+  outcomeNotes: z.string().max(4000).optional(),
+  status: z.enum(['SCHEDULED', 'COMPLETED', 'CANCELLED']).optional(),
+  cancelledReason: z.string().max(500).optional(),
+}).refine((d) => Object.keys(d).length > 0, { message: 'At least one field must be provided' });
