@@ -2995,6 +2995,77 @@ export const swaggerExtensions = {
     },
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // 1:1 MEETINGS
+    // ═══════════════════════════════════════════════════════════════════════════
+    '/team/{employeeId}/one-on-ones': {
+      get: {
+        tags: ['Employees'],
+        operationId: 'listOneOnOnes',
+        summary: 'List 1:1 meetings with a colleague',
+        description: 'Access reuses the same gate as the member profile itself (self, their manager, or an elevated role). Elevated roles see every 1:1 that person has; everyone else sees only meetings they are part of.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'employeeId', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'Meetings, newest first', content: { 'application/json': { schema: { type: 'object', properties: { items: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, organiserId: { type: 'string' }, participantId: { type: 'string' }, organiser: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, email: { type: 'string' }, designation: { type: 'string', nullable: true } } }, participant: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, email: { type: 'string' }, designation: { type: 'string', nullable: true } } }, scheduledAt: { type: 'string', format: 'date-time' }, durationMins: { type: 'integer' }, agenda: { type: 'string', nullable: true }, location: { type: 'string', nullable: true }, status: { type: 'string', enum: ['SCHEDULED', 'COMPLETED', 'CANCELLED'] }, outcomeNotes: { type: 'string', nullable: true }, cancelledReason: { type: 'string', nullable: true } } } } } } } } },
+          403: { description: 'Not permitted to view this employee' },
+          404: { description: 'Employee not found in this tenant' },
+        },
+      },
+      post: {
+        tags: ['Employees'],
+        operationId: 'createOneOnOne',
+        summary: 'Schedule a 1:1 with a colleague',
+        description: 'Creates the meeting and notifies the participant. A time in the past is rejected, as is scheduling with yourself. Broadcasts `one_on_one_scheduled` over Socket.IO.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'employeeId', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object', required: ['scheduledAt'],
+          properties: {
+            scheduledAt: { type: 'string', format: 'date-time', description: 'Must be in the future' },
+            durationMins: { type: 'integer', minimum: 5, maximum: 480, default: 30 },
+            agenda: { type: 'string', maxLength: 2000 },
+            location: { type: 'string', maxLength: 300, description: 'Room name or video link' },
+          },
+        } } } },
+        responses: {
+          201: { description: 'Scheduled', content: { 'application/json': { schema: { type: 'object', properties: { meeting: { type: 'object', properties: { id: { type: 'string' }, organiserId: { type: 'string' }, participantId: { type: 'string' }, organiser: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, email: { type: 'string' }, designation: { type: 'string', nullable: true } } }, participant: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, email: { type: 'string' }, designation: { type: 'string', nullable: true } } }, scheduledAt: { type: 'string', format: 'date-time' }, durationMins: { type: 'integer' }, agenda: { type: 'string', nullable: true }, location: { type: 'string', nullable: true }, status: { type: 'string', enum: ['SCHEDULED', 'COMPLETED', 'CANCELLED'] }, outcomeNotes: { type: 'string', nullable: true }, cancelledReason: { type: 'string', nullable: true } } } } } } } },
+          400: { description: 'Validation failed, a past time, or scheduling with yourself' },
+          403: { description: 'Not permitted to view this employee' },
+          404: { description: 'Employee not found in this tenant' },
+        },
+      },
+    },
+    '/one-on-ones/{id}': {
+      patch: {
+        tags: ['Employees'],
+        operationId: 'updateOneOnOne',
+        summary: 'Reschedule, complete or cancel a 1:1',
+        description: 'Either participant, or an elevated role, may change a meeting. The other party is notified of the change. Broadcasts `one_on_one_updated`.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object',
+          description: 'At least one field is required.',
+          properties: {
+            scheduledAt: { type: 'string', format: 'date-time' },
+            durationMins: { type: 'integer', minimum: 5, maximum: 480 },
+            agenda: { type: 'string', maxLength: 2000 },
+            location: { type: 'string', maxLength: 300 },
+            outcomeNotes: { type: 'string', maxLength: 4000 },
+            status: { type: 'string', enum: ['SCHEDULED', 'COMPLETED', 'CANCELLED'] },
+            cancelledReason: { type: 'string', maxLength: 500 },
+          },
+        } } } },
+        responses: {
+          200: { description: 'Updated', content: { 'application/json': { schema: { type: 'object', properties: { meeting: { type: 'object', properties: { id: { type: 'string' }, organiserId: { type: 'string' }, participantId: { type: 'string' }, organiser: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, email: { type: 'string' }, designation: { type: 'string', nullable: true } } }, participant: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, email: { type: 'string' }, designation: { type: 'string', nullable: true } } }, scheduledAt: { type: 'string', format: 'date-time' }, durationMins: { type: 'integer' }, agenda: { type: 'string', nullable: true }, location: { type: 'string', nullable: true }, status: { type: 'string', enum: ['SCHEDULED', 'COMPLETED', 'CANCELLED'] }, outcomeNotes: { type: 'string', nullable: true }, cancelledReason: { type: 'string', nullable: true } } } } } } } },
+          400: { description: 'Validation failed' },
+          403: { description: 'Not a participant and not elevated' },
+          404: { description: '1:1 not found in this tenant' },
+        },
+      },
+    },
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // PLATFORM OPERATOR (PLATFORM_OWNER ONLY)
     // ═══════════════════════════════════════════════════════════════════════════
     '/platform/overview': {

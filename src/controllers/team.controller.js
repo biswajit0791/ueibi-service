@@ -3,11 +3,15 @@ import { buildTeamScopeWhere } from '../services/teamScope.service.js';
 import { canManagerReview, mapNominationsToFeedbackItems, getPeriodMetadata } from './appraisal.controller.js';
 import { entityAttachmentService } from '../services/entityAttachment.service.js';
 import { storageService } from '../services/storage/storage.service.js';
-import { hasRole, HR_ROLES } from '../lib/roles.js';
+import { hasRole, HR_ROLES, isElevated } from '../lib/roles.js';
+import { emitToTenant } from '../lib/socket.js';
 import {
   teamDirectoryQuerySchema,
   teamMemberDetailQuerySchema,
   employeeIdParamSchema,
+  oneOnOneIdParamSchema,
+  oneOnOneCreateSchema,
+  oneOnOneUpdateSchema,
   trainingRecordCreateSchema,
   trainingRecordUpdateSchema,
   trainingRecordParamSchema,
@@ -710,6 +714,211 @@ export async function updateIncident(req, res, next) {
 
     const updated = await prisma.incident.update({ where: { id }, data: parsed.data });
     res.json({ incident: updated });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 1:1 MEETINGS
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Backs the "Schedule 1:1" action on the team member profile, which previously
+// only raised a browser alert and stored nothing.
+//
+// Access reuses loadTargetEmployeeOrFail, the same gate the profile page itself
+// uses, so whoever can open someone's profile can schedule with them and nobody
+// else can. That keeps one permission rule instead of inventing a second.
+
+/** The two people on a meeting, plus anyone elevated, may see or change it. */
+function canActOnMeeting(meeting, user) {
+  return meeting.organiserId === user.id
+    || meeting.participantId === user.id
+    || isElevated(user.role);
+}
+
+const MEETING_PERSON = { select: { id: true, name: true, email: true, designation: true } };
+
+/**
+ * POST /team/:employeeId/one-on-ones — schedule a 1:1 with this colleague.
+ */
+export async function createOneOnOne(req, res, next) {
+  try {
+    const parsedParams = employeeIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid parameters', details: parsedParams.error.issues });
+    }
+    const parsed = oneOnOneCreateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    }
+    const { employeeId } = parsedParams.data;
+
+    // Same gate as viewing the profile.
+    const target = await loadTargetEmployeeOrFail(req, res, employeeId);
+    if (!target) return null;
+
+    if (employeeId === req.user.id) {
+      return res.status(400).json({ error: 'You cannot schedule a 1:1 with yourself' });
+    }
+
+    const scheduledAt = new Date(parsed.data.scheduledAt);
+    if (Number.isNaN(scheduledAt.getTime())) {
+      return res.status(400).json({ error: 'scheduledAt is not a valid date' });
+    }
+    // A meeting in the past is almost always a typo in the date field, and
+    // silently accepting it produces a "1:1" nobody will ever attend.
+    if (scheduledAt.getTime() < Date.now() - 60_000) {
+      return res.status(400).json({ error: 'Pick a time in the future' });
+    }
+
+    const meeting = await prisma.oneOnOneMeeting.create({
+      data: {
+        tenantId: req.tenantId,
+        organiserId: req.user.id,
+        participantId: employeeId,
+        scheduledAt,
+        durationMins: parsed.data.durationMins ?? 30,
+        agenda: parsed.data.agenda?.trim() || null,
+        location: parsed.data.location?.trim() || null,
+      },
+      include: { organiser: MEETING_PERSON, participant: MEETING_PERSON },
+    });
+
+    // Tell the other person. A meeting they never hear about is not scheduled.
+    await prisma.notification.create({
+      data: {
+        tenantId: req.tenantId,
+        recipientId: employeeId,
+        type: 'one_on_one',
+        title: `1:1 scheduled with ${req.user.name}`,
+        body: `${scheduledAt.toLocaleString('en-IN')} · ${meeting.durationMins} minutes${meeting.agenda ? ` — ${meeting.agenda}` : ''}`,
+        entityType: 'one_on_one',
+        entityId: meeting.id,
+      },
+    }).catch((err) => {
+      // The meeting itself is saved; a failed notification must not lose it.
+      console.warn('[1:1] Notice creating notification:', err.message);
+    });
+
+    emitToTenant(req.tenantId, 'one_on_one_scheduled', { meeting });
+
+    res.status(201).json({ meeting });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /team/:employeeId/one-on-ones — 1:1s between the caller and this person.
+ *
+ * Elevated roles see every 1:1 that person has, which is what makes this useful
+ * to HR; everyone else sees only meetings they are part of.
+ */
+export async function listOneOnOnes(req, res, next) {
+  try {
+    const parsedParams = employeeIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid parameters', details: parsedParams.error.issues });
+    }
+    const { employeeId } = parsedParams.data;
+
+    const target = await loadTargetEmployeeOrFail(req, res, employeeId);
+    if (!target) return null;
+
+    const involvesTarget = [{ organiserId: employeeId }, { participantId: employeeId }];
+    const where = isElevated(req.user.role)
+      ? { tenantId: req.tenantId, OR: involvesTarget }
+      : {
+          tenantId: req.tenantId,
+          AND: [
+            { OR: involvesTarget },
+            { OR: [{ organiserId: req.user.id }, { participantId: req.user.id }] },
+          ],
+        };
+
+    const meetings = await prisma.oneOnOneMeeting.findMany({
+      where,
+      orderBy: { scheduledAt: 'desc' },
+      take: 50,
+      include: { organiser: MEETING_PERSON, participant: MEETING_PERSON },
+    });
+
+    res.json({ items: meetings });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * PATCH /one-on-ones/:id — reschedule, complete, or cancel.
+ */
+export async function updateOneOnOne(req, res, next) {
+  try {
+    const parsedParams = oneOnOneIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid parameters', details: parsedParams.error.issues });
+    }
+    const parsed = oneOnOneUpdateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    }
+
+    const meeting = await prisma.oneOnOneMeeting.findFirst({
+      where: { id: parsedParams.data.id, tenantId: req.tenantId },
+    });
+    if (!meeting) return res.status(404).json({ error: '1:1 not found' });
+    if (!canActOnMeeting(meeting, req.user)) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    const data = {};
+    if (parsed.data.scheduledAt) {
+      const when = new Date(parsed.data.scheduledAt);
+      if (Number.isNaN(when.getTime())) {
+        return res.status(400).json({ error: 'scheduledAt is not a valid date' });
+      }
+      data.scheduledAt = when;
+    }
+    if (parsed.data.durationMins !== undefined) data.durationMins = parsed.data.durationMins;
+    if (parsed.data.agenda !== undefined) data.agenda = parsed.data.agenda?.trim() || null;
+    if (parsed.data.location !== undefined) data.location = parsed.data.location?.trim() || null;
+    if (parsed.data.outcomeNotes !== undefined) data.outcomeNotes = parsed.data.outcomeNotes?.trim() || null;
+    if (parsed.data.status) {
+      data.status = parsed.data.status;
+      if (parsed.data.status === 'CANCELLED') {
+        data.cancelledReason = parsed.data.cancelledReason?.trim() || null;
+      }
+    }
+
+    const updated = await prisma.oneOnOneMeeting.update({
+      where: { id: meeting.id },
+      data,
+      include: { organiser: MEETING_PERSON, participant: MEETING_PERSON },
+    });
+
+    // Notify the other party — whichever of the two did not make the change.
+    const otherId = req.user.id === updated.organiserId ? updated.participantId : updated.organiserId;
+    const verb = parsed.data.status === 'CANCELLED'
+      ? 'cancelled'
+      : parsed.data.status === 'COMPLETED'
+        ? 'marked complete'
+        : 'updated';
+    await prisma.notification.create({
+      data: {
+        tenantId: req.tenantId,
+        recipientId: otherId,
+        type: 'one_on_one',
+        title: `1:1 ${verb} by ${req.user.name}`,
+        body: `${new Date(updated.scheduledAt).toLocaleString('en-IN')}${updated.cancelledReason ? ` — ${updated.cancelledReason}` : ''}`,
+        entityType: 'one_on_one',
+        entityId: updated.id,
+      },
+    }).catch((err) => console.warn('[1:1] Notice creating notification:', err.message));
+
+    emitToTenant(req.tenantId, 'one_on_one_updated', { meeting: updated });
+
+    res.json({ meeting: updated });
   } catch (err) {
     next(err);
   }
