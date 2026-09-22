@@ -4,7 +4,7 @@ import { canManagerReview, mapNominationsToFeedbackItems, getPeriodMetadata } fr
 import { entityAttachmentService } from '../services/entityAttachment.service.js';
 import { storageService } from '../services/storage/storage.service.js';
 import { hasRole, HR_ROLES, isElevated } from '../lib/roles.js';
-import { emitToTenant } from '../lib/socket.js';
+import { emitToTenant, emitToUser } from '../lib/socket.js';
 import {
   teamDirectoryQuerySchema,
   teamMemberDetailQuerySchema,
@@ -786,20 +786,32 @@ export async function createOneOnOne(req, res, next) {
     });
 
     // Tell the other person. A meeting they never hear about is not scheduled.
-    await prisma.notification.create({
-      data: {
-        tenantId: req.tenantId,
-        recipientId: employeeId,
-        type: 'one_on_one',
-        title: `1:1 scheduled with ${req.user.name}`,
-        body: `${scheduledAt.toLocaleString('en-IN')} · ${meeting.durationMins} minutes${meeting.agenda ? ` — ${meeting.agenda}` : ''}`,
-        entityType: 'one_on_one',
-        entityId: meeting.id,
-      },
-    }).catch((err) => {
+    try {
+      const notif = await prisma.notification.create({
+        data: {
+          tenantId: req.tenantId,
+          recipientId: employeeId,
+          type: 'one_on_one',
+          title: `1:1 scheduled with ${req.user.name}`,
+          // The joining link belongs in the notification: that is where the
+          // participant looks when the meeting is about to start.
+          body: [
+            scheduledAt.toLocaleString('en-IN'),
+            `${meeting.durationMins} minutes`,
+            meeting.location || null,
+            meeting.agenda || null,
+          ].filter(Boolean).join(' · '),
+          entityType: 'one_on_one',
+          entityId: meeting.id,
+        },
+      });
+      // Same channel the notification bell listens on. Creating the row alone
+      // only surfaced it after a page reload.
+      emitToUser(req.tenantId, employeeId, 'notification', notif);
+    } catch (err) {
       // The meeting itself is saved; a failed notification must not lose it.
       console.warn('[1:1] Notice creating notification:', err.message);
-    });
+    }
 
     emitToTenant(req.tenantId, 'one_on_one_scheduled', { meeting });
 
@@ -904,17 +916,26 @@ export async function updateOneOnOne(req, res, next) {
       : parsed.data.status === 'COMPLETED'
         ? 'marked complete'
         : 'updated';
-    await prisma.notification.create({
-      data: {
-        tenantId: req.tenantId,
-        recipientId: otherId,
-        type: 'one_on_one',
-        title: `1:1 ${verb} by ${req.user.name}`,
-        body: `${new Date(updated.scheduledAt).toLocaleString('en-IN')}${updated.cancelledReason ? ` — ${updated.cancelledReason}` : ''}`,
-        entityType: 'one_on_one',
-        entityId: updated.id,
-      },
-    }).catch((err) => console.warn('[1:1] Notice creating notification:', err.message));
+    try {
+      const notif = await prisma.notification.create({
+        data: {
+          tenantId: req.tenantId,
+          recipientId: otherId,
+          type: 'one_on_one',
+          title: `1:1 ${verb} by ${req.user.name}`,
+          body: [
+            new Date(updated.scheduledAt).toLocaleString('en-IN'),
+            updated.status === 'CANCELLED' ? null : updated.location || null,
+            updated.cancelledReason || null,
+          ].filter(Boolean).join(' · '),
+          entityType: 'one_on_one',
+          entityId: updated.id,
+        },
+      });
+      emitToUser(req.tenantId, otherId, 'notification', notif);
+    } catch (err) {
+      console.warn('[1:1] Notice creating notification:', err.message);
+    }
 
     emitToTenant(req.tenantId, 'one_on_one_updated', { meeting: updated });
 
