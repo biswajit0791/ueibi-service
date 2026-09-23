@@ -35,6 +35,7 @@ import cxoRoutes from './routes/cxo.routes.js';
 import teamRoutes from './routes/team.routes.js';
 import disputeRoutes from './routes/dispute.routes.js';
 import platformRoutes from './routes/platform.routes.js';
+import billingRoutes from './routes/billing.routes.js';
 import dashboardSummaryRoutes from './routes/dashboardSummary.routes.js';
 import { notFound } from './middleware/notFound.js';
 import { errorHandler } from './middleware/errorHandler.js';
@@ -119,6 +120,7 @@ apiRouter.use(cxoRoutes);
 apiRouter.use(teamRoutes);
 apiRouter.use(disputeRoutes);
 apiRouter.use(platformRoutes);
+apiRouter.use(billingRoutes);
 apiRouter.use(dashboardSummaryRoutes);
 if (env.nodeEnv !== 'production') {
   apiRouter.use(devRoutes);

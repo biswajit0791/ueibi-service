@@ -1,7 +1,8 @@
 import { verifyToken } from '../lib/jwt.js';
-import { parseCookies } from '../lib/adminAuth.js';
+import { parseCookies } from '../lib/cookies.js';
 import { prisma } from '../lib/prisma.js';
 import { loadCapabilities } from '../lib/capabilities.js';
+import { tenantAccessDenial } from '../lib/tenantAccess.js';
 
 export async function requireAuth(req, res, next) {
   try {
@@ -49,11 +50,9 @@ export async function requireAuth(req, res, next) {
     if (user.status === 'EXITED') {
       return res.status(403).json({ error: 'Access forbidden: this account is inactive/exited' });
     }
-    if (user.tenant?.status === 'SUSPENDED') {
-      return res.status(403).json({
-        error: 'This company account is suspended. Please contact your administrator.',
-        code: 'TENANT_SUSPENDED',
-      });
+    const denial = tenantAccessDenial(user.tenant?.status);
+    if (denial) {
+      return res.status(403).json({ error: denial.message, code: denial.code });
     }
 
     // Capabilities are read fresh alongside the user (same rationale as

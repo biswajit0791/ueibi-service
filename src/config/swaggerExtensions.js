@@ -2151,9 +2151,9 @@ export const swaggerExtensions = {
       get: {
         tags: ['Registration'],
         summary: 'List company registrations (Admin view)',
-        description: 'Returns list of company registration pipelines with status filtering. Requires admin session cookie.',
+        description: 'PLATFORM_OWNER only. Returns company registration pipelines with status filtering and a count per stage. The richer onboarding queue, with age in stage and notification failures, is GET /platform/registrations.',
         operationId: 'listAdminRegistrations',
-        security: [{ adminCookie: [] }],
+        security: [{ bearerAuth: [] }],
         parameters: [
           { name: 'status', in: 'query', schema: { type: 'string' }, description: 'Filter by pipeline status' },
           { name: 'search', in: 'query', schema: { type: 'string' }, description: 'Search by company or domain name' },
@@ -2170,8 +2170,9 @@ export const swaggerExtensions = {
       get: {
         tags: ['Registration'],
         summary: 'Get single company registration detail (Admin view)',
+        description: 'PLATFORM_OWNER only. Returns an explicit field selection — notably NOT the signatory passwordHash, which a bare include had been returning to the browser.',
         operationId: 'getAdminRegistrationById',
-        security: [{ adminCookie: [] }],
+        security: [{ bearerAuth: [] }],
         parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
         responses: {
           200: { description: 'Registration detail', content: { 'application/json': { schema: { type: 'object' } } } },
@@ -2896,6 +2897,680 @@ export const swaggerExtensions = {
           403: { description: 'Not a platform owner' },
           404: { description: 'Company not found' },
           409: { description: 'Not currently suspended' },
+        },
+      },
+    },
+    // ═══════════════════════════════════════════════════════════════════════
+    // BILLING
+    // ═══════════════════════════════════════════════════════════════════════
+    '/platform/packages': {
+      get: {
+        tags: ['Billing'],
+        operationId: 'listPackages',
+        summary: 'What you sell',
+        description: 'PLATFORM_OWNER only. A package is a template — price per seat, seat count and term length — not a contract. Each row is quoted with GST at the configured rate, and reports how many terms have been sold from it.',
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: 'active', in: 'query', schema: { type: 'string', enum: ['true', 'false'] } },
+          { name: 'search', in: 'query', schema: { type: 'string', maxLength: 200 } },
+        ],
+        responses: {
+          200: { description: 'Packages', content: { 'application/json': { schema: { type: 'object', properties: { items: { type: 'array', items: { type: 'object' } } } } } } },
+          403: { description: 'Not a platform owner' },
+        },
+      },
+      post: {
+        tags: ['Billing'],
+        operationId: 'createPackage',
+        summary: 'Create a package',
+        description: 'PLATFORM_OWNER only. `unitPrice` is PER SEAT, so lib/pricing.js is reused unchanged for every quote, invoice and renewal. A package with a billing interval needs a term length; ONE_TIME means perpetual and its term length is cleared. Audited.',
+        security: [{ bearerAuth: [] }],
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object', required: ['name', 'seatCount', 'unitPrice'],
+          properties: {
+            name: { type: 'string', minLength: 2, maxLength: 120 },
+            description: { type: 'string', maxLength: 2000, nullable: true },
+            seatCount: { type: 'integer', minimum: 1, maximum: 100000 },
+            interval: { type: 'string', enum: ['ONE_TIME', 'MONTHLY', 'QUARTERLY', 'ANNUAL'], default: 'ANNUAL' },
+            termMonths: { type: 'integer', minimum: 1, maximum: 120, nullable: true },
+            unitPrice: { type: 'number', exclusiveMinimum: 0 },
+            sortOrder: { type: 'integer', minimum: 0 },
+          },
+        } } } },
+        responses: {
+          201: { description: 'Created' },
+          400: { description: 'Validation failed, or a recurring interval carried no term length' },
+          403: { description: 'Not a platform owner' },
+        },
+      },
+    },
+    '/platform/packages/{id}': {
+      get: {
+        tags: ['Billing'], operationId: 'getPackage', summary: 'One package',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Package' }, 403: { description: 'Not a platform owner' }, 404: { description: 'Not found' } },
+      },
+      patch: {
+        tags: ['Billing'],
+        operationId: 'updatePackage',
+        summary: 'Edit a package',
+        description: 'PLATFORM_OWNER only. Editing a package does NOT touch any subscription or invoice already sold from it — those carry their own snapshot of name, seats and price. The response reports `existingTerms` and a note saying so, because "I changed the price" and "I changed what my customers pay" are different things. Audited.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } },
+        responses: {
+          200: { description: 'Updated', content: { 'application/json': { schema: { type: 'object', properties: { package: { type: 'object' }, existingTerms: { type: 'integer' }, note: { type: 'string', nullable: true } } } } } },
+          400: { description: 'Validation failed' }, 403: { description: 'Not a platform owner' }, 404: { description: 'Not found' },
+        },
+      },
+      delete: {
+        tags: ['Billing'],
+        operationId: 'deletePackage',
+        summary: 'Delete a package permanently',
+        description: 'PLATFORM_OWNER only. Refused with 409 (PACKAGE_IN_USE) once anything has been sold from it: Subscription.packageId is an optional relation, so deleting would silently null the link on real contracts. A sold package is retired via PATCH { active: false } instead. Audited.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'Deleted' }, 403: { description: 'Not a platform owner' },
+          404: { description: 'Not found' }, 409: { description: 'Already sold — retire it instead' },
+        },
+      },
+    },
+
+    '/platform/subscriptions': {
+      get: {
+        tags: ['Billing'],
+        operationId: 'listSubscriptions',
+        summary: 'The terms companies are on',
+        description: 'PLATFORM_OWNER only. `expiringInDays` is the renewal queue, ordered soonest-first. Perpetual terms have no end date and are deliberately excluded from it — they were bought outright and never renew.',
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: 'state', in: 'query', schema: { type: 'string', enum: ['PENDING', 'ACTIVE', 'EXPIRED', 'CANCELLED'] } },
+          { name: 'tenantId', in: 'query', schema: { type: 'string' } },
+          { name: 'expiringInDays', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 365 }, description: 'Beyond a year is refused rather than clamped — a queue reaching further is not a queue.' },
+          { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1, default: 1 } },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 50 } },
+        ],
+        responses: { 200: { description: 'Terms' }, 400: { description: 'Validation failed' }, 403: { description: 'Not a platform owner' } },
+      },
+    },
+    '/platform/subscriptions/{id}': {
+      get: {
+        tags: ['Billing'],
+        operationId: 'getSubscription',
+        summary: 'One term, with its renewal chain and invoices',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Term' }, 403: { description: 'Not a platform owner' }, 404: { description: 'Not found' } },
+      },
+    },
+    '/platform/tenants/{id}/subscription': {
+      post: {
+        tags: ['Billing'],
+        operationId: 'startSubscription',
+        summary: 'Sell a company a term',
+        description: 'PLATFORM_OWNER only. Copies the package\'s name, seats and price onto the subscription so the sale survives the package being renamed, repriced or retired. This is the one place billing reaches into the product: it sets Tenant.licenseLimit from the seats sold (which license.service.js then enforces) and mirrors the end date onto Tenant.planEndsAt. Refused if a live term already exists, if the seats are below the company\'s active headcount, or for the platform tenant. Raises and issues an invoice unless createInvoice is false. Audited.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object', required: ['packageId'],
+          properties: {
+            packageId: { type: 'string' },
+            startsAt: { type: 'string', format: 'date-time' },
+            seatCount: { type: 'integer', nullable: true, description: 'Overrides the package for a negotiated deal.' },
+            unitPrice: { type: 'number', nullable: true },
+            couponCode: { type: 'string', nullable: true },
+            createInvoice: { type: 'boolean', default: true },
+          },
+        } } } },
+        responses: {
+          201: { description: 'Term sold' },
+          400: { description: 'Validation failed, or the platform tenant was targeted (PLATFORM_TENANT)' },
+          403: { description: 'Not a platform owner' }, 404: { description: 'Company or package not found' },
+          409: { description: 'A live term already exists (SUBSCRIPTION_EXISTS), the package is retired, or the seats are below headcount (SEATS_BELOW_HEADCOUNT)' },
+        },
+      },
+    },
+    '/platform/subscriptions/{id}/renew': {
+      post: {
+        tags: ['Billing'],
+        operationId: 'renewSubscription',
+        summary: 'Renew a term',
+        description: 'PLATFORM_OWNER only. Creates a NEW subscription linked by renewedFromId and leaves the old row completely untouched — the chain IS the history. renewedFromId is unique, so a term renews exactly once (409 ALREADY_RENEWED otherwise). The new term starts the day the old one ends, so there is no gap; a renewal booked ahead stays PENDING and does not cut the current term short. Renewing onto a different package takes that package\'s seats. Audited.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { content: { 'application/json': { schema: { type: 'object', properties: {
+          packageId: { type: 'string', nullable: true }, seatCount: { type: 'integer', nullable: true },
+          unitPrice: { type: 'number', nullable: true }, couponCode: { type: 'string', nullable: true },
+          startsAt: { type: 'string', format: 'date-time', nullable: true }, createInvoice: { type: 'boolean', default: true },
+        } } } } },
+        responses: {
+          201: { description: 'Renewed' }, 400: { description: 'Validation failed' },
+          403: { description: 'Not a platform owner' }, 404: { description: 'Not found' },
+          409: { description: 'Already renewed, cancelled, or the seats are below headcount' },
+        },
+      },
+    },
+    '/platform/subscriptions/{id}/cancel': {
+      post: {
+        tags: ['Billing'],
+        operationId: 'cancelSubscription',
+        summary: 'Cancel a term',
+        description: 'PLATFORM_OWNER only. By default the term runs to its end date — a customer who has paid for the year keeps the year — and `immediate: true` ends it today, which the operator must choose explicitly. Cancelling does NOT suspend the company or remove its users: access is a lifecycle decision and lives on the company page. A reason is always required. Audited.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object', required: ['reason'],
+          properties: { reason: { type: 'string', minLength: 5, maxLength: 500 }, immediate: { type: 'boolean', default: false } },
+        } } } },
+        responses: {
+          200: { description: 'Cancelled' }, 400: { description: 'Validation failed' },
+          403: { description: 'Not a platform owner' }, 404: { description: 'Not found' }, 409: { description: 'Already cancelled' },
+        },
+      },
+    },
+
+    '/platform/invoices': {
+      get: {
+        tags: ['Billing'],
+        operationId: 'listInvoices',
+        summary: 'Invoices',
+        description: 'PLATFORM_OWNER only. Totals cover the whole filtered set rather than the current page, and exclude VOID invoices — a page total that disagrees with the filter is worse than no total.',
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: 'state', in: 'query', schema: { type: 'string', enum: ['DRAFT', 'ISSUED', 'PARTIALLY_PAID', 'PAID', 'VOID'] } },
+          { name: 'tenantId', in: 'query', schema: { type: 'string' } },
+          { name: 'search', in: 'query', schema: { type: 'string', maxLength: 200 } },
+          { name: 'from', in: 'query', schema: { type: 'string', format: 'date-time' } },
+          { name: 'to', in: 'query', schema: { type: 'string', format: 'date-time' } },
+          { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1, default: 1 } },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 50 } },
+        ],
+        responses: { 200: { description: 'Invoices with summary totals' }, 400: { description: 'Validation failed' }, 403: { description: 'Not a platform owner' } },
+      },
+      post: {
+        tags: ['Billing'],
+        operationId: 'createInvoice',
+        summary: 'Raise a draft invoice',
+        description: 'PLATFORM_OWNER only. Priced ONCE here through computePricing() and stored; nothing downstream recomputes, so repricing a package tomorrow cannot move an invoice raised today. Bill-to name, GSTIN and email are snapshot for the same reason. No invoice number is allocated until the invoice is issued, so an abandoned draft leaves no gap in the GST series. Audited.',
+        security: [{ bearerAuth: [] }],
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object', required: ['tenantId', 'quantity', 'unitPrice'],
+          properties: {
+            tenantId: { type: 'string' }, subscriptionId: { type: 'string', nullable: true },
+            quantity: { type: 'integer', minimum: 1 }, unitPrice: { type: 'number', exclusiveMinimum: 0 },
+            couponCode: { type: 'string', nullable: true }, dueAt: { type: 'string', format: 'date-time', nullable: true },
+            notes: { type: 'string', nullable: true },
+          },
+        } } } },
+        responses: {
+          201: { description: 'Draft created' },
+          400: { description: 'Validation failed, an invalid coupon (COUPON_INVALID), the platform tenant (PLATFORM_TENANT), or no billing contact (NO_BILLING_CONTACT)' },
+          403: { description: 'Not a platform owner' }, 404: { description: 'Company not found' },
+        },
+      },
+    },
+    '/platform/invoices/{id}': {
+      get: {
+        tags: ['Billing'],
+        operationId: 'getInvoice',
+        summary: 'One invoice, with its payments and refunds',
+        description: 'PLATFORM_OWNER only. Each payment and refund names who recorded it, resolved by id rather than by relation so the record outlives the operator\'s account. Rows written by the migration report "Migrated from signup" rather than being attributed to a person.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Invoice' }, 403: { description: 'Not a platform owner' }, 404: { description: 'Not found' } },
+      },
+    },
+    '/platform/invoices/{id}/issue': {
+      post: {
+        tags: ['Billing'],
+        operationId: 'issueInvoice',
+        summary: 'Issue a draft and allocate its number',
+        description: 'PLATFORM_OWNER only. Allocates UEIBI/YYYY-YY/NNNN, sequential per Indian financial year and global rather than per tenant, because a GST series must be unbroken per issuer. The read-then-write that picks the next number can lose a race, so the unique index guarantees it and the call retries on P2002. Issuing is also when a coupon is recorded as redeemed — a draft that is never issued must not consume a limited coupon. Audited.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'Issued' }, 403: { description: 'Not a platform owner' },
+          404: { description: 'Not found' }, 409: { description: 'Already issued, or void' },
+        },
+      },
+    },
+    '/platform/invoices/{id}/void': {
+      post: {
+        tags: ['Billing'],
+        operationId: 'voidInvoice',
+        summary: 'Void an invoice raised in error',
+        description: 'PLATFORM_OWNER only. Refused with 409 (INVOICE_HAS_PAYMENTS) once any payment exists: money that arrived is refunded, not voided, and voiding a paid invoice would quietly remove a payment from the revenue figures. The number is NOT released — a voided invoice keeps it and is marked VOID, which is what an auditor expects to find in the series. Audited.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['reason'], properties: { reason: { type: 'string', minLength: 5, maxLength: 500 } } } } } },
+        responses: {
+          200: { description: 'Voided' }, 400: { description: 'Validation failed' },
+          403: { description: 'Not a platform owner' }, 404: { description: 'Not found' },
+          409: { description: 'Already void, or payments exist' },
+        },
+      },
+    },
+    '/platform/invoices/{id}/send': {
+      post: {
+        tags: ['Billing'],
+        operationId: 'sendInvoice',
+        summary: 'Email an invoice to its billing contact',
+        description: 'PLATFORM_OWNER only. Reuses sendMail + renderEmailWrapper, so delivery lands in NotificationLog like every other email and a bounce is visible. Refused for a draft or a voided invoice. Audited.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'Send attempted; deliveryStatus says what happened' },
+          403: { description: 'Not a platform owner' }, 404: { description: 'Not found' },
+          409: { description: 'Still a draft, or void' },
+        },
+      },
+    },
+    '/platform/invoices/{id}/payments': {
+      post: {
+        tags: ['Billing'],
+        operationId: 'recordPayment',
+        summary: 'Record money that has arrived',
+        description: 'PLATFORM_OWNER only. Nothing is CHARGED: the platform is a book of record, not a till. An operator writes down a bank transfer, cheque or UPI payment that has already landed. amountPaid is re-summed from the invoice\'s payment rows in the same transaction, so the summary cannot drift from the detail, and the invoice state follows the money rather than being set by hand. Overpayment beyond the outstanding balance is refused (OVERPAYMENT). A reference is required for bank, UPI, cheque and online payments — without one a payment cannot be reconciled against a statement. Audited.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object', required: ['amount', 'method'],
+          properties: {
+            amount: { type: 'number', exclusiveMinimum: 0 },
+            method: { type: 'string', enum: ['BANK_TRANSFER', 'UPI', 'CHEQUE', 'CASH', 'ONLINE', 'ADJUSTMENT'] },
+            reference: { type: 'string', nullable: true },
+            receivedAt: { type: 'string', format: 'date-time' },
+            notes: { type: 'string', nullable: true },
+          },
+        } } } },
+        responses: {
+          201: { description: 'Recorded' }, 400: { description: 'Validation failed, or a reference was required and missing' },
+          403: { description: 'Not a platform owner' }, 404: { description: 'Not found' },
+          409: { description: 'Still a draft, void, or more than is outstanding (OVERPAYMENT)' },
+        },
+      },
+    },
+    '/platform/invoices/{id}/refunds': {
+      post: {
+        tags: ['Billing'],
+        operationId: 'recordRefund',
+        summary: 'Record money returned',
+        description: 'PLATFORM_OWNER only. RECORDED, not executed — there is no gateway to call, so this is the note that a refund was sent and the money must be transferred separately. Capped at what has actually been received net of earlier refunds (OVERREFUND), because refunding more than was paid is not a refund. A reason is always required. The invoice stays PAID: a refund is its own event, reflected in the net figure rather than by rewriting the payment. Audited.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object', required: ['amount', 'method', 'reason'],
+          properties: {
+            amount: { type: 'number', exclusiveMinimum: 0 },
+            method: { type: 'string', enum: ['BANK_TRANSFER', 'UPI', 'CHEQUE', 'CASH', 'ONLINE', 'ADJUSTMENT'] },
+            reason: { type: 'string', minLength: 5, maxLength: 2000 },
+            reference: { type: 'string', nullable: true },
+            paymentId: { type: 'string', nullable: true },
+            refundedAt: { type: 'string', format: 'date-time' },
+          },
+        } } } },
+        responses: {
+          201: { description: 'Recorded' }, 400: { description: 'Validation failed' },
+          403: { description: 'Not a platform owner' }, 404: { description: 'Not found' },
+          409: { description: 'Nothing received, or more than can be refunded (OVERREFUND)' },
+        },
+      },
+    },
+
+    '/platform/revenue': {
+      get: {
+        tags: ['Billing'],
+        operationId: 'getRevenue',
+        summary: 'Invoiced, collected and outstanding',
+        description: 'PLATFORM_OWNER only. Every figure comes from Invoice, Payment and Refund rows; VOID invoices are excluded throughout. Deliberately NOT reported: MRR — nothing recurs automatically, so a monthly recurring figure would be invented — and churn or LTV, which need a longer history than exists. `contracts.annualisedContractValue` is what live FIXED-TERM contracts are worth over a year, computed from what each was actually invoiced rather than from a package price that may since have moved; perpetual licences are excluded. `unverified` separates out the LEGACY payments carried forward from the pre-billing flow, which are counted but unproven.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'months', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 36, default: 12 }, description: 'Length of the monthly series, inclusive of the current month.' }],
+        responses: { 200: { description: 'Revenue' }, 400: { description: 'Validation failed' }, 403: { description: 'Not a platform owner' } },
+      },
+    },
+    '/platform/coupons/performance': {
+      get: {
+        tags: ['Billing'],
+        operationId: 'getCouponPerformance',
+        summary: 'What each coupon actually cost and earned',
+        description: 'PLATFORM_OWNER only. Coupon.timesUsed is a counter and cannot answer "how much discount did this give away" or "which companies used it"; CouponRedemption rows can. `counterDrift` is surfaced rather than hidden — timesUsed predates redemption rows, so the two legitimately disagree on coupons used before this existed.',
+        security: [{ bearerAuth: [] }],
+        responses: { 200: { description: 'Per-coupon performance' }, 403: { description: 'Not a platform owner' } },
+      },
+    },
+    '/platform/alerts': {
+      get: {
+        tags: ['Platform'],
+        operationId: 'getPlatformAlerts',
+        summary: 'What needs the operator\'s attention right now',
+        description: 'PLATFORM_OWNER only. Computed on every request and never stored. Nothing in this product expires or escalates on its own — there is no scheduler — so an alert is a prompt to act, not a record that something happened, and there is nothing to dismiss: fix the underlying thing and it disappears. Covers companies over or at their seat limit, a seat limit of 0 (which blocks all creation rather than meaning unlimited), plans past or nearing their end date, companies with no active administrator, registrations stalled for 3 days or more, and emails that failed to send in the last 30 days. Every alert carries a tenantId or registrationId so the UI can link to where it is fixed.',
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: { description: 'Alerts, most severe first', content: { 'application/json': { schema: { type: 'object', properties: {
+            alerts: { type: 'array', items: { type: 'object', properties: {
+              severity: { type: 'string', enum: ['critical', 'warning', 'info'] },
+              kind: { type: 'string', enum: ['OVER_LICENCE', 'LICENCE_FULL', 'LICENCE_ZERO', 'PLAN_OVERDUE', 'PLAN_ENDING', 'NO_ADMIN', 'ONBOARDING_STALLED', 'EMAIL_FAILED'] },
+              tenantId: { type: 'string', nullable: true },
+              registrationId: { type: 'string', nullable: true },
+              title: { type: 'string' },
+              detail: { type: 'string' },
+            } } },
+            summary: { type: 'object', properties: { total: { type: 'integer' }, critical: { type: 'integer' }, warning: { type: 'integer' }, info: { type: 'integer' } } },
+            thresholds: { type: 'object', properties: { expiryWarningDays: { type: 'integer' }, stuckRegistrationDays: { type: 'integer' } } },
+          } } } } },
+          403: { description: 'Not a platform owner' },
+        },
+      },
+    },
+    '/platform/tenants/{id}': {
+      get: {
+        tags: ['Platform'],
+        operationId: 'getPlatformTenant',
+        summary: 'Everything the platform knows about one company',
+        description: 'PLATFORM_OWNER only. Company metadata, lifecycle state, its SUPER_ADMIN/ADMIN/HR contacts, the invoice trail already stored on CompanyRegistration, licence usage, per-module record COUNTS and the company\'s audit rows. Deliberately counts rather than records: no goal, task, message or employee row crosses the platform boundary.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'Company detail', content: { 'application/json': { schema: {
+            type: 'object',
+            properties: {
+              tenant: { type: 'object' },
+              licences: { type: 'object', properties: {
+                limit: { type: 'integer' }, used: { type: 'integer' }, available: { type: 'integer' },
+                blocksAllCreation: { type: 'boolean', description: 'True when limit is 0, which blocks every invitation rather than meaning unlimited.' },
+                overLimit: { type: 'boolean' },
+              } },
+              invoice: { type: 'object', nullable: true, description: 'Null for companies created without a registration record.' },
+              admins: { type: 'array', items: { type: 'object' } },
+              usage: { type: 'object', description: 'Counts only.' },
+              audit: { type: 'array', items: { type: 'object' } },
+            },
+          } } } },
+          400: { description: 'Invalid parameters' },
+          403: { description: 'Not a platform owner' },
+          404: { description: 'Company not found' },
+        },
+      },
+    },
+    '/platform/tenants/{id}/lifecycle': {
+      post: {
+        tags: ['Platform'],
+        operationId: 'setTenantLifecycle',
+        summary: 'Move a company between commercial states',
+        description: 'PLATFORM_OWNER only. Covers ACTIVE, TRIAL, GRACE_PERIOD, EXPIRED and CANCELLED; suspend and restore keep their own endpoints because they carry extra semantics. EXPIRED and CANCELLED deny access exactly as SUSPENDED does, while TRIAL and GRACE_PERIOD still allow it. Leaving SUSPENDED through this endpoint clears the suspension metadata. Nothing is ever hard-deleted.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object', required: ['status'],
+          properties: {
+            status: { type: 'string', enum: ['ACTIVE', 'TRIAL', 'GRACE_PERIOD', 'EXPIRED', 'CANCELLED'] },
+            reason: { type: 'string', maxLength: 500, description: 'Required when cancelling.' },
+            planEndsAt: { type: 'string', format: 'date-time', nullable: true },
+          },
+        } } } },
+        responses: {
+          200: { description: 'Lifecycle changed', content: { 'application/json': { schema: { type: 'object', properties: { tenant: { type: 'object' } } } } } },
+          400: { description: 'Validation failed, the platform tenant was targeted, or a cancellation had no reason' },
+          403: { description: 'Not a platform owner' },
+          404: { description: 'Company not found' },
+          409: { description: 'Already in that state' },
+        },
+      },
+    },
+    '/platform/tenants/{id}/licences': {
+      patch: {
+        tags: ['Platform'],
+        operationId: 'updateTenantLicences',
+        summary: 'Grant or reduce a company\'s seats',
+        description: 'PLATFORM_OWNER only. Sets Tenant.licenseLimit, which license.service.js enforces atomically on every user creation. A limit of 0 is refused: the enforcement reads activeCount >= limit, so 0 would block all creation rather than mean unlimited. Reducing below current headcount is also refused, since it silently blocks the next invitation. The platform tenant is refused entirely (code PLATFORM_TENANT) — its limit of 0 is what stops users being created inside the operator tenant. Audited.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object', required: ['licenseLimit'],
+          properties: {
+            licenseLimit: { type: 'integer', minimum: 0 },
+            reason: { type: 'string', maxLength: 500 },
+          },
+        } } } },
+        responses: {
+          200: { description: 'Updated', content: { 'application/json': { schema: { type: 'object', properties: { tenant: { type: 'object' }, activeUsers: { type: 'integer' } } } } } },
+          400: { description: 'Validation failed, a limit of 0 was requested (code ZERO_LICENCE_LIMIT), or the platform tenant was targeted (code PLATFORM_TENANT)' },
+          403: { description: 'Not a platform owner' },
+          404: { description: 'Company not found' },
+          409: { description: 'The limit is below the current active headcount' },
+        },
+      },
+    },
+    '/platform/users': {
+      get: {
+        tags: ['Platform'],
+        operationId: 'listPlatformUsers',
+        summary: 'Search every user account across every company',
+        description: 'PLATFORM_OWNER only. The one query in the product that crosses tenant boundaries. Returns identity and account state only — name, email, role, status, designation, department, last login, company — and never a goal, task, message or employee record. PLATFORM_OWNER accounts are excluded from the results, since listing them here would invite managing them here.',
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: 'search', in: 'query', schema: { type: 'string', maxLength: 200 }, description: 'Matches name or email, case-insensitive.' },
+          { name: 'tenantId', in: 'query', schema: { type: 'string' } },
+          { name: 'role', in: 'query', schema: { type: 'string', enum: ['SUPER_ADMIN', 'ADMIN', 'CMD', 'HR', 'FINANCE', 'MANAGER', 'EMPLOYEE', 'STUDENT', 'MENTOR'] } },
+          { name: 'status', in: 'query', schema: { type: 'string', enum: ['INVITED', 'ACTIVE', 'EXITED'] } },
+          { name: 'includeDeleted', in: 'query', schema: { type: 'boolean', default: false } },
+          { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1, default: 1 } },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 50 } },
+        ],
+        responses: {
+          200: { description: 'Users', content: { 'application/json': { schema: { type: 'object', properties: {
+            items: { type: 'array', items: { type: 'object' } },
+            pagination: { type: 'object' },
+          } } } } },
+          400: { description: 'Validation failed' },
+          403: { description: 'Not a platform owner' },
+        },
+      },
+    },
+    '/platform/users/{id}': {
+      get: {
+        tags: ['Platform'],
+        operationId: 'getPlatformUser',
+        summary: 'One user account, with capability grants',
+        description: 'PLATFORM_OWNER only. The list payload plus the user\'s UserCapability grants and a count of their direct reports — the latter because deactivating a manager leaves their reports without an approver.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'User detail', content: { 'application/json': { schema: { type: 'object', properties: {
+            user: { type: 'object' },
+            capabilities: { type: 'array', items: { type: 'object' } },
+            directReports: { type: 'integer' },
+          } } } } },
+          400: { description: 'Invalid parameters' },
+          403: { description: 'Not a platform owner' },
+          404: { description: 'User not found' },
+        },
+      },
+    },
+    '/platform/users/{id}/deactivate': {
+      post: {
+        tags: ['Platform'],
+        operationId: 'deactivatePlatformUser',
+        summary: 'Cut off a user account in any company',
+        description: 'PLATFORM_OWNER only. Sets TenantUser.status to EXITED, which requireAuth already refuses, so access stops on the user\'s very next request rather than when their token expires. Their records inside the company are untouched and no other user is affected. A PLATFORM_OWNER target is refused (code PLATFORM_OWNER_PROTECTED) so the console cannot lock out its own operators. Audited with before and after.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { content: { 'application/json': { schema: {
+          type: 'object', properties: { reason: { type: 'string', maxLength: 500, description: 'Recorded on the audit row.' } },
+        } } } },
+        responses: {
+          200: { description: 'Deactivated', content: { 'application/json': { schema: { type: 'object', properties: { user: { type: 'object' } } } } } },
+          400: { description: 'Validation failed' },
+          403: { description: 'Not a platform owner, or a PLATFORM_OWNER was targeted' },
+          404: { description: 'User not found' },
+          409: { description: 'Already deactivated' },
+        },
+      },
+    },
+    '/platform/users/{id}/reactivate': {
+      post: {
+        tags: ['Platform'],
+        operationId: 'reactivatePlatformUser',
+        summary: 'Restore a deactivated user account',
+        description: 'PLATFORM_OWNER only. Returns status to ACTIVE; the user logs in again with their existing password. Refused for a soft-deleted account, which must be handled inside the company. A PLATFORM_OWNER target is refused. Audited.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { content: { 'application/json': { schema: {
+          type: 'object', properties: { reason: { type: 'string', maxLength: 500 } },
+        } } } },
+        responses: {
+          200: { description: 'Reactivated', content: { 'application/json': { schema: { type: 'object', properties: { user: { type: 'object' } } } } } },
+          400: { description: 'Validation failed' },
+          403: { description: 'Not a platform owner, or a PLATFORM_OWNER was targeted' },
+          404: { description: 'User not found' },
+          409: { description: 'Not deactivated, or the account was deleted' },
+        },
+      },
+    },
+    '/platform/users/{id}/force-reset': {
+      post: {
+        tags: ['Platform'],
+        operationId: 'forceResetPlatformUser',
+        summary: 'Email a password reset to a user',
+        description: 'PLATFORM_OWNER only. For the locked-out-admin support call. Issues the same PasswordResetToken the public forgot-password flow does, so there is one reset mechanism rather than an operator back door: the operator never sets or sees the password. Any reset token the user already holds is invalidated first, so only one can be live. The token is issued inside the transaction and remains valid even if the email fails to send. Audited.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { content: { 'application/json': { schema: {
+          type: 'object', properties: { reason: { type: 'string', maxLength: 500 } },
+        } } } },
+        responses: {
+          200: { description: 'Reset link sent', content: { 'application/json': { schema: { type: 'object', properties: {
+            sent: { type: 'boolean' }, email: { type: 'string' }, expiresAt: { type: 'string', format: 'date-time' },
+          } } } } },
+          400: { description: 'Validation failed' },
+          403: { description: 'Not a platform owner, or a PLATFORM_OWNER was targeted' },
+          404: { description: 'User not found' },
+          409: { description: 'The account is deactivated or deleted' },
+        },
+      },
+    },
+    '/platform/registrations': {
+      get: {
+        tags: ['Platform'],
+        operationId: 'listOnboarding',
+        summary: 'The company onboarding queue',
+        description: 'PLATFORM_OWNER only. Every CompanyRegistration with how long it has sat in its current stage, who it is waiting on, how many of its notification emails failed to send, and the current verification verdict. Ordered oldest-waiting first, because this is a work queue rather than a list. ACTIVE registrations are never flagged stuck — they are finished.',
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: 'status', in: 'query', schema: { type: 'string', enum: ['PENDING_FINANCE_REVIEW', 'PENDING_CHEQUE_CONFIRMATION', 'PENDING_HR_ACTIVATION', 'ACTIVE'] } },
+          { name: 'search', in: 'query', schema: { type: 'string', maxLength: 200 }, description: 'Company name, contact name, email, domain or company code.' },
+          { name: 'stuckOnly', in: 'query', schema: { type: 'boolean', default: false }, description: 'Unfinished registrations untouched for 3 days or more. Applied as a query predicate, so the totals match the rows.' },
+          { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1, default: 1 } },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 50 } },
+        ],
+        responses: {
+          200: { description: 'Queue', content: { 'application/json': { schema: { type: 'object', properties: {
+            items: { type: 'array', items: { type: 'object', properties: {
+              stageLabel: { type: 'string' }, waitingOn: { type: 'string', nullable: true },
+              ageInStage: { type: 'integer' }, ageOverall: { type: 'integer' },
+              stuck: { type: 'boolean' }, failedNotifications: { type: 'integer' },
+              verification: { type: 'string', enum: ['PENDING', 'UNDER_REVIEW', 'VERIFIED', 'REJECTED'] },
+            } } },
+            summary: { type: 'object', properties: { total: { type: 'integer' }, byStatus: { type: 'object' }, stuckThresholdDays: { type: 'integer' } } },
+            pagination: { type: 'object' },
+          } } } } },
+          400: { description: 'Validation failed' },
+          403: { description: 'Not a platform owner' },
+        },
+      },
+    },
+    '/platform/registrations/{id}': {
+      get: {
+        tags: ['Platform'],
+        operationId: 'getOnboarding',
+        summary: 'One registration, with its action links and email history',
+        description: 'PLATFORM_OWNER only. The submitted details, the invoice, every action link issued (with whether it was used or has expired) and every notification sent, including failures. Never returns the CMD\'s passwordHash and never returns a token hash — those are credentials, not status.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'Registration detail', content: { 'application/json': { schema: { type: 'object', properties: {
+            registration: { type: 'object' },
+            tokens: { type: 'array', items: { type: 'object', properties: {
+              role: { type: 'string', enum: ['FINANCE', 'HR'] },
+              expired: { type: 'boolean' }, used: { type: 'boolean' },
+            } } },
+            notifications: { type: 'array', items: { type: 'object' } },
+            failedNotifications: { type: 'integer' },
+          } } } } },
+          400: { description: 'Invalid parameters' },
+          403: { description: 'Not a platform owner' },
+          404: { description: 'Registration not found' },
+        },
+      },
+    },
+    '/platform/registrations/{id}/resend': {
+      post: {
+        tags: ['Platform'],
+        operationId: 'resendOnboardingLink',
+        summary: 'Re-issue the current stage\'s action link',
+        description: 'PLATFORM_OWNER only. Mints a FRESH RegistrationActionToken for whichever stage the registration is in and emails it to the person who has to act — Finance or HR, not all four stakeholders, because a chase that copies everyone trains everyone to ignore it. Tokens are stored hashed, so the original link is unrecoverable and resending necessarily means reissuing. CompanyRegistration.status is never changed: this chases a stalled step, it does not advance one. The token is valid whether or not the email sends, and deliveryStatus says which happened.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { content: { 'application/json': { schema: {
+          type: 'object', properties: { reason: { type: 'string', maxLength: 500 } },
+        } } } },
+        responses: {
+          200: { description: 'Link issued', content: { 'application/json': { schema: { type: 'object', properties: {
+            sent: { type: 'boolean' }, recipient: { type: 'string' },
+            role: { type: 'string', enum: ['FINANCE', 'HR'] }, stage: { type: 'string' },
+            expiresAt: { type: 'string', format: 'date-time' },
+            deliveryStatus: { type: 'string', enum: ['SENT', 'FAILED', 'DEV_LOGGED'] },
+            deliveryError: { type: 'string', nullable: true },
+          } } } } },
+          400: { description: 'Validation failed' },
+          403: { description: 'Not a platform owner' },
+          404: { description: 'Registration not found' },
+          409: { description: 'Already ACTIVE, so there is no pending step (code NOTHING_TO_RESEND), or no email is recorded for that role' },
+        },
+      },
+    },
+    '/platform/registrations/{id}/verify': {
+      post: {
+        tags: ['Platform'],
+        operationId: 'verifyRegistration',
+        summary: 'Record a verification decision',
+        description: 'PLATFORM_OWNER only. APPENDS a RegistrationVerification row rather than updating one, so an earlier decision is never silently overwritten and the history is a by-product of how it is stored. The newest row is the current status. A rejection requires a note. This records a judgement and does NOT gate onboarding — to stop a company using the product, suspend the tenant. Audited.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object', required: ['status'],
+          properties: {
+            status: { type: 'string', enum: ['PENDING', 'UNDER_REVIEW', 'VERIFIED', 'REJECTED'] },
+            notes: { type: 'string', maxLength: 2000, description: 'Required when rejecting.' },
+          },
+        } } } },
+        responses: {
+          200: { description: 'Decision recorded', content: { 'application/json': { schema: { type: 'object', properties: { verification: { type: 'object' } } } } } },
+          400: { description: 'Validation failed, or a rejection carried no note' },
+          403: { description: 'Not a platform owner' },
+          404: { description: 'Registration not found' },
+          409: { description: 'Already marked with that status' },
+        },
+      },
+    },
+    '/platform/registrations/{id}/verification': {
+      get: {
+        tags: ['Platform'],
+        operationId: 'getRegistrationVerification',
+        summary: 'Every verification decision for a registration',
+        description: 'PLATFORM_OWNER only. Newest first, with the reviewer resolved by id rather than by relation — reviewerId is not a foreign key, so a decision outlives the account that made it and still renders (as "Deleted account").',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'History', content: { 'application/json': { schema: { type: 'object', properties: {
+            current: { type: 'string', enum: ['PENDING', 'UNDER_REVIEW', 'VERIFIED', 'REJECTED'] },
+            history: { type: 'array', items: { type: 'object' } },
+          } } } } },
+          400: { description: 'Invalid parameters' },
+          403: { description: 'Not a platform owner' },
+          404: { description: 'Registration not found' },
         },
       },
     },

@@ -88,11 +88,37 @@ export async function getRegistration(req, res, next) {
     if (!parsedParams.success) {
       return res.status(400).json({ error: 'Invalid registration ID parameter', details: parsedParams.error.issues });
     }
+    // Explicit select, not `include`. A bare include returns every scalar on the
+    // model, and CompanyRegistration carries the CMD's bcrypt passwordHash —
+    // which was being sent to the browser. A password hash must never leave the
+    // server, whoever is asking.
     const registration = await prisma.companyRegistration.findUnique({
       where: { id: parsedParams.data.id },
-      include: {
-        tenant: true,
-        coupon: true,
+      select: {
+        id: true,
+        companyName: true, companyType: true, domainName: true, tenantCode: true,
+        fullName: true, designation: true, email: true,
+        financeEmail: true, hrEmail: true, acceptedTermsAt: true,
+        gstin: true, licenseQuantity: true, unitPrice: true,
+        discountAmount: true, subtotalAmount: true,
+        gstRate: true, gstAmount: true, totalAmount: true,
+        paymentMethod: true, paymentReference: true,
+        chequeNumber: true, chequeDate: true, transactionId: true,
+        financeApprovedAt: true, activatedAt: true,
+        status: true, createdAt: true, updatedAt: true,
+        couponId: true,
+        tenant: {
+          select: {
+            id: true, companyName: true, tenantCode: true, domainName: true,
+            status: true, licenseLimit: true, createdAt: true,
+          },
+        },
+        coupon: {
+          select: {
+            id: true, code: true, discountType: true, discountValue: true,
+            bdmName: true, active: true, expiresAt: true,
+          },
+        },
       },
     });
 

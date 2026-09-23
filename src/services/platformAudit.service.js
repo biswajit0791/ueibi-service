@@ -16,6 +16,30 @@ import { prisma } from '../lib/prisma.js';
 export const PLATFORM_ACTIONS = {
   TENANT_SUSPENDED: 'TENANT_SUSPENDED',
   TENANT_RESTORED: 'TENANT_RESTORED',
+  COUPON_CREATED: 'COUPON_CREATED',
+  COUPON_UPDATED: 'COUPON_UPDATED',
+  COUPON_DEACTIVATED: 'COUPON_DEACTIVATED',
+  COUPON_DELETED: 'COUPON_DELETED',
+  TENANT_LIFECYCLE_CHANGED: 'TENANT_LIFECYCLE_CHANGED',
+  TENANT_LICENCES_CHANGED: 'TENANT_LICENCES_CHANGED',
+  USER_DEACTIVATED: 'USER_DEACTIVATED',
+  USER_REACTIVATED: 'USER_REACTIVATED',
+  USER_PASSWORD_RESET_SENT: 'USER_PASSWORD_RESET_SENT',
+  REGISTRATION_LINK_RESENT: 'REGISTRATION_LINK_RESENT',
+  REGISTRATION_VERIFIED: 'REGISTRATION_VERIFIED',
+  // Billing. Everything that moves money or a contract is recorded.
+  PACKAGE_CREATED: 'PACKAGE_CREATED',
+  PACKAGE_UPDATED: 'PACKAGE_UPDATED',
+  PACKAGE_DELETED: 'PACKAGE_DELETED',
+  SUBSCRIPTION_STARTED: 'SUBSCRIPTION_STARTED',
+  SUBSCRIPTION_RENEWED: 'SUBSCRIPTION_RENEWED',
+  SUBSCRIPTION_CANCELLED: 'SUBSCRIPTION_CANCELLED',
+  INVOICE_CREATED: 'INVOICE_CREATED',
+  INVOICE_ISSUED: 'INVOICE_ISSUED',
+  INVOICE_VOIDED: 'INVOICE_VOIDED',
+  INVOICE_SENT: 'INVOICE_SENT',
+  PAYMENT_RECORDED: 'PAYMENT_RECORDED',
+  REFUND_RECORDED: 'REFUND_RECORDED',
 };
 
 /**
@@ -108,6 +132,20 @@ export async function listPlatformAudit({ action, tenantId, page = 1, limit = 50
     : [];
   const tenantById = Object.fromEntries(tenants.map((t) => [t.id, t.companyName]));
 
+  // User-targeted actions (deactivations, resets) record only the target's id.
+  // Without this the trail says a company had *someone* deactivated, which is
+  // not something anyone can review. Same by-id lookup, same survival property.
+  const userTargetIds = [...new Set(
+    rows.filter((r) => r.targetType === 'USER').map((r) => r.targetId).filter(Boolean),
+  )];
+  const targetUsers = userTargetIds.length
+    ? await prisma.tenantUser.findMany({
+        where: { id: { in: userTargetIds } },
+        select: { id: true, name: true, email: true },
+      })
+    : [];
+  const targetById = Object.fromEntries(targetUsers.map((u) => [u.id, u]));
+
   return {
     items: rows.map((r) => ({
       ...r,
@@ -115,6 +153,8 @@ export async function listPlatformAudit({ action, tenantId, page = 1, limit = 50
       actor: actorById[r.actorId] || { id: r.actorId, name: 'Deleted account', email: null },
       // Null when the company has since been removed; the UI falls back to the id.
       tenantName: r.tenantId ? tenantById[r.tenantId] || null : null,
+      // Null for TENANT-targeted rows, where the company name already says it.
+      targetName: r.targetType === 'USER' ? (targetById[r.targetId]?.name || null) : null,
     })),
     pagination: { page, limit, total, totalPages: Math.ceil(total / limit) || 1 },
   };
