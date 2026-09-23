@@ -1,6 +1,6 @@
 import "dotenv/config";
 
-const required = ["DATABASE_URL", "JWT_SECRET", "APP_PASSWORD"];
+const required = ["DATABASE_URL", "JWT_SECRET"];
 
 const missing = required.filter((key) => !process.env[key]);
 if (missing.length > 0) {
@@ -33,6 +33,13 @@ export const env = {
   licenseUnitPrice: parseFloat(process.env.LICENSE_UNIT_PRICE || "3999"),
   gstRate: parseFloat(process.env.GST_RATE || "0.18"),
 
+  // Who the invoice is FROM. A GST invoice must carry the issuer's registered
+  // name and GSTIN; these are blank until set, and the invoice page says so
+  // rather than printing a placeholder that looks real.
+  invoiceIssuerName: process.env.INVOICE_ISSUER_NAME || "UEIBI",
+  invoiceIssuerGstin: process.env.INVOICE_ISSUER_GSTIN || "",
+  invoiceIssuerAddress: process.env.INVOICE_ISSUER_ADDRESS || "",
+
   // Razorpay Test Mode (backend-only — NEVER expose keySecret to clients)
   razorpayKeyId: process.env.RAZORPAY_KEY_ID || "",
   razorpayKeySecret: process.env.RAZORPAY_KEY_SECRET || "",
@@ -45,13 +52,6 @@ export const env = {
     10,
   ),
 
-  appPassword: process.env.APP_PASSWORD,
-  adminSessionCookieName:
-    process.env.ADMIN_SESSION_COOKIE_NAME || "admin_session",
-  adminSessionTtlMs: parseInt(
-    process.env.ADMIN_SESSION_TTL_MS || String(24 * 60 * 60 * 1000),
-    10,
-  ),
   jwtSecret: process.env.JWT_SECRET,
 
   // MongoDB & Apache Kafka

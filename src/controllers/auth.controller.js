@@ -8,6 +8,7 @@ import { generateRawToken, hashToken } from '../lib/tokens.js';
 import { sendMail } from '../lib/mailer.js';
 import { renderPasswordResetEmail } from '../lib/emailTemplates.js';
 import { loginSchema, forgotPasswordSchema, resetPasswordSchema } from '../validations/auth.schema.js';
+import { tenantAccessDenial } from '../lib/tenantAccess.js';
 
 export async function login(req, res, next) {
   try {
@@ -150,13 +151,18 @@ export async function login(req, res, next) {
       where: { id: user.tenantId },
       select: { status: true, companyName: true },
     });
-    if (loginTenant && loginTenant.status === 'SUSPENDED') {
-      console.warn(`[AUTH] 403: Tenant "${loginTenant.companyName}" is suspended`);
-      return res.status(403).json({
-        error: 'This company account is suspended. Please contact your administrator.',
-        code: 'TENANT_SUSPENDED',
-      });
+    const tenantDenial = loginTenant && tenantAccessDenial(loginTenant.status);
+    if (tenantDenial) {
+      console.warn(`[AUTH] 403: Tenant "${loginTenant.companyName}" is ${loginTenant.status}`);
+      return res.status(403).json({ error: tenantDenial.message, code: tenantDenial.code });
     }
+
+    // Stamp the login. Fire-and-forget: a failed stamp must never cost someone
+    // their session, and the value is informational for the operator console.
+    prisma.tenantUser.update({
+      where: { id: user.id },
+      data: { lastLoginAt: new Date() },
+    }).catch((err) => console.warn('[AUTH] Notice stamping lastLoginAt:', err.message));
 
     // Auto-activate user if they were in INVITED status
     if (user.status === 'INVITED') {

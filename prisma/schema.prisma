@@ -9,6 +9,13 @@ datasource db {
 
 /// Commercial lifecycle of a customer company. ACTIVE is the default and is
 /// how every tenant behaved before this existed, so adding it changed nothing.
+enum VerificationStatus {
+  PENDING
+  UNDER_REVIEW
+  VERIFIED
+  REJECTED
+}
+
 enum OneOnOneStatus {
   SCHEDULED
   COMPLETED
@@ -18,8 +25,12 @@ enum OneOnOneStatus {
 enum TenantStatus {
   ACTIVE
   TRIAL
+  /// A lapsed TRIAL or subscription that still has access, pending payment.
+  GRACE_PERIOD
   SUSPENDED
   EXPIRED
+  /// Ended deliberately, as distinct from lapsing.
+  CANCELLED
 }
 
 enum UserRole {
@@ -103,6 +114,8 @@ model Tenant {
   capabilityAuditLogs  CapabilityAuditLog[]
   cxoMessages          CxoMessage[]
   cxoMessageReplies    CxoMessageReply[]
+  subscriptions        Subscription[]
+  invoices             Invoice[]
 
   @@index([isPlatform])
   @@index([status])
@@ -150,6 +163,8 @@ model TenantUser {
   name               String
   role               UserRole   @default(EMPLOYEE)
   status             UserStatus @default(INVITED)
+  /// Stamped on each successful login. Null means never recorded.
+  lastLoginAt        DateTime?
   mustChangePassword Boolean    @default(true)
 
   // Employment Details
@@ -318,9 +333,18 @@ enum RegistrationStatus {
   ACTIVE
 }
 
+/// Extended, never reordered or replaced: ONLINE and CHEQUE keep their existing
+/// meaning so no existing row changes. The rest describe how money actually
+/// arrives now that the platform is a book of record rather than a till.
+/// LEGACY marks pre-billing payments whose reference cannot be verified.
 enum PaymentMethod {
   ONLINE
   CHEQUE
+  BANK_TRANSFER
+  UPI
+  CASH
+  ADJUSTMENT
+  LEGACY
 }
 
 enum TokenRole {
@@ -377,6 +401,7 @@ model CompanyRegistration {
 
   tenant           Tenant?
   actionTokens     RegistrationActionToken[]
+  verifications    RegistrationVerification[]
   notificationLogs NotificationLog[]
 
   @@index([status])
@@ -398,6 +423,25 @@ model EmailVerification {
 
   @@index([email])
   @@map("email_verifications")
+}
+
+/// One row per verification decision on a company registration. History is
+/// inherent to the shape: nothing is overwritten, and the newest row is the
+/// current status.
+///
+/// reviewerId is not a relation — a decision must outlive the reviewer's
+/// account, otherwise deleting a user erases the record.
+model RegistrationVerification {
+  id             String              @id @default(cuid())
+  registrationId String
+  registration   CompanyRegistration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+  status         VerificationStatus
+  notes          String?             @db.Text
+  reviewerId     String
+  createdAt      DateTime            @default(now())
+
+  @@index([registrationId, createdAt])
+  @@map("registration_verifications")
 }
 
 model RegistrationActionToken {
@@ -428,8 +472,233 @@ model Coupon {
   updatedAt     DateTime     @updatedAt
 
   registrations CompanyRegistration[]
+  redemptions   CouponRedemption[]
 
   @@map("coupons")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BILLING
+//
+// The product sells TERM LICENCES: a package is price + seats + duration, and a
+// purchase starts a term. Nothing recurs automatically — there is no scheduler
+// and no stored payment mandate — so a renewal is an operator-approved repeat
+// purchase rather than an automatic charge.
+//
+// The platform is the book of record, not the till. Money arrives by bank
+// transfer, cheque or UPI and an operator records it against an invoice.
+//
+// Every money field on Invoice is a SNAPSHOT written once. Nothing is recomputed
+// on read, so changing a package's price tomorrow cannot move an invoice issued
+// today.
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum BillingInterval {
+  ONE_TIME
+  MONTHLY
+  QUARTERLY
+  ANNUAL
+}
+
+enum SubscriptionState {
+  PENDING
+  ACTIVE
+  EXPIRED
+  CANCELLED
+}
+
+enum InvoiceState {
+  DRAFT
+  ISSUED
+  PARTIALLY_PAID
+  PAID
+  VOID
+}
+
+enum RefundState {
+  RECORDED
+  REJECTED
+}
+
+/// A named, sellable thing. `unitPrice` is PER SEAT so lib/pricing.js is reused
+/// unchanged for every quote, invoice and renewal.
+model Package {
+  id          String          @id @default(cuid())
+  name        String
+  description String?         @db.Text
+  seatCount   Int
+  interval    BillingInterval @default(ANNUAL)
+  /// Null together with ONE_TIME means a perpetual licence.
+  termMonths  Int?
+  unitPrice   Decimal         @db.Decimal(10, 2)
+  currency    String          @default("INR")
+  active      Boolean         @default(true)
+  sortOrder   Int             @default(0)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  subscriptions Subscription[]
+
+  @@index([active, sortOrder])
+  @@map("packages")
+}
+
+/// One term. A renewal creates a NEW row pointing back at the old one, so the
+/// history is a by-product of how it is stored rather than an audit afterthought.
+model Subscription {
+  id             String            @id @default(cuid())
+  tenantId       String
+  tenant         Tenant            @relation(fields: [tenantId], references: [id])
+  /// Nullable because a package may be retired while its sold terms live on.
+  packageId      String?
+  package        Package?          @relation(fields: [packageId], references: [id])
+  /// Snapshots: what was sold, surviving a later rename or reprice.
+  packageName    String
+  seatCount      Int
+  state          SubscriptionState @default(PENDING)
+  startsAt       DateTime
+  /// Null means perpetual.
+  endsAt         DateTime?
+  renewedFromId  String?           @unique
+  renewedFrom    Subscription?     @relation("Renewal", fields: [renewedFromId], references: [id])
+  renewedTo      Subscription?     @relation("Renewal")
+  /// The original signup, for terms that came from the registration flow.
+  registrationId String?
+  cancelledAt    DateTime?
+  cancelReason   String?           @db.Text
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  invoices Invoice[]
+
+  @@index([tenantId, startsAt])
+  @@index([state])
+  @@index([endsAt])
+  @@map("subscriptions")
+}
+
+model Invoice {
+  id             String        @id @default(cuid())
+  /// UEIBI/2026-27/0001 — sequential per Indian financial year, globally rather
+  /// than per tenant, because a GST invoice series must be unbroken per issuer.
+  /// @unique is what actually guarantees it under concurrency.
+  ///
+  /// Null until the invoice is ISSUED. A draft that is abandoned must not burn a
+  /// number, because the gap it leaves in the series is exactly what an auditor
+  /// asks about. Postgres allows many NULLs under a unique index, so drafts
+  /// coexist freely and the number is allocated at the moment of issue.
+  invoiceNumber  String?       @unique
+  tenantId       String
+  tenant         Tenant        @relation(fields: [tenantId], references: [id])
+  subscriptionId String?
+  subscription   Subscription? @relation(fields: [subscriptionId], references: [id])
+  /// Set on invoices backfilled from the pre-billing signup flow.
+  registrationId String?
+  state          InvoiceState  @default(DRAFT)
+
+  /// Bill-to details are snapshots: a company renaming itself must not rewrite
+  /// an invoice already issued to the old name.
+  billToName  String
+  billToGstin String?
+  billToEmail String
+
+  issuedAt DateTime?
+  dueAt    DateTime?
+
+  currency       String  @default("INR")
+  quantity       Int
+  unitPrice      Decimal @db.Decimal(10, 2)
+  subtotalAmount Decimal @db.Decimal(10, 2)
+  couponId       String?
+  couponCode     String?
+  discountAmount Decimal @default(0) @db.Decimal(10, 2)
+  gstRate        Decimal @db.Decimal(5, 4)
+  gstAmount      Decimal @db.Decimal(10, 2)
+  totalAmount    Decimal @db.Decimal(10, 2)
+  /// Derived from the Payment/Refund rows and kept in step inside the same
+  /// transaction that writes them.
+  amountPaid     Decimal @default(0) @db.Decimal(10, 2)
+  amountRefunded Decimal @default(0) @db.Decimal(10, 2)
+
+  notes      String?   @db.Text
+  voidedAt   DateTime?
+  voidReason String?   @db.Text
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  payments    Payment[]
+  refunds     Refund[]
+  redemptions CouponRedemption[]
+
+  @@index([tenantId, issuedAt])
+  @@index([state])
+  @@map("invoices")
+}
+
+/// Money actually received, however it arrived.
+model Payment {
+  id        String        @id @default(cuid())
+  invoiceId String
+  invoice   Invoice       @relation(fields: [invoiceId], references: [id])
+  tenantId  String
+  amount    Decimal       @db.Decimal(10, 2)
+  method    PaymentMethod
+  /// UTR, cheque number or gateway transaction id.
+  reference String?
+  receivedAt DateTime
+  /// Not a relation, for the same reason PlatformAuditLog.actorId is not one:
+  /// the record must outlive the operator's account.
+  recordedById String
+  notes        String?  @db.Text
+  createdAt    DateTime @default(now())
+
+  refunds Refund[]
+
+  @@index([invoiceId])
+  @@index([tenantId, receivedAt])
+  @@index([method])
+  @@map("payments")
+}
+
+/// Recorded, not executed — there is no gateway to call. The money is sent
+/// separately and this is the note that it was.
+model Refund {
+  id           String        @id @default(cuid())
+  invoiceId    String
+  invoice      Invoice       @relation(fields: [invoiceId], references: [id])
+  paymentId    String?
+  payment      Payment?      @relation(fields: [paymentId], references: [id])
+  tenantId     String
+  amount       Decimal       @db.Decimal(10, 2)
+  /// Always required. An unexplained refund is useless six months later.
+  reason       String        @db.Text
+  method       PaymentMethod
+  reference    String?
+  state        RefundState   @default(RECORDED)
+  refundedAt   DateTime
+  recordedById String
+  createdAt    DateTime      @default(now())
+
+  @@index([invoiceId])
+  @@index([tenantId, refundedAt])
+  @@map("refunds")
+}
+
+/// Coupon.timesUsed is a counter that cannot be reported on. This makes each
+/// redemption a row, so "which coupon earned what" becomes answerable.
+model CouponRedemption {
+  id             String   @id @default(cuid())
+  couponId       String
+  coupon         Coupon   @relation(fields: [couponId], references: [id])
+  invoiceId      String?
+  invoice        Invoice? @relation(fields: [invoiceId], references: [id])
+  tenantId       String?
+  registrationId String?
+  discountAmount Decimal  @db.Decimal(10, 2)
+  redeemedAt     DateTime @default(now())
+
+  @@index([couponId, redeemedAt])
+  @@map("coupon_redemptions")
 }
 
 model NotificationLog {

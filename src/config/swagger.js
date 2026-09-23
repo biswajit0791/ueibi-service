@@ -26,7 +26,6 @@ const options = {
       { name: 'Registration', description: 'Level 1 — Company registration (OTP verification + signup)' },
       { name: 'Finance', description: 'Level 2 — Finance review, pricing & payment approval' },
       { name: 'HR', description: 'Level 3 — HR activation of company accounts' },
-      { name: 'Admin Session', description: 'Admin authentication (password-based cookie session)' },
       { name: 'Admin Coupons', description: 'CRUD operations for discount coupons (requires admin session)' },
       { name: 'Auth', description: 'User authentication & sessions (JWT-based)' },
       { name: 'Employees', description: 'User & Employee directory management' },
@@ -1828,12 +1827,6 @@ const options = {
         },
       },
       securitySchemes: {
-        adminCookie: {
-          type: 'apiKey',
-          in: 'cookie',
-          name: 'admin_session',
-          description: 'Admin session cookie set by POST /api/admin/session',
-        },
         userCookie: {
           type: 'apiKey',
           in: 'cookie',
@@ -2386,70 +2379,13 @@ const options = {
         },
       },
 
-      // ───── Admin Session ─────
-      '/admin/session': {
-        post: {
-          tags: ['Admin Session'],
-          summary: 'Admin login',
-          description: 'Authenticates with app password and sets an HTTP-only session cookie. Rate-limited to 10 attempts per 15 minutes.',
-          operationId: 'adminLogin',
-          requestBody: {
-            required: true,
-            content: { 'application/json': { schema: { $ref: '#/components/schemas/AdminLoginRequest' } } },
-          },
-          responses: {
-            200: {
-              description: 'Login successful (session cookie set)',
-              content: { 'application/json': { schema: { type: 'object', properties: { authenticated: { type: 'boolean', example: true } } } } },
-              headers: { 'Set-Cookie': { schema: { type: 'string' }, description: 'admin_session cookie' } },
-            },
-            401: { description: 'Incorrect password', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
-            429: { description: 'Rate limit exceeded', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
-          },
-        },
-      },
-      '/admin/session/verify': {
-        get: {
-          tags: ['Admin Session'],
-          summary: 'Verify admin session',
-          description: 'Checks if the current admin session cookie is still valid.',
-          operationId: 'adminVerifySession',
-          security: [{ adminCookie: [] }],
-          responses: {
-            200: {
-              description: 'Session is valid',
-              content: { 'application/json': { schema: { type: 'object', properties: { authenticated: { type: 'boolean', example: true } } } } },
-            },
-            401: {
-              description: 'Not authenticated or session expired',
-              content: { 'application/json': { schema: { type: 'object', properties: { authenticated: { type: 'boolean', example: false } } } } },
-            },
-          },
-        },
-      },
-      '/admin/session/logout': {
-        post: {
-          tags: ['Admin Session'],
-          summary: 'Admin logout',
-          description: 'Clears the admin session cookie.',
-          operationId: 'adminLogout',
-          responses: {
-            200: {
-              description: 'Logged out',
-              content: { 'application/json': { schema: { type: 'object', properties: { ok: { type: 'boolean', example: true } } } } },
-            },
-          },
-        },
-      },
-
-      // ───── Admin Coupons ─────
       '/admin/coupons': {
         get: {
           tags: ['Admin Coupons'],
           summary: 'List all coupons',
           description: 'Returns coupons ordered by creation date (newest first). Supports filtering by active status and search by code.',
           operationId: 'listCoupons',
-          security: [{ adminCookie: [] }],
+          security: [{ bearerAuth: [] }],
           parameters: [
             { name: 'active', in: 'query', schema: { type: 'string', enum: ['true', 'false'] }, description: 'Filter by active status' },
             { name: 'search', in: 'query', schema: { type: 'string' }, description: 'Search by coupon code (case-insensitive contains)' },
@@ -2466,7 +2402,7 @@ const options = {
           tags: ['Admin Coupons'],
           summary: 'Create a coupon',
           operationId: 'createCoupon',
-          security: [{ adminCookie: [] }],
+          security: [{ bearerAuth: [] }],
           requestBody: {
             required: true,
             content: { 'application/json': { schema: { $ref: '#/components/schemas/CouponCreateRequest' } } },
@@ -2484,7 +2420,7 @@ const options = {
           tags: ['Admin Coupons'],
           summary: 'Get a coupon by ID',
           operationId: 'getCoupon',
-          security: [{ adminCookie: [] }],
+          security: [{ bearerAuth: [] }],
           parameters: [
             { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
           ],
@@ -2498,7 +2434,7 @@ const options = {
           tags: ['Admin Coupons'],
           summary: 'Update a coupon',
           operationId: 'updateCoupon',
-          security: [{ adminCookie: [] }],
+          security: [{ bearerAuth: [] }],
           parameters: [
             { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
           ],
@@ -2518,7 +2454,7 @@ const options = {
           summary: 'Soft-delete a coupon (deactivate)',
           description: 'Sets the coupon\'s active status to false. Does not permanently delete.',
           operationId: 'deleteCoupon',
-          security: [{ adminCookie: [] }],
+          security: [{ bearerAuth: [] }],
           parameters: [
             { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
           ],
@@ -2526,6 +2462,25 @@ const options = {
             200: { description: 'Coupon deactivated', content: { 'application/json': { schema: { $ref: '#/components/schemas/Coupon' } } } },
             401: { description: 'Not authenticated', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
             404: { description: 'Coupon not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+          },
+        },
+      },
+      '/admin/coupons/{id}/permanent': {
+        delete: {
+          tags: ['Admin Coupons'],
+          summary: 'Permanently delete a coupon',
+          description: 'PLATFORM_OWNER only. Removes the row outright, for a coupon created by mistake. Refused with 409 (code COUPON_IN_USE) the moment a coupon has been redeemed or attached to a registration: CompanyRegistration.couponId is an optional relation, so deleting the row would silently null that link and destroy the record of which discount those invoices were given. Once used, the correct action is the soft delete above. Audited as COUPON_DELETED, with the coupon\'s details captured in beforeValue since the row will not exist afterwards.',
+          operationId: 'deleteCouponPermanently',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          responses: {
+            200: { description: 'Coupon deleted', content: { 'application/json': { schema: { type: 'object', properties: { deleted: { type: 'boolean' }, code: { type: 'string' } } } } } },
+            401: { description: 'Not authenticated', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+            403: { description: 'Not a platform owner', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+            404: { description: 'Coupon not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+            409: { description: 'The coupon has been used — deactivate it instead', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
           },
         },
       },

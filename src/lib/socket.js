@@ -1,7 +1,7 @@
 import { Server } from 'socket.io';
 import { env } from '../config/env.js';
 import { verifyToken } from './jwt.js';
-import { parseCookies } from './adminAuth.js';
+import { parseCookies } from './cookies.js';
 import { registerChatHandlers, handleChatDisconnect } from '../services/chatSocket.service.js';
 
 let io;
