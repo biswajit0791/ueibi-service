@@ -7,7 +7,7 @@ const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
  */
 export const createDepartmentSchema = z.object({
   name: z
-    .string({ required_error: 'Department name is required' })
+    .string({ error: 'Department name is required' })
     .min(1, 'Department name cannot be empty')
     .max(80, 'Department name must be 80 characters or fewer')
     .trim(),

@@ -1,5 +1,12 @@
 import bcrypt from 'bcryptjs';
 import { prisma } from '../lib/prisma.js';
+
+/** The caller's address, honouring the proxy header app.js already trusts. */
+function ipOfRequest(req) {
+  const fwd = req.headers?.['x-forwarded-for'];
+  if (typeof fwd === 'string' && fwd.trim()) return fwd.split(',')[0].trim();
+  return req.ip || req.socket?.remoteAddress || null;
+}
 import { env } from '../config/env.js';
 import { domainMatchesEmail, normalizeDomain } from '../lib/domain.js';
 import { generateOtp, hashOtp, verifyOtpHash } from '../lib/otp.js';
@@ -158,6 +165,30 @@ export async function createRegistration(req, res, next) {
           acceptedTermsAt: new Date(),
         },
       });
+
+      // Record WHICH version of each document was on screen when they agreed.
+      // acceptedTermsAt alone only says they ticked a box at some point; if the
+      // terms are later amended it cannot show what they actually accepted.
+      const liveVersions = await tx.legalDocumentVersion.findMany({
+        where: { publishedAt: { not: null } },
+        orderBy: { version: 'desc' },
+        select: { id: true, documentSlug: true, version: true },
+      });
+      // findMany came back newest-first, so the first sighting of each document
+      // is its live version.
+      const seen = new Set();
+      for (const v of liveVersions) {
+        if (seen.has(v.documentSlug)) continue;
+        seen.add(v.documentSlug);
+        await tx.legalAcceptance.create({
+          data: {
+            versionId: v.id,
+            registrationId: created.id,
+            ipAddress: ipOfRequest(req),
+            userAgent: String(req.headers?.['user-agent'] || '').slice(0, 1000) || null,
+          },
+        });
+      }
 
       await tx.registrationActionToken.create({
         data: {

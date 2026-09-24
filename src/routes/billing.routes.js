@@ -24,6 +24,20 @@ import {
   cancelSubscription,
 } from '../controllers/subscription.controller.js';
 import { getRevenue, getCouponPerformance } from '../controllers/revenue.controller.js';
+import {
+  listTemplates,
+  getTemplate,
+  getTemplateTokens,
+  createTemplate,
+  updateTemplate,
+  deleteTemplate,
+  createTemplateVersion,
+  updateTemplateVersion,
+  publishTemplateVersion,
+  deleteTemplateVersion,
+  previewTemplate,
+} from '../controllers/invoiceTemplate.controller.js';
+import { getSettings, updateSettings } from '../controllers/invoiceSettings.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requirePlatformOwner } from '../middleware/rbac.js';
 
@@ -77,5 +91,31 @@ router.post('/platform/subscriptions/:id/cancel', requireAuth, requirePlatformOw
 // by itself, so a monthly recurring figure would be invented.
 router.get('/platform/revenue', requireAuth, requirePlatformOwner, getRevenue);
 router.get('/platform/coupons/performance', requireAuth, requirePlatformOwner, getCouponPerformance);
+
+// ── Invoice templates ───────────────────────────────────────────────────────
+// The printed invoice, authored rather than hardcoded. A published version is
+// immutable so a reprint reproduces the customer's copy, and publishing is
+// refused when a field a GST invoice must legally carry has been removed.
+//
+// `/tokens` and `/preview` are declared before `/:slug` so they are not
+// swallowed as a slug.
+router.get('/platform/invoice-templates/tokens', requireAuth, requirePlatformOwner, getTemplateTokens);
+router.post('/platform/invoice-templates/preview', requireAuth, requirePlatformOwner, previewTemplate);
+router.get('/platform/invoice-templates', requireAuth, requirePlatformOwner, listTemplates);
+router.post('/platform/invoice-templates', requireAuth, requirePlatformOwner, createTemplate);
+router.get('/platform/invoice-templates/:slug', requireAuth, requirePlatformOwner, getTemplate);
+router.patch('/platform/invoice-templates/:slug', requireAuth, requirePlatformOwner, updateTemplate);
+router.delete('/platform/invoice-templates/:slug', requireAuth, requirePlatformOwner, deleteTemplate);
+router.post('/platform/invoice-templates/:slug/versions', requireAuth, requirePlatformOwner, createTemplateVersion);
+router.patch('/platform/invoice-templates/:slug/versions/:versionId', requireAuth, requirePlatformOwner, updateTemplateVersion);
+router.delete('/platform/invoice-templates/:slug/versions/:versionId', requireAuth, requirePlatformOwner, deleteTemplateVersion);
+router.post('/platform/invoice-templates/:slug/versions/:versionId/publish', requireAuth, requirePlatformOwner, publishTemplateVersion);
+
+// ── Invoice settings ────────────────────────────────────────────────────────
+// Numbering, currency, tax defaults and issuer identity. The response always
+// reports what the next invoice number will ACTUALLY be, computed the same way
+// allocation computes it, so the screen cannot disagree with reality.
+router.get('/platform/invoice-settings', requireAuth, requirePlatformOwner, getSettings);
+router.put('/platform/invoice-settings', requireAuth, requirePlatformOwner, updateSettings);
 
 export default router;

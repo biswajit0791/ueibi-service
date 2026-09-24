@@ -15,15 +15,29 @@ import {
 } from '../validations/finance.schema.js';
 import { tokenParamSchema } from '../validations/publicToken.schema.js';
 
+/**
+ * Whether online payment can actually complete.
+ *
+ * The keys are optional by design — the product is sold offline as often as not
+ * — so this is a supported configuration, not an error. It is exported so the
+ * signup page can hide the online option rather than offering a button that
+ * cannot work.
+ */
+export function onlinePaymentConfigured() {
+  return Boolean(env.razorpayKeyId && env.razorpayKeySecret);
+}
+
 // Lazily initialised Razorpay instance — created on first use so the server
 // still boots cleanly when keys are missing (non-payment workflows unaffected).
 let _razorpay = null;
 function getRazorpay() {
   if (_razorpay) return _razorpay;
-  if (!env.razorpayKeyId || !env.razorpayKeySecret) {
+  if (!onlinePaymentConfigured()) {
     throw Object.assign(
-      new Error('Razorpay credentials are not configured. Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in .env'),
-      { statusCode: 500 },
+      new Error('Online payment is not available. Pay by cheque or bank transfer instead, and Finance will confirm it.'),
+      // 503, not 500: nothing is broken, the gateway is simply not switched on.
+      // The client uses ONLINE_PAYMENT_UNAVAILABLE to offer the cheque path.
+      { statusCode: 503, code: 'ONLINE_PAYMENT_UNAVAILABLE' },
     );
   }
   _razorpay = new Razorpay({ key_id: env.razorpayKeyId, key_secret: env.razorpayKeySecret });
@@ -77,6 +91,9 @@ export async function getFinanceSummary(req, res, next) {
       email: registration.email,
       unitPrice: env.licenseUnitPrice,
       gstRate: env.gstRate,
+      // So the page can offer only what will actually work. Without this it
+      // defaulted to online payment and produced a 500 on click.
+      onlinePaymentAvailable: onlinePaymentConfigured(),
     });
   } catch (err) {
     next(err);

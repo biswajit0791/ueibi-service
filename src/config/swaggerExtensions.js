@@ -3240,6 +3240,459 @@ export const swaggerExtensions = {
         responses: { 200: { description: 'Per-coupon performance' }, 403: { description: 'Not a platform owner' } },
       },
     },
+    '/platform/invoice-settings': {
+      get: {
+        tags: ['Billing'],
+        operationId: 'getInvoiceSettings',
+        summary: 'Invoicing configuration',
+        description: "PLATFORM_OWNER only. Numbering, currency, tax defaults, issuer identity and the uploaded seal/signature. These used to live in .env, so changing a tax rate or a registered address needed a deploy. Values are read with the env vars as fallback, and `settings.isDefault` is true when nothing has been saved yet. The `numbering` block reports what the next invoice number will ACTUALLY be, computed by the same code that allocates it, so the screen cannot disagree with reality.",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: { description: 'Settings and numbering state', content: { 'application/json': { schema: { type: 'object', properties: {
+            settings: { type: 'object' },
+            numbering: { type: 'object', properties: {
+              nextInvoiceNumber: { type: 'string' },
+              prefix: { type: 'string' },
+              highestIssued: { type: 'string', nullable: true },
+              issuedCount: { type: 'integer' },
+              floorNote: { type: 'string' },
+            } },
+          } } } } },
+          403: { description: 'Not a platform owner' },
+        },
+      },
+      put: {
+        tags: ['Billing'],
+        operationId: 'updateInvoiceSettings',
+        summary: 'Save invoicing configuration',
+        description: "PLATFORM_OWNER only. `nextNumber` is a FLOOR, never an override: allocation takes the higher of it and one past the highest already issued, so a value below what exists cannot reissue an invoice number. Changing the prefix or the financial-year flag starts a visibly different series and the response says so in `notes`; a tax change likewise notes that issued invoices keep the rate they were raised at, because their money is a snapshot. Signature and seal URLs must be an uploaded /uploads/ path or https — javascript: and data: are refused. Audited.",
+        security: [{ bearerAuth: [] }],
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object',
+          required: ['numberPrefix', 'nextNumber', 'currencyCode', 'currencySymbol', 'taxName', 'taxPercent', 'issuerName'],
+          properties: {
+            numberPrefix: { type: 'string', maxLength: 20, description: 'Letters, numbers and hyphens only — it appears in a tax invoice number.' },
+            includeFinancialYear: { type: 'boolean', default: true },
+            nextNumber: { type: 'integer', minimum: 1, description: 'A floor, not an override.' },
+            currencyCode: { type: 'string', minLength: 3, maxLength: 3 },
+            currencySymbol: { type: 'string', maxLength: 4 },
+            symbolPosition: { type: 'string', enum: ['BEFORE', 'AFTER'] },
+            dateFormat: { type: 'string', enum: ['DD MMM YYYY', 'DD/MM/YYYY', 'YYYY-MM-DD', 'MMM DD, YYYY'] },
+            defaultPaymentTerms: { type: 'string', nullable: true },
+            taxName: { type: 'string', maxLength: 30 },
+            taxPercent: { type: 'number', minimum: 0, maximum: 100 },
+            issuerName: { type: 'string', maxLength: 160 },
+            issuerGstin: { type: 'string', nullable: true },
+            issuerAddress: { type: 'string', nullable: true },
+            signatureUrl: { type: 'string', nullable: true },
+            sealUrl: { type: 'string', nullable: true },
+          },
+        } } } },
+        responses: {
+          200: { description: 'Saved, with any consequences reported in notes' },
+          400: { description: 'Validation failed' },
+          403: { description: 'Not a platform owner' },
+        },
+      },
+    },
+    // ═══════════════════════════════════════════════════════════════════════
+    // LEGAL DOCUMENTS
+    // ═══════════════════════════════════════════════════════════════════════
+    '/legal': {
+      get: {
+        tags: ['Legal'],
+        operationId: 'listPublicLegalDocuments',
+        summary: 'Published legal documents (public)',
+        description: 'Deliberately UNAUTHENTICATED. Somebody deciding whether to sign up has no account yet, and terms they cannot read before agreeing are not terms. Only documents with a published version appear; a draft is never reachable.',
+        responses: { 200: { description: 'Published documents' } },
+      },
+    },
+    '/legal/{slug}': {
+      get: {
+        tags: ['Legal'],
+        operationId: 'getPublicLegalDocument',
+        summary: 'A published legal document (public)',
+        description: 'Unauthenticated. Returns the highest-numbered PUBLISHED version. A document that exists but has never been published returns 404 with code NOT_PUBLISHED, which is more useful than implying the URL is wrong. The HTML was sanitised when it was stored.',
+        parameters: [{ name: 'slug', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'The document' },
+          404: { description: 'Not found, or drafted but never published (NOT_PUBLISHED)' },
+        },
+      },
+    },
+    '/platform/legal': {
+      get: {
+        tags: ['Legal'],
+        operationId: 'listLegalDocuments',
+        summary: 'All legal documents, with draft and acceptance counts',
+        security: [{ bearerAuth: [] }],
+        responses: { 200: { description: 'Documents' }, 403: { description: 'Not a platform owner' } },
+      },
+      post: {
+        tags: ['Legal'],
+        operationId: 'createLegalDocument',
+        summary: 'Create a legal document',
+        description: 'PLATFORM_OWNER only. The slug is the primary key AND the public URL, so it is lowercase and hyphenated and cannot be changed later. Audited.',
+        security: [{ bearerAuth: [] }],
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object', required: ['slug', 'title'],
+          properties: {
+            slug: { type: 'string', description: 'Lowercase letters, numbers and hyphens.' },
+            title: { type: 'string' },
+            description: { type: 'string', nullable: true },
+          },
+        } } } },
+        responses: {
+          201: { description: 'Created' }, 400: { description: 'Validation failed' },
+          403: { description: 'Not a platform owner' }, 409: { description: 'Slug already taken (SLUG_TAKEN)' },
+        },
+      },
+    },
+    '/platform/legal/{slug}': {
+      get: {
+        tags: ['Legal'],
+        operationId: 'getLegalDocument',
+        summary: 'A document and every version of it',
+        description: 'PLATFORM_OWNER only. Each version reports its author, how many companies accepted it, and whether it is immutable.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'slug', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Document and versions' }, 403: { description: 'Not a platform owner' }, 404: { description: 'Not found' } },
+      },
+      patch: {
+        tags: ['Legal'],
+        operationId: 'updateLegalDocument',
+        summary: 'Rename a document',
+        description: 'PLATFORM_OWNER only. Title and description only — the slug is the public URL that links and past agreements point at, so it never changes. The CONTENT lives on versions. Audited.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'slug', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } },
+        responses: { 200: { description: 'Updated' }, 403: { description: 'Not a platform owner' }, 404: { description: 'Not found' } },
+      },
+      delete: {
+        tags: ['Legal'],
+        operationId: 'deleteLegalDocument',
+        summary: 'Delete a document and all its versions',
+        description: 'PLATFORM_OWNER only. Refused with 409 (DOCUMENT_ACCEPTED) the moment anybody has accepted any version: that acceptance is the evidence of what a company agreed to, and deleting the document destroys it. Audited.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'slug', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'Deleted' }, 403: { description: 'Not a platform owner' },
+          404: { description: 'Not found' }, 409: { description: 'Accepted by a company (DOCUMENT_ACCEPTED)' },
+        },
+      },
+    },
+    '/platform/legal/{slug}/acceptances': {
+      get: {
+        tags: ['Legal'],
+        operationId: 'listLegalAcceptances',
+        summary: 'Who accepted which version, and when',
+        description: 'PLATFORM_OWNER only. Each row carries the version, timestamp and IP address — the evidence that makes the agreement provable.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'slug', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1, default: 1 } },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 50 } }],
+        responses: { 200: { description: 'Acceptances' }, 403: { description: 'Not a platform owner' }, 404: { description: 'Not found' } },
+      },
+    },
+    '/platform/legal/{slug}/versions': {
+      post: {
+        tags: ['Legal'],
+        operationId: 'createLegalVersion',
+        summary: 'Start a new draft version',
+        description: 'PLATFORM_OWNER only. Only one draft may be open at a time (409 DRAFT_EXISTS), so the operator is never editing two competing futures of the same document. The HTML is sanitised on write against a narrow allowlist — no script, style, iframe, event handlers, javascript: or data: URLs.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'slug', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object', required: ['title', 'bodyHtml'],
+          properties: { title: { type: 'string' }, bodyHtml: { type: 'string' }, changeNote: { type: 'string', nullable: true } },
+        } } } },
+        responses: {
+          201: { description: 'Draft created' }, 400: { description: 'Validation failed' },
+          403: { description: 'Not a platform owner' }, 404: { description: 'Document not found' },
+          409: { description: 'A draft is already open (DRAFT_EXISTS)' },
+        },
+      },
+    },
+    '/platform/legal/{slug}/versions/{versionId}': {
+      patch: {
+        tags: ['Legal'],
+        operationId: 'updateLegalVersion',
+        summary: 'Edit a draft version',
+        description: 'PLATFORM_OWNER only. Refused once published (409 VERSION_PUBLISHED). That refusal is the point of versioning: if a published version could be edited, the record of what a customer agreed to would change underneath them.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'slug', in: 'path', required: true, schema: { type: 'string' } }, { name: 'versionId', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } },
+        responses: {
+          200: { description: 'Updated' }, 400: { description: 'Validation failed' },
+          403: { description: 'Not a platform owner' }, 404: { description: 'Not found' },
+          409: { description: 'Published and immutable (VERSION_PUBLISHED)' },
+        },
+      },
+      delete: {
+        tags: ['Legal'],
+        operationId: 'deleteLegalVersion',
+        summary: 'Discard a draft version',
+        description: 'PLATFORM_OWNER only. A published version is evidence and is never deletable, whether or not anybody has accepted it yet (409 VERSION_PUBLISHED).',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'slug', in: 'path', required: true, schema: { type: 'string' } }, { name: 'versionId', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'Discarded' }, 403: { description: 'Not a platform owner' },
+          404: { description: 'Not found' }, 409: { description: 'Published (VERSION_PUBLISHED)' },
+        },
+      },
+    },
+    '/platform/legal/{slug}/versions/{versionId}/publish': {
+      post: {
+        tags: ['Legal'],
+        operationId: 'publishLegalVersion',
+        summary: 'Make a version the live one',
+        description: 'PLATFORM_OWNER only. Earlier versions stay exactly as they were and remain on record for everyone who accepted them; only new acceptances use the new one. A nearly empty version is refused (400 BODY_TOO_SHORT) so publishing cannot silently replace live terms with a blank page. Audited.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'slug', in: 'path', required: true, schema: { type: 'string' } }, { name: 'versionId', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'Published' }, 400: { description: 'Body too short (BODY_TOO_SHORT)' },
+          403: { description: 'Not a platform owner' }, 404: { description: 'Not found' },
+          409: { description: 'Already published' },
+        },
+      },
+    },
+
+    // ── Invoice template detail and versions ────────────────────────────────
+    '/platform/invoice-templates/{slug}': {
+      get: {
+        tags: ['Billing'],
+        operationId: 'getInvoiceTemplate',
+        summary: 'A template and every version of it',
+        description: 'PLATFORM_OWNER only. Each version reports its author, how many invoices were printed with it, whether it is immutable, and `settings` — present when it was built in the designer, null when it was authored as raw HTML.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'slug', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Template and versions' }, 403: { description: 'Not a platform owner' }, 404: { description: 'Not found' } },
+      },
+      patch: {
+        tags: ['Billing'],
+        operationId: 'updateInvoiceTemplate',
+        summary: 'Rename a template, or make it the default',
+        description: 'PLATFORM_OWNER only. Setting `isDefault` stands the previous default down in the same transaction, so exactly one template is ever the default. A template with no published version cannot be the default (409 TEMPLATE_NOT_PUBLISHED) — new invoices would silently fall back to the built-in layout while the console claimed otherwise. Audited.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'slug', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: {
+          title: { type: 'string' }, description: { type: 'string', nullable: true }, isDefault: { type: 'boolean' },
+        } } } } },
+        responses: {
+          200: { description: 'Updated' }, 400: { description: 'Validation failed' },
+          403: { description: 'Not a platform owner' }, 404: { description: 'Not found' },
+          409: { description: 'Not published, so it cannot be the default (TEMPLATE_NOT_PUBLISHED)' },
+        },
+      },
+      delete: {
+        tags: ['Billing'],
+        operationId: 'deleteInvoiceTemplate',
+        summary: 'Delete a template and all its versions',
+        description: 'PLATFORM_OWNER only. Refused once any invoice has been printed with it (409 TEMPLATE_IN_USE), because a reprint must reproduce the customer\'s copy and deleting the template would change how those look. The current default is also refused while other templates exist (409 TEMPLATE_IS_DEFAULT). Audited.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'slug', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'Deleted' }, 403: { description: 'Not a platform owner' },
+          404: { description: 'Not found' }, 409: { description: 'In use, or is the default' },
+        },
+      },
+    },
+    '/platform/invoice-templates/{slug}/versions': {
+      post: {
+        tags: ['Billing'],
+        operationId: 'createInvoiceTemplateVersion',
+        summary: 'Start a new draft version',
+        description: 'PLATFORM_OWNER only. Send `settings` and the markup is generated from them; a raw `bodyHtml` is still accepted so templates authored before the designer keep working. Locked sections are refused (400 LOCKED_SECTION_DISABLED) and forced on in the generator regardless. Only one draft may be open at a time (409 DRAFT_EXISTS).',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'slug', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object', required: ['title'],
+          properties: {
+            title: { type: 'string' },
+            settings: { type: 'object', description: 'Designer settings. Preferred over bodyHtml.' },
+            bodyHtml: { type: 'string', description: 'Raw Mustache template, for pre-designer templates.' },
+            changeNote: { type: 'string', nullable: true },
+          },
+        } } } },
+        responses: {
+          201: { description: 'Draft created' },
+          400: { description: 'Validation failed, or a legally required section was switched off (LOCKED_SECTION_DISABLED)' },
+          403: { description: 'Not a platform owner' }, 404: { description: 'Template not found' },
+          409: { description: 'A draft is already open (DRAFT_EXISTS)' },
+        },
+      },
+    },
+    '/platform/invoice-templates/{slug}/versions/{versionId}': {
+      patch: {
+        tags: ['Billing'],
+        operationId: 'updateInvoiceTemplateVersion',
+        summary: 'Edit a draft version',
+        description: 'PLATFORM_OWNER only. Refused once published (409 VERSION_PUBLISHED) — an invoice already sent to a customer must keep looking the way their copy looks.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'slug', in: 'path', required: true, schema: { type: 'string' } }, { name: 'versionId', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } },
+        responses: {
+          200: { description: 'Updated' },
+          400: { description: 'Validation failed, or a locked section was switched off (LOCKED_SECTION_DISABLED)' },
+          403: { description: 'Not a platform owner' }, 404: { description: 'Not found' },
+          409: { description: 'Published and immutable (VERSION_PUBLISHED)' },
+        },
+      },
+      delete: {
+        tags: ['Billing'],
+        operationId: 'deleteInvoiceTemplateVersion',
+        summary: 'Discard a draft version',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'slug', in: 'path', required: true, schema: { type: 'string' } }, { name: 'versionId', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'Discarded' }, 403: { description: 'Not a platform owner' },
+          404: { description: 'Not found' }, 409: { description: 'Published (VERSION_PUBLISHED)' },
+        },
+      },
+    },
+    '/platform/invoice-templates/{slug}/versions/{versionId}/publish': {
+      post: {
+        tags: ['Billing'],
+        operationId: 'publishInvoiceTemplateVersion',
+        summary: 'Make a template version live',
+        description: 'PLATFORM_OWNER only. The compliance guard runs here: a template missing a field a GST invoice must legally carry is refused (400 MISSING_REQUIRED_TOKENS) naming each one and why it is needed, and a template that throws at render time is refused (400 TEMPLATE_INVALID) rather than being allowed to break every invoice. Invoices already printed with an earlier version keep printing that way. Audited.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'slug', in: 'path', required: true, schema: { type: 'string' } }, { name: 'versionId', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'Published' },
+          400: { description: 'Missing required fields, or the template does not render' },
+          403: { description: 'Not a platform owner' }, 404: { description: 'Not found' },
+          409: { description: 'Already published' },
+        },
+      },
+    },
+    '/platform/invoice-templates': {
+      get: {
+        tags: ['Billing'],
+        operationId: 'listInvoiceTemplates',
+        summary: 'Invoice templates',
+        description: "PLATFORM_OWNER only. Each row reports its live and draft versions, whether it is the default that renders new invoices, and how many invoices were printed with it.",
+        security: [{ bearerAuth: [] }],
+        responses: { 200: { description: 'Templates' }, 403: { description: 'Not a platform owner' } },
+      },
+      post: {
+        tags: ['Billing'],
+        operationId: 'createInvoiceTemplate',
+        summary: 'Create an invoice template',
+        description: "PLATFORM_OWNER only. The first template created becomes the default, because a system with templates and no default would silently keep using the built-in layout. Audited.",
+        security: [{ bearerAuth: [] }],
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object', required: ['slug', 'title'],
+          properties: {
+            slug: { type: 'string', description: 'Lowercase letters, numbers and hyphens.' },
+            title: { type: 'string' },
+            description: { type: 'string', nullable: true },
+          },
+        } } } },
+        responses: {
+          201: { description: 'Created' }, 400: { description: 'Validation failed' },
+          403: { description: 'Not a platform owner' }, 409: { description: 'Identifier already taken (SLUG_TAKEN)' },
+        },
+      },
+    },
+    '/platform/invoice-templates/tokens': {
+      get: {
+        tags: ['Billing'],
+        operationId: 'getInvoiceTemplateVocabulary',
+        summary: 'What the designer can switch, and what it cannot',
+        description: "PLATFORM_OWNER only. Returns the designer's default settings, the sections that are LOCKED ON with the reason each is legally required, and the Mustache token reference for templates still authored as raw HTML.",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: { description: 'Designer vocabulary', content: { 'application/json': { schema: { type: 'object', properties: {
+            defaults: { type: 'object' },
+            locked: { type: 'array', items: { type: 'object', properties: { section: { type: 'string' }, why: { type: 'string' } } } },
+            groups: { type: 'array', items: { type: 'object' } },
+            required: { type: 'array', items: { type: 'object' } },
+          } } } } },
+          403: { description: 'Not a platform owner' },
+        },
+      },
+    },
+    '/platform/invoice-templates/preview': {
+      post: {
+        tags: ['Billing'],
+        operationId: 'previewInvoiceTemplate',
+        summary: 'Render a template without saving it',
+        description: "PLATFORM_OWNER only. Send `settings` (the designer) or `bodyHtml` (raw). With `invoiceId` it renders against that real invoice so the author sees their own data; without one it uses sample figures and says so via `usingSampleData`. Nothing is stored. A locked section switched off is refused with 400 LOCKED_SECTION_DISABLED and the `blocked` array naming each one.",
+        security: [{ bearerAuth: [] }],
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object',
+          properties: {
+            settings: { type: 'object', description: 'Designer settings. Preferred over bodyHtml.' },
+            bodyHtml: { type: 'string' },
+            css: { type: 'string', nullable: true },
+            invoiceId: { type: 'string', nullable: true },
+          },
+        } } } },
+        responses: {
+          200: { description: 'Rendered HTML and CSS' },
+          400: { description: 'Validation failed, or a locked section was switched off (LOCKED_SECTION_DISABLED)' },
+          403: { description: 'Not a platform owner' }, 404: { description: 'Invoice not found' },
+        },
+      },
+    },
+    '/finance/registrations/{token}/create-order': {
+      post: {
+        tags: ['Registration'],
+        operationId: 'createRazorpayOrder',
+        summary: 'Open a Razorpay order for an online payment',
+        description: "Authenticated by the emailed Finance action token in the path, not by a session. Returns 503 with code ONLINE_PAYMENT_UNAVAILABLE when RAZORPAY_KEY_ID/RAZORPAY_KEY_SECRET are not configured — selling offline only is a supported configuration, not a fault, and the signup page hides the card option and offers cheque instead when it sees that. Direct ONLINE approval through /approve is refused precisely so payment cannot bypass this.",
+        parameters: [{ name: 'token', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object', required: ['licenseQuantity', 'gstin'],
+          properties: {
+            licenseQuantity: { type: 'integer', minimum: 1 },
+            gstin: { type: 'string', minLength: 1 },
+            couponCode: { type: 'string' },
+          },
+        } } } },
+        responses: {
+          200: { description: 'Order created', content: { 'application/json': { schema: { type: 'object', properties: {
+            orderId: { type: 'string' }, amount: { type: 'integer', description: 'In paise.' },
+            currency: { type: 'string' }, keyId: { type: 'string', description: 'Publishable key for checkout.' },
+          } } } } },
+          400: { description: 'Validation failed, or the coupon is invalid' },
+          404: { description: 'Invalid link' },
+          409: { description: 'The registration is not pending Finance review' },
+          410: { description: 'The link has expired' },
+          503: { description: 'Online payment is not configured (ONLINE_PAYMENT_UNAVAILABLE)' },
+        },
+      },
+    },
+    '/finance/registrations/{token}/verify-payment': {
+      post: {
+        tags: ['Registration'],
+        operationId: 'verifyRazorpayPayment',
+        summary: 'Verify a completed Razorpay payment and advance to HR',
+        description: "Authenticated by the emailed Finance action token. Verifies the Razorpay signature server-side before anything is written — a client claiming success is never trusted. On success the registration moves to PENDING_HR_ACTIVATION, the coupon is committed, and the HR action link is issued and emailed. Returns 503 ONLINE_PAYMENT_UNAVAILABLE when the gateway is not configured.",
+        parameters: [{ name: 'token', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object',
+          required: ['licenseQuantity', 'gstin', 'razorpay_order_id', 'razorpay_payment_id', 'razorpay_signature'],
+          properties: {
+            licenseQuantity: { type: 'integer', minimum: 1 },
+            gstin: { type: 'string' },
+            couponCode: { type: 'string' },
+            razorpay_order_id: { type: 'string' },
+            razorpay_payment_id: { type: 'string' },
+            razorpay_signature: { type: 'string' },
+          },
+        } } } },
+        responses: {
+          200: { description: 'Payment verified; registration advanced to HR activation' },
+          400: { description: 'Validation failed, or the signature did not verify' },
+          404: { description: 'Invalid link' },
+          409: { description: 'The registration is not pending Finance review' },
+          410: { description: 'The link has expired' },
+          503: { description: 'Online payment is not configured (ONLINE_PAYMENT_UNAVAILABLE)' },
+        },
+      },
+    },
     '/platform/alerts': {
       get: {
         tags: ['Platform'],

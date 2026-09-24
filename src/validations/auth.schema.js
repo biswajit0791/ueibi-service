@@ -2,18 +2,18 @@ import { z } from "zod";
 
 export const loginSchema = z.object({
   email: z
-    .string({ required_error: "Email is required" })
+    .string({ error: "Email is required" })
     .trim()
     .toLowerCase()
     .email("Please enter a valid email address"),
   password: z
-    .string({ required_error: "Password is required" })
+    .string({ error: "Password is required" })
     .min(1, "Password cannot be empty"),
 });
 
 export const forgotPasswordSchema = z.object({
   email: z
-    .string({ required_error: "Email is required" })
+    .string({ error: "Email is required" })
     .trim()
     .toLowerCase()
     .email("Please enter a valid email address"),
@@ -21,11 +21,11 @@ export const forgotPasswordSchema = z.object({
 
 export const resetPasswordSchema = z.object({
   token: z
-    .string({ required_error: "Reset token is required" })
+    .string({ error: "Reset token is required" })
     .trim()
     .min(1, "Reset token cannot be empty"),
   newPassword: z
-    .string({ required_error: "New password is required" })
+    .string({ error: "New password is required" })
     .min(8, "Password must be at least 8 characters long")
     .max(128, "Password must not exceed 128 characters"),
 });

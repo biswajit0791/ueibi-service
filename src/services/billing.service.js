@@ -15,6 +15,7 @@
  */
 import { prisma } from '../lib/prisma.js';
 import { computePricing } from '../lib/pricing.js';
+import { getInvoiceSettings } from './invoiceSettings.service.js';
 
 /** Decimal columns come back as Prisma Decimal; money maths needs plain numbers. */
 export const num = (v) => (v == null ? 0 : Number(v));
@@ -50,8 +51,8 @@ export function financialYearOf(date = new Date()) {
  * exactly what an auditor expects to find.
  */
 export async function nextInvoiceNumber(client = prisma, at = new Date()) {
-  const fy = financialYearOf(at);
-  const prefix = `UEIBI/${fy}/`;
+  const settings = await getInvoiceSettings(client);
+  const prefix = invoiceNumberPrefix(settings, at);
 
   const issued = await client.invoice.findMany({
     where: { invoiceNumber: { startsWith: prefix } },
@@ -63,7 +64,26 @@ export async function nextInvoiceNumber(client = prisma, at = new Date()) {
     return Number.isFinite(n) && n > max ? n : max;
   }, 0);
 
-  return `${prefix}${String(highest + 1).padStart(4, '0')}`;
+  // `nextNumber` is a FLOOR, never an override. Taking the larger of the two
+  // means an operator who types a number lower than what is already issued
+  // cannot cause a number to be reissued — the worst they can do is skip
+  // forward, which leaves an explainable gap rather than a duplicate.
+  const next = Math.max(highest + 1, Number(settings.nextNumber) || 1);
+
+  return `${prefix}${String(next).padStart(4, '0')}`;
+}
+
+/**
+ * The part of an invoice number before the sequence.
+ *
+ * Exported so the settings screen can show exactly what the next number will
+ * look like without duplicating the rule.
+ */
+export function invoiceNumberPrefix(settings, at = new Date()) {
+  const p = String(settings?.numberPrefix || 'UEIBI').trim();
+  return settings?.includeFinancialYear === false
+    ? `${p}-`
+    : `${p}/${financialYearOf(at)}/`;
 }
 
 /**

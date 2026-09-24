@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const createGoalSchema = z.object({
-  title: z.string({ required_error: "Goal title is required" }).trim().min(1, "Goal title cannot be empty").max(255, "Goal title cannot exceed 255 characters"),
+  title: z.string({ error: "Goal title is required" }).trim().min(1, "Goal title cannot be empty").max(255, "Goal title cannot exceed 255 characters"),
   description: z.string().max(3000, "Description cannot exceed 3000 characters").nullable().optional(),
   category: z.string().max(100).nullable().optional(),
   goalType: z.string().max(100).nullable().optional(),
@@ -83,7 +83,7 @@ export const goalApproveSchema = z.object({
 }).passthrough();
 
 export const goalRejectSchema = z.object({
-  comment: z.string({ required_error: "Rejection reason / required changes is required" })
+  comment: z.string({ error: "Rejection reason / required changes is required" })
     .trim()
     .min(1, "Rejection reason / required changes cannot be empty")
     .max(1000, "Rejection reason cannot exceed 1000 characters"),
@@ -125,7 +125,7 @@ export const activateApproveSchema = z.object({
 });
 
 export const goalCommentSchema = z.object({
-  comment: z.string({ required_error: "Comment text is required" })
+  comment: z.string({ error: "Comment text is required" })
     .trim()
     .min(1, "Comment text cannot be empty")
     .max(2000, "Comment text cannot exceed 2000 characters"),
