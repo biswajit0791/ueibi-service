@@ -12,6 +12,8 @@ import {
   listGoalsQuerySchema,
 } from '../validations/goal.schema.js';
 import { goalService, GOAL_CATEGORIES, GOAL_TYPES, GOAL_PRIORITIES, GOAL_STATUS } from '../services/goal.service.js';
+import { goalWeightSummary, summariseGoals } from '../services/goalWeight.service.js';
+import { taskTiming } from '../lib/taskTiming.js';
 import goalOptionService from '../services/goalOption.service.js';
 import { ELEVATED_ROLES, SUPER_ELEVATED_ROLES, hasRole, canViewDashboard } from '../lib/roles.js';
 import { getCurrentFinancialYear, getCurrentQuarter } from '../lib/financialYear.js';
@@ -720,8 +722,16 @@ export async function listGoals(req, res, next) {
       }),
     ]);
 
+    // One extra query for the whole page, so a goal board can show every
+    // lock state without asking per goal.
+    const summaries = await summariseGoals(items.map((g) => g.id));
+
     res.json({
-      items,
+      items: items.map((g) => ({
+        ...g,
+        weightSummary: summaries[g.id] || null,
+        tasks: (g.tasks || []).map((t) => ({ ...t, timing: taskTiming(t) })),
+      })),
       pagination: {
         page,
         limit,
@@ -789,7 +799,46 @@ export async function getGoalById(req, res, next) {
       return res.status(403).json({ error: 'Access forbidden: you do not have permission to view this goal' });
     }
 
-    res.json(goal);
+    // The weight position, computed here rather than in the browser: the
+    // browser's arithmetic is a convenience, this is what the API enforces.
+    const weightSummary = await goalWeightSummary(goal.id);
+
+    res.json({
+      ...goal,
+      weightSummary,
+      tasks: (goal.tasks || []).map((t) => ({ ...t, timing: taskTiming(t) })),
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /goals/:id/weight-summary
+ *
+ * What the task weights on this goal total, whether execution is unlocked and,
+ * when it is not, what has to change. Same access rule as reading the goal.
+ */
+export async function getGoalWeightSummary(req, res, next) {
+  try {
+    const parsedParams = goalIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid goal ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
+
+    const goal = await prisma.goal.findFirst({
+      where: { id, tenantId: req.tenantId },
+      include: { assignments: { select: { employeeId: true } } },
+    });
+    if (!goal) return res.status(404).json({ error: 'Goal not found' });
+
+    const canAccess = await goalService.canAccessGoal(goal, req.user, req.tenantId);
+    if (!canAccess) {
+      return res.status(403).json({ error: 'Access forbidden: you do not have permission to view this goal' });
+    }
+
+    res.json(await goalWeightSummary(id));
   } catch (err) {
     next(err);
   }

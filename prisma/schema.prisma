@@ -750,6 +750,9 @@ model Goal {
   employee            TenantUser?      @relation("GoalAssignee", fields: [employeeId], references: [id], onDelete: Cascade)
   milestones          Int              @default(0)
   completedMilestones Int              @default(0)
+  /// Goals whose work had already begun when task weighting was introduced.
+  /// They keep the old behaviour; the 100% rule applies to everything else.
+  weightLockExempt    Boolean          @default(false)
   tasks               Task[]
   comments            GoalComment[]
   auditLogs           GoalAuditLog[]
@@ -804,7 +807,13 @@ model Task {
   goal           Goal?          @relation(fields: [goalId], references: [id], onDelete: SetNull)
   isPrivate      Boolean        @default(false)
   isStandalone   Boolean        @default(false)
+  /// Percentage share of the parent goal. A goal's tasks must total exactly
+  /// 100 before its execution unlocks (see services/goalWeight.service.js).
   weight         Int            @default(1)
+  /// When work actually began / actually finished, against the planned
+  /// startDate / dueDate above. Null on tasks that predate this column.
+  actualStartDate      DateTime?
+  actualCompletionDate DateTime?
   employeeId     String
   employee       TenantUser     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   description    String?        @db.Text

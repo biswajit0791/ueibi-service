@@ -6,6 +6,32 @@ import { goalService } from '../services/goal.service.js';
 import { loadTaskForUser, getCompanionTaskId } from '../services/taskAccess.service.js';
 import { ELEVATED_ROLES, SUPER_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
 import { TASK_STATUSES } from '../lib/workflowStatus.js';
+import {
+  assertGoalUnlocked, assertWeightFits, defaultWeightFor, goalWeightSummary, withWeightGuard,
+} from '../services/goalWeight.service.js';
+import { timingUpdates, isWorkStarted, taskTiming } from '../lib/taskTiming.js';
+
+// ─── Helper: weight-rule failures ──────────────────────────────────────────
+// These carry a summary the UI needs (what the total is, what is missing), so
+// they are answered here rather than handed to the generic error handler,
+// which would keep the message and drop everything else.
+// Delay / overdue figures travel with every task, computed server-side from
+// the planned and actual dates so every screen reports the same number.
+const withTiming = (t) => ({ ...t, timing: taskTiming(t) });
+
+const WEIGHT_CODES = ['GOAL_WEIGHT_INCOMPLETE', 'GOAL_WEIGHT_EXCEEDED'];
+function sendWeightError(res, e) {
+  if (!e || !WEIGHT_CODES.includes(e.code)) return false;
+  res.status(e.status || 400).json({
+    success: false,
+    code: e.code,
+    error: e.message,
+    message: e.message,
+    ...(e.weightSummary ? { weightSummary: e.weightSummary } : {}),
+    ...(e.available !== undefined ? { available: e.available } : {}),
+  });
+  return true;
+}
 
 // ─── Helper: resolve & authorise target employee ───────────────────────────
 // Returns the TenantUser record that will own the task.
@@ -189,8 +215,44 @@ export async function createTask(req, res, next) {
       }
     }
 
-    // 6. Create task for each target employee
-    const createdTasks = [];
+    // 5b. Weight. Resolved once, before the loop, because one submission can
+    //     create a task per assignee and they each carry the full weight — so
+    //     the ceiling has to be measured against the whole batch, not against
+    //     one task at a time.
+    let resolvedWeight = weight === undefined || weight === null || weight === ''
+      ? await defaultWeightFor(resolvedGoalId, targetEmployeeIds.length)
+      : Number(weight);
+    if (!Number.isFinite(resolvedWeight) || resolvedWeight < 1) resolvedWeight = 1;
+
+    if (resolvedGoalId) {
+      try {
+        await assertWeightFits({
+          goalId: resolvedGoalId,
+          weight: resolvedWeight,
+          copies: targetEmployeeIds.length,
+        });
+      } catch (e) {
+        if (sendWeightError(res, e)) return;
+        return res.status(e.status || 500).json({ success: false, message: e.message });
+      }
+    }
+
+    // 5c. A task may only be CREATED already in flight when the goal's own
+    //     execution is unlocked. Creating plain 'todo' tasks is how a locked
+    //     goal reaches 100% in the first place, so that is never blocked.
+    if (resolvedGoalId && isWorkStarted({ status, progress })) {
+      try {
+        await assertGoalUnlocked(resolvedGoalId);
+      } catch (e) {
+        if (sendWeightError(res, e)) return;
+        return res.status(e.status || 500).json({ success: false, message: e.message });
+      }
+    }
+
+    // 6. Resolve every target employee FIRST. These checks read the database
+    //    and can refuse the request outright, and neither belongs inside the
+    //    transaction that follows.
+    const targets = [];
     for (const targetId of targetEmployeeIds) {
       let target;
       try {
@@ -209,30 +271,52 @@ export async function createTask(req, res, next) {
           return res.status(403).json({ success: false, message: 'You are not assigned to this goal' });
         }
       }
+      targets.push(target);
+    }
 
-      const task = await prisma.task.create({
-        data: {
-          title: title.trim(),
-          priority: priority || 'medium',
-          status: status || 'todo',
-          progress: progress || 0,
-          startDate: startDate ? new Date(startDate) : undefined,
-          dueDate: dueDate ? new Date(dueDate) : undefined,
-          financialYear: financialYear || null,
-          tags: tags || null,
-          isPrivate: isPrivate ?? false,
-          isStandalone: isStandalone ?? false,
-          weight: weight || 1,
-          description: description || null,
-          dependency: dependency || null,
-          isDependencyOf: isDependencyOf || null,
-          // ─ Relations ─
-          employee: { connect: { id: target.id } },
-          tenant: { connect: { id: tenantId } },
-          ...(resolvedGoalId ? { goal: { connect: { id: resolvedGoalId } } } : {}),
-        },
+    // 7. Create them inside one serialisable transaction that re-checks the
+    //    goal's total before committing. Two people adding 20% to an 80% goal
+    //    at the same moment would otherwise both pass their own check and
+    //    leave the goal at 120%.
+    let createdTasks;
+    try {
+      createdTasks = await withWeightGuard(resolvedGoalId, async (tx) => {
+        const made = [];
+        for (const target of targets) {
+          made.push(await tx.task.create({
+            data: {
+              title: title.trim(),
+              priority: priority || 'medium',
+              status: status || 'todo',
+              progress: progress || 0,
+              startDate: startDate ? new Date(startDate) : undefined,
+              dueDate: dueDate ? new Date(dueDate) : undefined,
+              financialYear: financialYear || null,
+              tags: tags || null,
+              isPrivate: isPrivate ?? false,
+              isStandalone: isStandalone ?? false,
+              weight: resolvedWeight,
+              description: description || null,
+              dependency: dependency || null,
+              isDependencyOf: isDependencyOf || null,
+              // A task created already in progress has actually started now.
+              ...timingUpdates({}, { status: status || 'todo', progress: progress || 0 }),
+              // ─ Relations ─
+              employee: { connect: { id: target.id } },
+              tenant: { connect: { id: tenantId } },
+              ...(resolvedGoalId ? { goal: { connect: { id: resolvedGoalId } } } : {}),
+            },
+          }));
+        }
+        return made;
       });
+    } catch (e) {
+      if (sendWeightError(res, e)) return;
+      return res.status(e.status || 500).json({ success: false, message: e.message || 'Could not create the task' });
+    }
 
+    // 8. Side effects, once the rows are safely committed.
+    for (const task of createdTasks) {
       let goalProgress = 0;
       if (resolvedGoalId) {
         goalProgress = await recalculateGoalProgress(resolvedGoalId, task.employeeId);
@@ -250,13 +334,11 @@ export async function createTask(req, res, next) {
         task: {
           ...task,
           progress: task.progress || 0,
-          weight: task.weight || 1,
+          weight: task.weight,
         },
         goalId: resolvedGoalId,
         goalProgress,
       });
-
-      createdTasks.push(task);
     }
 
     if (createdTasks.length === 1) {
@@ -299,7 +381,7 @@ export async function listTasks(req, res, next) {
         where,
         orderBy: { createdAt: 'desc' },
       });
-      return res.json({ items });
+      return res.json({ items: items.map(withTiming) });
     }
 
     if (targetEmployeeId === 'all') {
@@ -408,7 +490,7 @@ export async function listTasks(req, res, next) {
       orderBy: { createdAt: 'desc' },
     });
 
-    res.json({ items });
+    res.json({ items: items.map(withTiming) });
   } catch (err) {
     next(err);
   }
@@ -444,11 +526,30 @@ export async function updateTaskStatus(req, res, next) {
       progressUpdate = Math.min(100, Math.max(0, progressUpdate));
     }
 
+    // ── The weight gate ──────────────────────────────────────────────────
+    // Work may not begin on a goal whose tasks do not total exactly 100%.
+    // Moving a task BACK to 'todo' is always allowed: that reduces work in
+    // flight rather than adding it, and blocking it would trap a task in a
+    // state its own goal no longer permits.
+    const nextState = {
+      status,
+      progress: progressUpdate !== undefined && !isNaN(progressUpdate) ? progressUpdate : existing.progress,
+    };
+    if (existing.goalId && isWorkStarted(nextState) && !existing.isStandalone) {
+      try {
+        await assertGoalUnlocked(existing.goalId);
+      } catch (e) {
+        if (sendWeightError(res, e)) return;
+        return res.status(e.status || 500).json({ success: false, message: e.message });
+      }
+    }
+
     const updated = await prisma.task.update({
       where: { id },
       data: { 
         status,
-        ...(progressUpdate !== undefined && !isNaN(progressUpdate) && { progress: progressUpdate })
+        ...(progressUpdate !== undefined && !isNaN(progressUpdate) && { progress: progressUpdate }),
+        ...timingUpdates(existing, nextState),
       },
     });
 
@@ -625,9 +726,63 @@ export async function updateTask(req, res, next) {
       else if (progress === 0) finalStatus = 'todo';
     }
 
-    const updated = await prisma.task.update({
+    // ── Weight ceiling ───────────────────────────────────────────────────
+    // Measured against the task's siblings, so raising a task from 20 to 30
+    // on a goal totalling 100 is refused, but re-saving it at 20 is not.
+    const targetGoalId = resolvedGoalId !== undefined ? resolvedGoalId : existing.goalId;
+    if (weight !== undefined && weight !== null && targetGoalId
+        && (isElevated || isDirectManager)) {
+      try {
+        await assertWeightFits({ goalId: targetGoalId, weight: Number(weight), excludeTaskId: id });
+      } catch (e) {
+        if (sendWeightError(res, e)) return;
+        return res.status(e.status || 500).json({ success: false, message: e.message });
+      }
+    }
+
+    // ── The weight gate ──────────────────────────────────────────────────
+    // Same rule as PATCH /tasks/:id/status, enforced here too because this
+    // endpoint can set status and progress as well and would otherwise be a
+    // way straight around the lock.
+    const wasStarted = isWorkStarted(existing);
+    const willBeStarted = isWorkStarted({
+      status: finalStatus !== undefined ? finalStatus : existing.status,
+      progress: finalProgress !== undefined ? finalProgress : existing.progress,
+    });
+    // Also gate a task that is ALREADY in flight being moved onto a different
+    // goal: otherwise work could be parked on a locked goal without any status
+    // change at all.
+    const changingGoal = resolvedGoalId !== undefined && resolvedGoalId !== existing.goalId;
+    const movingIntoWork = willBeStarted && (
+      !wasStarted
+      || finalStatus !== undefined
+      || finalProgress !== undefined
+      || changingGoal
+    );
+    const isStandaloneNow = isStandalone !== undefined ? isStandalone : existing.isStandalone;
+    if (targetGoalId && movingIntoWork && !isStandaloneNow) {
+      try {
+        await assertGoalUnlocked(targetGoalId);
+      } catch (e) {
+        if (sendWeightError(res, e)) return;
+        return res.status(e.status || 500).json({ success: false, message: e.message });
+      }
+    }
+
+    // A weight change goes through the same serialisable guard as creation:
+    // two people raising two different tasks at once could each fit on their
+    // own and not together.
+    const weightChanging = weight !== undefined && weight !== null
+      && Number(weight) !== Number(existing.weight)
+      && (isElevated || isDirectManager);
+
+    const runUpdate = (tx) => tx.task.update({
       where: { id },
       data: {
+        ...timingUpdates(existing, {
+          status: finalStatus !== undefined ? finalStatus : existing.status,
+          progress: finalProgress !== undefined ? finalProgress : existing.progress,
+        }),
         ...(title !== undefined && { title: title.trim() }),
         ...(priority !== undefined && { priority }),
         ...(finalStatus !== undefined && { status: finalStatus }),
@@ -646,6 +801,16 @@ export async function updateTask(req, res, next) {
         ...(employeeId !== undefined && (isElevated || isDirectManager) && { employeeId }),
       },
     });
+
+    let updated;
+    try {
+      updated = weightChanging && targetGoalId
+        ? await withWeightGuard(targetGoalId, runUpdate)
+        : await runUpdate(prisma);
+    } catch (e) {
+      if (sendWeightError(res, e)) return;
+      return res.status(e.status || 500).json({ success: false, message: e.message || 'Could not update the task' });
+    }
 
     let goalProgress = 0;
     if (updated.goalId) {
