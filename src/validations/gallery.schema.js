@@ -12,7 +12,7 @@ export const ALLOWED_GALLERY_CATEGORIES = [
 
 export const createGalleryPostSchema = z.object({
   title: z
-    .string({ required_error: 'Title is required' })
+    .string({ error: 'Title is required' })
     .trim()
     .min(2, 'Title must be between 2 and 120 characters')
     .max(120, 'Title must be between 2 and 120 characters'),
@@ -25,7 +25,7 @@ export const createGalleryPostSchema = z.object({
 
 export const addGalleryCommentSchema = z.object({
   text: z
-    .string({ required_error: 'Comment text is required' })
+    .string({ error: 'Comment text is required' })
     .trim()
     .min(1, 'Comment text cannot be empty')
     .max(1000, 'Comment text must be between 1 and 1000 characters'),
@@ -61,6 +61,6 @@ export const updateGalleryPostSchema = z.object({
 });
 
 export const galleryIdParamSchema = z.object({
-  id: z.string({ required_error: 'ID is required' }).trim().min(1, 'ID cannot be empty'),
+  id: z.string({ error: 'ID is required' }).trim().min(1, 'ID cannot be empty'),
 });
 

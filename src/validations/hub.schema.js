@@ -36,12 +36,12 @@ export const updateHubProfileSchema = z.object({
 // POST /hub/events
 export const createHubEventSchema = z.object({
   title: z
-    .string({ required_error: 'Event title is required' })
+    .string({ error: 'Event title is required' })
     .trim()
     .min(3, 'Event title must be at least 3 characters')
     .max(120, 'Event title cannot exceed 120 characters'),
   date: z
-    .string({ required_error: 'Event date is required' })
+    .string({ error: 'Event date is required' })
     .trim()
     .min(1, 'Event date is required')
     .max(60, 'Date string cannot exceed 60 characters'),
@@ -58,7 +58,7 @@ export const createHubEventSchema = z.object({
     .optional()
     .nullable(),
   description: z
-    .string({ required_error: 'Description & details are required' })
+    .string({ error: 'Description & details are required' })
     .trim()
     .min(5, 'Description must be at least 5 characters')
     .max(2000, 'Description cannot exceed 2000 characters'),
@@ -129,7 +129,7 @@ export const getHubEventsQuerySchema = z.object({
 // Event ID path param schema (used for /hub/events/:id)
 export const eventIdParamSchema = z.object({
   id: z
-    .string({ required_error: 'Event ID parameter is required' })
+    .string({ error: 'Event ID parameter is required' })
     .trim()
     .min(1, 'Event ID parameter cannot be empty')
     .max(100, 'Event ID parameter is too long'),

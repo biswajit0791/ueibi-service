@@ -38,6 +38,9 @@ import {
   refundCreateSchema,
 } from '../validations/billing.schema.js';
 import { recordPlatformAction, PLATFORM_ACTIONS } from '../services/platformAudit.service.js';
+import { renderInvoiceTemplate } from '../services/invoiceTemplate.service.js';
+import { defaultTemplateVersion } from './invoiceTemplate.controller.js';
+import { sanitizeLegalHtml } from '../lib/sanitizeHtml.js';
 
 /** Decimal columns are Prisma Decimals; the API speaks plain numbers. */
 const money = (inv) => ({
@@ -174,6 +177,35 @@ export async function getInvoice(req, res, next) {
         : (nameOf[row.recordedById] || 'Deleted account'),
     });
 
+    // Which template renders this invoice: the one it was rendered with if it
+    // has one, so a reprint reproduces the customer's copy, otherwise today's
+    // default. Null when no template is published at all.
+    const templateVersion = invoice.templateVersionId
+      ? await prisma.invoiceTemplateVersion.findUnique({ where: { id: invoice.templateVersionId } })
+      : await defaultTemplateVersion();
+
+    let rendered = null;
+    if (templateVersion) {
+      const out = renderInvoiceTemplate(templateVersion.bodyHtml, invoice);
+      rendered = {
+        // Sanitised again after rendering: the template was cleaned on write,
+        // but the values substituted into it come from company-entered data.
+        html: out.html ? sanitizeLegalHtml(out.html) : null,
+        css: templateVersion.css || null,
+        error: out.error,
+        templateSlug: templateVersion.templateSlug,
+        templateVersion: templateVersion.version,
+      };
+      // Record which version rendered it the first time, so future reprints
+      // reproduce this one rather than whatever is current then.
+      if (!invoice.templateVersionId && !out.error && invoice.state !== 'DRAFT') {
+        await prisma.invoice.update({
+          where: { id: invoice.id },
+          data: { templateVersionId: templateVersion.id },
+        }).catch(() => { /* a failed pin must never break viewing an invoice */ });
+      }
+    }
+
     res.json({
       invoice: money(invoice),
       balances: invoiceBalances(invoice),
@@ -184,6 +216,7 @@ export async function getInvoice(req, res, next) {
         gstin: env.invoiceIssuerGstin || null,
         address: env.invoiceIssuerAddress || null,
       },
+      rendered,
     });
   } catch (err) {
     next(err);

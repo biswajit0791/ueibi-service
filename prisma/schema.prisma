@@ -626,6 +626,11 @@ model Invoice {
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
+  /// Which template version rendered this invoice. Null for invoices raised
+  /// before templates existed; those fall back to the built-in layout.
+  templateVersionId String?
+  templateVersion   InvoiceTemplateVersion? @relation(fields: [templateVersionId], references: [id])
+
   payments    Payment[]
   refunds     Refund[]
   redemptions CouponRedemption[]
@@ -2066,4 +2071,191 @@ enum MessageStatus {
   SENT
   DELIVERED
   READ
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LEGAL DOCUMENTS
+//
+// The User Agreement and Privacy Policy shown at signup, authored by the
+// platform owner rather than hardcoded in the frontend.
+//
+// Versioned on purpose. A legal agreement is only meaningful if you can show
+// what someone actually agreed to on the day they agreed to it, so editing the
+// terms creates a NEW version and never rewrites a published one. Each
+// acceptance points at the exact version that was on screen.
+//
+// `bodyHtml` is authored HTML. It is sanitised on the SERVER before it is
+// stored — the editor's own output is never trusted, because the thing being
+// defended against is a payload reaching a public page.
+// ═══════════════════════════════════════════════════════════════════════════
+
+model LegalDocument {
+  /// Stable identifier used in URLs and by the signup page: "user-agreement",
+  /// "privacy-policy". Code refers to documents by slug, never by id, so a
+  /// document can be recreated without breaking links.
+  slug        String  @id
+  title       String
+  /// Shown under the heading on the public page, e.g. "Effective from 1 April".
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  versions LegalDocumentVersion[]
+
+  @@map("legal_documents")
+}
+
+model LegalDocumentVersion {
+  id           String        @id @default(cuid())
+  documentSlug String
+  document     LegalDocument @relation(fields: [documentSlug], references: [slug], onDelete: Cascade)
+  /// 1, 2, 3 … per document. Unique, so two concurrent publishes cannot both
+  /// claim the same number.
+  version      Int
+  title        String
+  bodyHtml     String        @db.Text
+  /// What changed, for the operator's own history.
+  changeNote   String?       @db.Text
+  /// Null while a draft. Only a published version is ever shown publicly, and
+  /// a published version is never edited again.
+  publishedAt  DateTime?
+  /// Not a relation: the record must outlive the operator's account.
+  authorId     String
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  acceptances LegalAcceptance[]
+
+  @@unique([documentSlug, version])
+  @@index([documentSlug, publishedAt])
+  @@map("legal_document_versions")
+}
+
+/// Who agreed to what, and when. One row per document per acceptance, so
+/// agreeing to two documents at signup writes two rows.
+model LegalAcceptance {
+  id             String               @id @default(cuid())
+  versionId      String
+  version        LegalDocumentVersion @relation(fields: [versionId], references: [id])
+  /// Set for a signup; a tenant does not exist yet at that point.
+  registrationId String?
+  tenantId       String?
+  userId         String?
+  acceptedAt     DateTime             @default(now())
+  /// Evidence of the acceptance, which is the entire point of the record.
+  ipAddress      String?
+  userAgent      String?              @db.Text
+
+  @@index([registrationId])
+  @@index([versionId])
+  @@map("legal_acceptances")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INVOICE TEMPLATES
+//
+// The printed invoice, authored by the platform owner instead of hardcoded.
+//
+// Versioned for the same reason legal documents are: an invoice already sent
+// to a customer must keep looking the way it looked when they received it, so
+// editing the template creates a NEW version and each invoice remembers which
+// version rendered it.
+//
+// `bodyHtml` is a Mustache template. It is sanitised on write, and publishing
+// is refused unless the tokens a GST invoice legally requires are present —
+// deleting {{issuerGstin}} by accident must not be able to produce invoices
+// that fail an audit.
+// ═══════════════════════════════════════════════════════════════════════════
+
+model InvoiceTemplate {
+  slug        String   @id
+  title       String
+  description String?
+  /// Exactly one template is the default used for new invoices.
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  versions InvoiceTemplateVersion[]
+
+  @@index([isDefault])
+  @@map("invoice_templates")
+}
+
+model InvoiceTemplateVersion {
+  id           String          @id @default(cuid())
+  /// What the designer produced. Null on versions authored as raw HTML before
+  /// the designer existed; those keep rendering through bodyHtml unchanged.
+  settings     Json?
+  templateSlug String
+  template     InvoiceTemplate @relation(fields: [templateSlug], references: [slug], onDelete: Cascade)
+  version      Int
+  title        String
+  bodyHtml     String          @db.Text
+  /// Print-specific CSS, kept apart from the body so a layout tweak does not
+  /// mean editing markup.
+  css          String?         @db.Text
+  changeNote   String?         @db.Text
+  publishedAt  DateTime?
+  authorId     String
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  renderedInvoices Invoice[]
+
+  @@unique([templateSlug, version])
+  @@index([templateSlug, publishedAt])
+  @@map("invoice_template_versions")
+}
+
+/// Platform-wide invoicing configuration. Exactly one row.
+///
+/// These values used to live in .env (GST_RATE, INVOICE_ISSUER_*), which meant
+/// changing the tax rate or the registered address needed a deploy. They are
+/// read with the env values as fallback, so behaviour before this row exists is
+/// identical to what it was.
+model InvoiceSetting {
+  /// A fixed id rather than a findFirst, so concurrent writes cannot create a
+  /// second settings row that silently wins half the time.
+  id String @id @default("singleton")
+
+  // ── Numbering ──
+  /// The series is financial-year based and stays that way; only the prefix
+  /// varies. Changing it mid-year starts a visibly different series, which the
+  /// settings screen warns about.
+  numberPrefix         String  @default("UEIBI")
+  includeFinancialYear Boolean @default(true)
+  /// A FLOOR, never an override. Allocation takes max(highest issued + 1, this),
+  /// so lowering it can never reissue a number that already exists.
+  nextNumber           Int     @default(1)
+
+  // ── Regional ──
+  currencyCode        String  @default("INR")
+  currencySymbol      String  @default("₹")
+  /// BEFORE or AFTER the amount.
+  symbolPosition      String  @default("BEFORE")
+  dateFormat          String  @default("DD MMM YYYY")
+  defaultPaymentTerms String?
+
+  // ── Tax ──
+  /// Applies to invoices raised from now on. An issued invoice keeps the rate
+  /// it was raised at, because its money is a snapshot.
+  taxName    String  @default("GST")
+  taxPercent Decimal @default(18) @db.Decimal(5, 2)
+
+  // ── Who the invoice is from ──
+  issuerName    String  @default("UEIBI")
+  issuerGstin   String?
+  issuerAddress String?
+
+  // ── Uploaded marks ──
+  signatureUrl String?
+  sealUrl      String?
+
+  /// Not a relation: the record must outlive the operator's account.
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+
+  @@map("invoice_settings")
 }

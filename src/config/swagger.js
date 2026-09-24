@@ -2817,8 +2817,9 @@ const options = {
         get: {
           tags: ['Dev'],
           summary: 'List notification logs (dev only)',
-          description: 'Returns the latest 50 notification logs. Disabled in production.',
+          description: 'PLATFORM_OWNER only, and the route is not mounted at all when NODE_ENV is production. Returns the latest 50 notification logs.',
           operationId: 'listDevNotificationLogs',
+          security: [{ bearerAuth: [] }],
           parameters: [
             { name: 'email', in: 'query', schema: { type: 'string' }, description: 'Filter by recipient email' },
             { name: 'registrationId', in: 'query', schema: { type: 'string' }, description: 'Filter by registration ID' },
