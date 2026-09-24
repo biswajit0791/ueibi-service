@@ -21,6 +21,7 @@ import {
   updateGalleryPostSchema,
   galleryIdParamSchema,
   galleryCommentUpdateSchema,
+  listGalleryPostsQuerySchema,
 } from '../validations/gallery.schema.js';
 
 // Helper to build full image URL
@@ -58,13 +59,16 @@ function serializePost(post, userId) {
 // GET /gallery/posts
 export async function listGalleryPosts(req, res, next) {
   try {
+    const parsedQuery = listGalleryPostsQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
+    }
     const tenantId = req.tenantId;
     const userId = req.user.id;
-    const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit) || 12));
+    const { page, limit } = parsedQuery.data;
     const skip = (page - 1) * limit;
-    const category = req.query.category || '';
-    const search = (req.query.search || '').trim();
+    const category = parsedQuery.data.category || '';
+    const search = (parsedQuery.data.search || '').trim();
 
     const where = { tenantId, isActive: true };
     if (category && ALLOWED_GALLERY_CATEGORIES.includes(category)) {

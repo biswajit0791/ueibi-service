@@ -3,6 +3,7 @@ import {
   createGoal,
   listGoals,
   getGoalById,
+  getGoalWeightSummary,
   updateGoal,
   deleteGoal,
   getAssignableUsers,
@@ -38,6 +39,8 @@ router.get('/goals', requireAuth, requireTenant, listGoals);
 router.get('/goals/mine', requireAuth, requireTenant, getMyGoals);
 router.post('/goals/sync-to-appraisal', requireAuth, requireTenant, syncGoalsToAppraisal);
 router.get('/goals/:id', requireAuth, requireTenant, getGoalById);
+// Task weighting: what the goal's tasks total and whether execution is unlocked.
+router.get('/goals/:id/weight-summary', requireAuth, requireTenant, getGoalWeightSummary);
 router.patch('/goals/:id', requireAuth, requireTenant, updateGoal);
 router.delete('/goals/:id', requireAuth, requireTenant, deleteGoal);
 
