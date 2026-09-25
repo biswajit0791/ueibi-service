@@ -19,7 +19,7 @@ import { timingUpdates, isWorkStarted, taskTiming } from '../lib/taskTiming.js';
 // the planned and actual dates so every screen reports the same number.
 const withTiming = (t) => ({ ...t, timing: taskTiming(t) });
 
-const WEIGHT_CODES = ['GOAL_WEIGHT_INCOMPLETE', 'GOAL_WEIGHT_EXCEEDED'];
+const WEIGHT_CODES = ['GOAL_WEIGHT_INCOMPLETE', 'GOAL_WEIGHT_EXCEEDED', 'GOAL_AWAITING_APPROVAL'];
 function sendWeightError(res, e) {
   if (!e || !WEIGHT_CODES.includes(e.code)) return false;
   res.status(e.status || 400).json({
