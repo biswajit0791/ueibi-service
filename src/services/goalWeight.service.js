@@ -42,6 +42,7 @@ export async function goalWeightSummary(goalId, client = prisma) {
       id: true,
       title: true,
       weightLockExempt: true,
+      status: true,
       tasks: {
         select: {
           id: true, title: true, weight: true, status: true,
@@ -56,10 +57,18 @@ export async function goalWeightSummary(goalId, client = prisma) {
   const totalWeight = tasks.reduce((sum, t) => sum + Number(t.weight || 0), 0);
   const isComplete = totalWeight === REQUIRED_TOTAL;
   const exempt = goal.weightLockExempt === true;
-  const locked = !exempt && !isComplete;
+
+  // A goal still waiting for a manager to agree to it is not work yet. The
+  // employee may plan it out — adding tasks and weights is how the manager
+  // sees what they are approving — but nothing can be started. This rides on
+  // the weight lock rather than becoming a second gate, so every endpoint that
+  // already refuses unweighted work refuses unapproved work too.
+  const awaitingApproval = goal.status === 'PENDING_APPROVAL';
+  const locked = awaitingApproval || (!exempt && !isComplete);
 
   return {
     goalId: goal.id,
+    awaitingApproval,
     taskCount: tasks.length,
     totalWeight,
     requiredTotal: REQUIRED_TOTAL,
@@ -74,7 +83,7 @@ export async function goalWeightSummary(goalId, client = prisma) {
     readiness: locked ? 'NOT_READY' : 'READY',
     workStarted: tasks.some(isWorkStarted),
     completedCount: tasks.filter(isWorkComplete).length,
-    reason: lockReason({ locked, exempt, totalWeight, taskCount: tasks.length }),
+    reason: lockReason({ locked, exempt, totalWeight, taskCount: tasks.length, awaitingApproval }),
     tasks: tasks.map((t) => ({
       id: t.id, title: t.title, weight: Number(t.weight || 0),
       status: t.status, employeeId: t.employeeId,
@@ -82,7 +91,10 @@ export async function goalWeightSummary(goalId, client = prisma) {
   };
 }
 
-function lockReason({ locked, exempt, totalWeight, taskCount }) {
+function lockReason({ locked, exempt, totalWeight, taskCount, awaitingApproval }) {
+  if (awaitingApproval) {
+    return 'This goal is waiting for manager approval. You can plan its tasks and weights, but work cannot start until it is approved.';
+  }
   if (exempt) return 'This goal was already under way before task weighting was introduced, so it is exempt from the 100% rule.';
   if (!locked) return 'Task weights total 100%. Execution is unlocked.';
   if (taskCount === 0) return 'This goal has no tasks yet. Add tasks totalling 100% to unlock execution.';
@@ -103,7 +115,9 @@ export async function assertGoalUnlocked(goalId, client = prisma) {
   if (summary.locked) {
     throw {
       status: 409,
-      code: 'GOAL_WEIGHT_INCOMPLETE',
+      // Two different reasons for the same refusal, and the UI wording differs:
+      // one asks the employee to fix weights, the other to wait for a manager.
+      code: summary.awaitingApproval ? 'GOAL_AWAITING_APPROVAL' : 'GOAL_WEIGHT_INCOMPLETE',
       message: summary.reason,
       weightSummary: summary,
     };
@@ -217,7 +231,7 @@ export async function summariseGoals(goalIds, client = prisma) {
   const goals = await client.goal.findMany({
     where: { id: { in: ids } },
     select: {
-      id: true, weightLockExempt: true,
+      id: true, weightLockExempt: true, status: true,
       tasks: { select: { id: true, weight: true, status: true, progress: true, isStandalone: true } },
     },
   });
@@ -227,9 +241,11 @@ export async function summariseGoals(goalIds, client = prisma) {
     const totalWeight = tasks.reduce((sum, t) => sum + Number(t.weight || 0), 0);
     const isComplete = totalWeight === REQUIRED_TOTAL;
     const exempt = goal.weightLockExempt === true;
-    const locked = !exempt && !isComplete;
+    const awaitingApproval = goal.status === 'PENDING_APPROVAL';
+    const locked = awaitingApproval || (!exempt && !isComplete);
     out[goal.id] = {
       goalId: goal.id,
+      awaitingApproval,
       taskCount: tasks.length,
       totalWeight,
       requiredTotal: REQUIRED_TOTAL,
@@ -239,7 +255,7 @@ export async function summariseGoals(goalIds, client = prisma) {
       exempt,
       locked,
       readiness: locked ? 'NOT_READY' : 'READY',
-      reason: lockReason({ locked, exempt, totalWeight, taskCount: tasks.length }),
+      reason: lockReason({ locked, exempt, totalWeight, taskCount: tasks.length, awaitingApproval }),
     };
   }
   return out;

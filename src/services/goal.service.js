@@ -405,6 +405,26 @@ export class GoalService {
     const isManagerRole = String(user.role || '').toUpperCase() === 'MANAGER';
     const isSubordinate = goal.employeeId ? await this.isSubordinate(user.id, goal.employeeId, tenantId) : false;
 
+    // Nobody signs off their own goal.
+    //
+    // `isCreator` and `isAssignedBy` are here for the manager-assigned flow,
+    // where the person who raised the goal is not the person who has to do it.
+    // An employee proposing their own goal is BOTH, so without this check the
+    // approval step would be one they could click for themselves — which is
+    // the same as having no approval step at all.
+    //
+    // A manager or elevated role is not caught by this: their own goals are
+    // created as DRAFT and never reach PENDING_APPROVAL.
+    const isOwnGoal = goal.employeeId === user.id
+      || goal.assignments?.some((a) => a.employeeId === user.id);
+    if (isOwnGoal) {
+      throw {
+        status: 403,
+        code: 'SELF_APPROVAL_FORBIDDEN',
+        message: 'You cannot approve your own goal. It needs a manager or HR to activate it.',
+      };
+    }
+
     const isAuthorized = isElevated || isDirectManager || isCreator || isAssignedBy || isManagerRole || isSubordinate;
     if (!isAuthorized) {
       throw {
@@ -709,8 +729,17 @@ export class GoalService {
       throw { status: 403, message: 'Access forbidden: you are not authorized to review this goal as manager' };
     }
 
-    const reviewedEmpIds = this.resolveReviewTargets(goal, targetEmployeeId, MANAGER_REVIEWABLE, 'manager review');
     const isApprove = action === 'APPROVE';
+
+    // A manager can DECLINE a goal an employee has proposed, as well as reject
+    // completed work. Approving is deliberately not widened the same way:
+    // approving a PENDING_APPROVAL goal means activating it, which is
+    // /activate-approve. Sending it to PENDING_HR_REVIEW from here would skip
+    // the work entirely.
+    const reviewable = isApprove
+      ? MANAGER_REVIEWABLE
+      : [...MANAGER_REVIEWABLE, GOAL_STATUS.PENDING_APPROVAL];
+    const reviewedEmpIds = this.resolveReviewTargets(goal, targetEmployeeId, reviewable, 'manager review');
     const newStatus = isApprove ? GOAL_STATUS.PENDING_HR_REVIEW : GOAL_STATUS.CHANGES_REQUESTED;
 
     if (reviewedEmpIds.length > 0) {
@@ -950,7 +979,20 @@ export class GoalService {
 
     const targetUser = userAssignment?.employee || goal.employee;
     const hasManager = Boolean(targetUser?.managerId);
-    const newStatus = hasManager ? GOAL_STATUS.PENDING_MANAGER_REVIEW : GOAL_STATUS.PENDING_HR_REVIEW;
+
+    // A goal that was declined before it ever started is being RE-PROPOSED, so
+    // it goes back to PENDING_APPROVAL for a manager to activate. Sending it to
+    // PENDING_MANAGER_REVIEW — the review of finished work — would let an
+    // employee walk an unapproved goal straight to HR sign-off with no work
+    // done. "Never started" is read from the goal itself rather than trusted
+    // from the request.
+    const neverActivated = goal.approvalMode === 'MANAGER_APPROVAL'
+      && Number(goal.progress || 0) === 0
+      && !(goal.tasks || []).some((t) => String(t.status || 'todo') !== 'todo' || Number(t.progress || 0) > 0);
+
+    const newStatus = neverActivated
+      ? GOAL_STATUS.PENDING_APPROVAL
+      : (hasManager ? GOAL_STATUS.PENDING_MANAGER_REVIEW : GOAL_STATUS.PENDING_HR_REVIEW);
 
     // Update assignment status independently
     try {

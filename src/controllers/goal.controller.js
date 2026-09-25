@@ -348,9 +348,23 @@ export async function createGoal(req, res, next) {
     let initialStatus;
     let effectiveApprovalMode = null;
 
-    if (isSelfAssigned) {
-      // Flow A: Self-assigned (any role) → DRAFT
+    const selfCreatorIsAuthority = isElevated
+      || String(req.user.role || '').toUpperCase() === 'MANAGER';
+
+    if (isSelfAssigned && selfCreatorIsAuthority) {
+      // Flow A: a manager or an elevated role setting their own goal. They
+      // already hold the authority the approval step exists to apply, and
+      // above SUPER_ADMIN there is nobody to approve it, so this stays DRAFT.
       initialStatus = GOAL_STATUS.DRAFT;
+    } else if (isSelfAssigned) {
+      // Flow A2: an employee proposing their own goal. It needs a manager to
+      // agree before it becomes real work — an employee setting and then
+      // executing their own objectives with nobody signing off is not how the
+      // rest of this workflow behaves. Approval happens at
+      // POST /goals/:id/activate-approve, exactly as for a manager-assigned
+      // goal, so no second approval path exists to keep in step.
+      initialStatus = GOAL_STATUS.PENDING_APPROVAL;
+      effectiveApprovalMode = 'MANAGER_APPROVAL';
     } else if (approvalMode === 'AUTO_APPROVE') {
       // Flow C: Elevated role or Manager + AUTO_APPROVE → ACTIVE immediately
       initialStatus = GOAL_STATUS.ACTIVE;
