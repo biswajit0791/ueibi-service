@@ -6,13 +6,21 @@ const weightSchema = z.preprocess(
   (v) => (v !== undefined && v !== null && v !== '' ? Number(v) : v),
   z.number().int().min(1, 'Weight must be at least 1').max(100, 'Weight cannot exceed 100').nullable().optional()
 );
+/**
+ * Task completion, 0-100.
+ *
+ * Rounded as well as clamped. `progress` is an Int column, so a fractional
+ * value passed the old clamp-only check and then failed inside Prisma as a
+ * 500. That was unreachable while the UI only offered fixed steps; it stopped
+ * being unreachable the moment people could type their own figure.
+ */
 const progressSchema = z.preprocess(
   (v) => {
     if (v === undefined || v === null || v === '') return v;
     const n = Number(v);
-    return Number.isNaN(n) ? n : Math.min(100, Math.max(0, n));
+    return Number.isNaN(n) ? n : Math.round(Math.min(100, Math.max(0, n)));
   },
-  z.number().min(0).max(100).nullable().optional()
+  z.number().int().min(0).max(100).nullable().optional()
 );
 
 export const dependencySchema = z.preprocess(
@@ -55,6 +63,13 @@ export const createTaskSchema = z.object({
   priority: z.string().nullable().optional(),
   startDate: z.string().nullable().optional(),
   dueDate: z.string().nullable().optional(),
+  // When work REALLY began and ended, as opposed to the planned dates above.
+  // Supplied for work that started before it was entered into the system; left
+  // out, they are stamped automatically as the task moves. See the controller
+  // for the two rules that apply: no future dates, and completion not before
+  // start.
+  actualStartDate: z.string().nullable().optional(),
+  actualCompletionDate: z.string().nullable().optional(),
   financialYear: z.string().nullable().optional(),
   tags: z.string().nullable().optional(),
   goalId: z.string().nullable().optional(),
@@ -75,6 +90,8 @@ export const updateTaskSchema = z.object({
   priority: z.string().nullable().optional(),
   startDate: z.string().nullable().optional(),
   dueDate: z.string().nullable().optional(),
+  actualStartDate: z.string().nullable().optional(),
+  actualCompletionDate: z.string().nullable().optional(),
   financialYear: z.string().nullable().optional(),
   tags: z.string().nullable().optional(),
   goalId: z.string().nullable().optional(),
