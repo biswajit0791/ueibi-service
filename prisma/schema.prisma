@@ -255,6 +255,7 @@ model TenantUser {
   subTasksAssigned    SubTask[]            @relation("SubTaskAssignee")
   subTasksCompleted   SubTask[]            @relation("SubTaskCompletedBy")
   subTasksCreated     SubTask[]            @relation("SubTaskCreatedBy")
+  taskWeightsAdjusted Task[]               @relation("TaskWeightAdjustedBy")
   taskAuditLogs       TaskAuditLog[]       @relation("TaskAuditPerformer")
   goalComments        GoalComment[]        @relation("GoalCommentAuthor")
   goalAuditLogs       GoalAuditLog[]       @relation("GoalAuditPerformer")
@@ -818,6 +819,19 @@ model Task {
   /// startDate / dueDate above. Null on tasks that predate this column.
   actualStartDate      DateTime?
   actualCompletionDate DateTime?
+  /// A manager's adjustment to the credit EARNED for this task, typically
+  /// reduced when it was delivered late.
+  ///
+  /// Deliberately separate from `weight`. `weight` is the task's planned share
+  /// of the goal and must total exactly 100 across the goal — changing it
+  /// would move the execution lock and every completion percentage. This is
+  /// the credit awarded on delivery, and it changes no percentage anywhere.
+  /// Null means "not adjusted": the earned credit stands as calculated.
+  managerFinalWeight  Int?
+  weightAdjustedById  String?
+  weightAdjustedBy    TenantUser? @relation("TaskWeightAdjustedBy", fields: [weightAdjustedById], references: [id], onDelete: SetNull)
+  weightAdjustedAt    DateTime?
+  weightAdjustReason  String?     @db.Text
   employeeId     String
   employee       TenantUser     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   description    String?        @db.Text

@@ -146,3 +146,36 @@ export const taskCommentAttachmentQuerySchema = z.object({
   download: z.enum(['true', 'false']).optional(),
 });
 
+
+/**
+ * A manager's adjustment to the credit earned for a task.
+ *
+ * `managerFinalWeight: null` clears the adjustment and lets the calculated
+ * earned credit stand again. The upper bound is checked in the controller,
+ * because it depends on the task's own planned weight.
+ */
+export const finalWeightSchema = z.object({
+  managerFinalWeight: z.preprocess(
+    (v) => (v === undefined || v === null || v === '' ? v : Math.round(Number(v))),
+    z.number().int().min(0).max(100).nullable(),
+  ),
+  reason: z.string().max(500).nullish(),
+}).passthrough();
+
+/**
+ * Filters for the weightage ledger.
+ *
+ * `from`/`to` are a real date range — month, year or an arbitrary window like
+ * 10-20 Sept. They are the reliable filter: `financialYear` on a task is a
+ * free-text string that in live data is variously "FY 2026-27", "all" or null,
+ * so filtering on it alone silently hides work.
+ */
+export const teamWeightageQuerySchema = z.object({
+  fy: z.string().max(20).optional(),
+  from: z.string().max(40).optional(),
+  to: z.string().max(40).optional(),
+  page: z.coerce.number().int().min(1).optional(),
+  // `limit=0` means "every matching row" — what an export needs. Bounded at
+  // 500 otherwise so a page request cannot ask for an unbounded result set.
+  limit: z.coerce.number().int().min(0).max(500).optional(),
+});

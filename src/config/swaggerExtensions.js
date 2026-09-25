@@ -3693,6 +3693,90 @@ export const swaggerExtensions = {
         },
       },
     },
+    '/team/weightage-summary': {
+      get: {
+        tags: ['Tasks'],
+        operationId: 'getTeamWeightageSummary',
+        summary: 'Weightage totals per team member',
+        description: "One row per person on the caller's team, so a directory can show weightage without a request per employee. Scoped by the same visibility rule as the task board, so it can only aggregate work the caller may already see.",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'fy', in: 'query', required: false, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'Totals per member', content: { 'application/json': { schema: { type: 'object', properties: {
+            items: { type: 'array', items: { type: 'object', properties: {
+              employeeId: { type: 'string' }, employeeName: { type: 'string', nullable: true },
+              taskCount: { type: 'integer' }, plannedWeight: { type: 'integer' },
+              completedWeight: { type: 'integer' }, finalWeight: { type: 'integer' },
+              delayedCount: { type: 'integer' }, adjustedCount: { type: 'integer' },
+              adjustmentDelta: { type: 'integer' },
+            } } },
+          } } } } },
+          403: { description: 'You may not view this team' },
+        },
+      },
+    },
+    '/team/{id}/weightage': {
+      get: {
+        tags: ['Tasks'],
+        operationId: 'getTeamWeightage',
+        summary: 'Weightage ledger for a team member',
+        description: "Every task with its PLANNED weight (its share of the goal), the credit EARNED by completing it (planned × progress), whether it ran late, and the manager's FINAL figure. These are three different numbers and are reported separately. Visibility is the same rule the task board uses. `canAdjust` says whether this caller may change the final figures, so the UI need not offer an action the API would refuse.",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Employee id' },
+          { name: 'fy', in: 'query', required: false, schema: { type: 'string' }, description: 'Financial year label. Either spelling is accepted (\"FY 2026-27\" or \"FY 2026-2027\"), and tasks labelled \"all\" or unlabelled are never excluded. Ignored when a date range is given.' },
+          { name: 'from', in: 'query', required: false, schema: { type: 'string', format: 'date' }, description: 'Start of the period. A task belongs to the period it was DUE in; without a due date, the one it started in; without either, when it was created.' },
+          { name: 'to', in: 'query', required: false, schema: { type: 'string', format: 'date' }, description: 'End of the period, inclusive of the whole day.' },
+          { name: 'page', in: 'query', required: false, schema: { type: 'integer', minimum: 1 }, description: 'Defaults to 1.' },
+          { name: 'limit', in: 'query', required: false, schema: { type: 'integer', minimum: 0, maximum: 500 }, description: 'Rows per page, default 25. Pass 0 for every matching row — what an export needs.' },
+        ],
+        responses: {
+          200: { description: 'The ledger', content: { 'application/json': { schema: { type: 'object', properties: {
+            rows: { type: 'array', items: { type: 'object', properties: {
+              taskId: { type: 'string' }, title: { type: 'string' },
+              goalTitle: { type: 'string', nullable: true },
+              plannedWeight: { type: 'integer', description: "The task's share of its goal. Never modified by this feature." },
+              completedWeight: { type: 'integer', description: 'Earned: planned × progress. Derived, never stored.' },
+              managerFinalWeight: { type: 'integer', nullable: true, description: 'Null when no adjustment has been made.' },
+              finalWeight: { type: 'integer', description: 'managerFinalWeight when set, otherwise completedWeight.' },
+              adjustmentDelta: { type: 'integer', nullable: true, description: 'Negative when credit was docked.' },
+              isDelayed: { type: 'boolean' }, delayDays: { type: 'integer' },
+              adjustedBy: { type: 'string', nullable: true }, adjustReason: { type: 'string', nullable: true },
+            } } },
+            pagination: { type: 'object', properties: {
+              page: { type: 'integer' }, limit: { type: 'integer' },
+              total: { type: 'integer' }, totalPages: { type: 'integer' },
+            } },
+            totals: { type: 'object', description: 'Computed across EVERY matching row, not just the page on screen.' },
+            canAdjust: { type: 'boolean' },
+          } } } } },
+          403: { description: 'You may not view this person’s work' },
+        },
+      },
+    },
+    '/tasks/{id}/final-weight': {
+      patch: {
+        tags: ['Tasks'],
+        operationId: 'setTaskFinalWeight',
+        summary: 'Set or clear the manager final weightage',
+        description: "Writes ONLY `managerFinalWeight`. It does not touch `Task.weight`, `Task.progress`, the goal's weight total or the execution lock — docking credit for a late delivery must not silently re-plan the goal. Sending null clears the adjustment so the earned figure stands again. The value may not exceed the task's planned weight, nobody may set it on their own task unless elevated, and every change is written to the task audit log.",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object', required: ['managerFinalWeight'],
+          properties: {
+            managerFinalWeight: { type: 'integer', minimum: 0, maximum: 100, nullable: true, description: 'Null clears the adjustment.' },
+            reason: { type: 'string', maxLength: 500, nullable: true },
+          },
+        } } } },
+        responses: {
+          200: { description: 'The updated ledger row' },
+          400: { description: 'Validation failed, or the value exceeds the planned weight' },
+          403: { description: 'Not permitted to set the final weightage' },
+          404: { description: 'Task not found' },
+        },
+      },
+    },
     '/subtasks': {
       get: {
         tags: ['Tasks'],
