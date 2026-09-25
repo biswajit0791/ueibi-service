@@ -835,16 +835,18 @@ model Task {
   @@map("tasks")
 }
 
-/// A checklist item under a Task.
+/// A sub-task under a Task.
+///
 ///
 /// Deliberately its own model rather than a Task with a parent pointer. A
 /// sub-task carries no weight and no progress, and adding `parentTaskId` to
 /// Task would have pulled every checklist item into the goal's 100% weight
 /// total and the execution lock that depends on it.
 ///
-/// Its purpose is visibility: what someone is actually working through inside
-/// a task, and when each piece was finished. It never changes the task's
-/// percentage.
+/// It carries everything a task does EXCEPT weight: title, description,
+/// assignee, planned dates and actual dates. Weight is deliberately absent —
+/// a sub-task is a record of what is being worked through, and it never
+/// changes the parent task's percentage or the goal's 100% total.
 model SubTask {
   id            String      @id @default(cuid())
   tenantId      String
@@ -852,12 +854,21 @@ model SubTask {
   taskId        String
   task          Task        @relation(fields: [taskId], references: [id], onDelete: Cascade)
   title         String
+  description   String?     @db.Text
   isDone        Boolean     @default(false)
   /// Who is meant to do this piece. Null means whoever owns the parent task.
+  /// Assignment follows the SAME role hierarchy as task assignment.
   assigneeId    String?
   assignee      TenantUser? @relation("SubTaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
-  /// When it was ticked, and by whom — this is the time-tracking record.
-  completedAt   DateTime?
+  /// Planned dates.
+  startDate     DateTime?
+  dueDate       DateTime?
+  /// When work on this piece really began and really finished. Same rules as a
+  /// task: they may be back-dated but never set in the future, and completion
+  /// may not precede the start. Ticking the item stamps the completion.
+  actualStartDate      DateTime?
+  actualCompletionDate DateTime?
+  /// Who ticked it.
   completedById String?
   completedBy   TenantUser? @relation("SubTaskCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
   position      Int         @default(0)

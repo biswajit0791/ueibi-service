@@ -119,7 +119,7 @@ function sendWeightError(res, e) {
 // ─── Helper: resolve & authorise target employee ───────────────────────────
 // Returns the TenantUser record that will own the task.
 // Verifies the employee belongs to the SAME tenant as the requesting user.
-async function resolveTargetEmployee(requestingUser, tenantId, employeeId, parentTask = null, goalId = null) {
+export async function resolveTargetEmployee(requestingUser, tenantId, employeeId, parentTask = null, goalId = null) {
   // If no employeeId supplied → default to the requesting user themselves
   if (!employeeId) {
     return { id: requestingUser.id };
@@ -168,6 +168,17 @@ async function resolveTargetEmployee(requestingUser, tenantId, employeeId, paren
   const targetRole = String(targetUser.role || '').toUpperCase();
   const elevatedRoleList = ['SUPER_ADMIN', 'ADMIN', 'HR', 'CMD', 'DIRECTOR', 'OWNER', 'LEADERSHIP'];
 
+  // Who a MANAGER may not hand work to: their peers, anyone above them, and
+  // FINANCE.
+  //
+  // This is a separate list from the one above on purpose. `elevatedRoleList`
+  // answers "who may assign to other people at all", and FINANCE must NOT be
+  // in that — a finance user assigns only to themselves, like an employee.
+  // But it was also being used to answer "who is off-limits to a manager",
+  // and because FINANCE was absent from it, a manager could assign work to
+  // the finance head. One list cannot answer both questions.
+  const managerMayNotAssignTo = [...elevatedRoleList, 'MANAGER', 'FINANCE'];
+
   // Regular EMPLOYEE: Cannot assign main tasks to other people (especially higher roles)
   if (callerRole === 'EMPLOYEE' || !['MANAGER', ...elevatedRoleList].includes(callerRole)) {
     throw {
@@ -178,8 +189,8 @@ async function resolveTargetEmployee(requestingUser, tenantId, employeeId, paren
 
   // MANAGER:
   if (callerRole === 'MANAGER') {
-    // Cannot assign tasks to peer managers or higher authority roles (HR, Admin, etc.)
-    if (elevatedRoleList.includes(targetRole) || targetRole === 'MANAGER') {
+    // Cannot assign to peer managers, higher authority roles, or FINANCE.
+    if (managerMayNotAssignTo.includes(targetRole)) {
       throw {
         status: 403,
         message: `Access forbidden: managers cannot assign tasks to peer or higher authority roles (${targetRole})`,
