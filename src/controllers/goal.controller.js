@@ -15,7 +15,7 @@ import { goalService, GOAL_CATEGORIES, GOAL_TYPES, GOAL_PRIORITIES, GOAL_STATUS 
 import { goalWeightSummary, summariseGoals } from '../services/goalWeight.service.js';
 import { taskTiming } from '../lib/taskTiming.js';
 import goalOptionService from '../services/goalOption.service.js';
-import { ELEVATED_ROLES, SUPER_ELEVATED_ROLES, hasRole, canViewDashboard } from '../lib/roles.js';
+import { ELEVATED_ROLES, SUPER_ELEVATED_ROLES, MANAGER_OR_ELEVATED_ROLES, hasRole, canViewDashboard } from '../lib/roles.js';
 import { getCurrentFinancialYear, getCurrentQuarter } from '../lib/financialYear.js';
 import { GOAL_EDITABLE_STATUSES } from '../lib/workflowStatus.js';
 
@@ -937,8 +937,16 @@ export async function updateGoal(req, res, next) {
 
     // ── Add new assignees (elevated roles only) ─────────────────────────────
     if (addEmployeeIds && addEmployeeIds.length > 0) {
-      if (!hasRole(req.user.role, ELEVATED_ROLES)) {
-        return res.status(403).json({ error: 'Only HR / Admin can add new assignees to an existing goal.' });
+      const callerRole = String(req.user.role || '').toUpperCase();
+      const callerIsElevated = hasRole(req.user.role, ELEVATED_ROLES);
+      const callerIsManager = callerRole === 'MANAGER';
+
+      // A line manager can put people on a goal they oversee. Restricting this
+      // to HR/Admin meant a manager who had just approved a goal could not add
+      // themselves or a colleague to it, which is the ordinary case, not an
+      // administrative one.
+      if (!callerIsElevated && !callerIsManager) {
+        return res.status(403).json({ error: 'Only a manager, HR or Admin can add assignees to an existing goal.' });
       }
 
       // Determine which employees are not already assigned
@@ -968,6 +976,46 @@ export async function updateGoal(req, res, next) {
           const blockedNames = blockedUsers.map((u) => `${u.name} (${u.role})`).join(', ');
           return res.status(403).json({
             error: `Only SUPER_ADMIN or ADMIN can assign goals to: ${blockedNames}.`,
+          });
+        }
+
+        // A manager's reach is their own line, the same rule goal CREATION
+        // applies — reusing it rather than inventing a second one that could
+        // drift. Adding THEMSELVES is always allowed: a manager co-owning a
+        // goal they supervise is the case this whole fix exists for.
+        if (callerIsManager && !callerIsElevated) {
+          const caller = await prisma.tenantUser.findUnique({
+            where: { id: req.user.id }, select: { department: true },
+          });
+          for (const u of filteredUsers) {
+            if (u.id === req.user.id) continue;
+            if (hasRole(u.role, MANAGER_OR_ELEVATED_ROLES)) {
+              return res.status(403).json({
+                error: `Managers cannot assign goals to peer or higher authority roles: ${u.name} (${u.role}).`,
+              });
+            }
+            const target = await prisma.tenantUser.findUnique({
+              where: { id: u.id }, select: { department: true, managerId: true },
+            });
+            const isSubordinate = await checkIsSubordinate(req.user.id, u.id, req.tenantId);
+            const isSameDept = caller?.department && target?.department === caller.department;
+            const hasNoExplicitManager = !target?.managerId;
+            if (!isSubordinate && !isSameDept && !hasNoExplicitManager) {
+              return res.status(403).json({
+                error: `Access forbidden: "${u.name}" is not in your reporting downline or department.`,
+              });
+            }
+          }
+        }
+
+        // An id that matched nobody in this tenant used to be dropped in
+        // silence, so the caller got a 200 and an unchanged goal. Say so
+        // instead — a request that did nothing should not look like success.
+        const unresolved = newIds.filter((empId) => !validUsers.some((u) => u.id === empId));
+        if (unresolved.length > 0) {
+          return res.status(400).json({
+            error: `These users are not in your organisation: ${unresolved.join(', ')}`,
+            unresolvedEmployeeIds: unresolved,
           });
         }
 

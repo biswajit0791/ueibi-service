@@ -1,6 +1,6 @@
 import { prisma } from '../lib/prisma.js';
 import { emitToTenant, emitToUser } from '../lib/socket.js';
-import { ELEVATED_ROLES, HR_ROLES, hasRole } from '../lib/roles.js';
+import { ELEVATED_ROLES, HR_ROLES, MANAGER_OR_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
 
 export const GOAL_CATEGORIES = [
   'Technical Skills',
@@ -248,6 +248,32 @@ export class GoalService {
     for (const targetId of targets) {
       if (await this.isSubordinate(user.id, targetId, tenantId)) return true;
     }
+
+    // A line manager's reach.
+    //
+    // This used to stop at the managerId chain, while listGoals and createGoal
+    // have always used a wider rule: subordinate, OR same department, OR the
+    // person has no explicit manager. The result was a manager who could SEE a
+    // goal in their list and APPROVE it, but got 403 trying to edit it — and
+    // with 15 of 16 employees having no manager set, that was most goals.
+    // Matching the rule the rest of the module already applies.
+    if (String(user.role || '').toUpperCase() === 'MANAGER') {
+      const caller = await prisma.tenantUser.findUnique({
+        where: { id: user.id }, select: { department: true },
+      });
+      for (const targetId of targets) {
+        const target = await prisma.tenantUser.findFirst({
+          where: { id: targetId, tenantId },
+          select: { role: true, department: true, managerId: true },
+        });
+        if (!target) continue;
+        // Never a peer manager or anyone above — the same guard listGoals uses.
+        if (hasRole(target.role, MANAGER_OR_ELEVATED_ROLES)) continue;
+        const sameDept = caller?.department && target.department === caller.department;
+        if (sameDept || !target.managerId) return true;
+      }
+    }
+
     return false;
   }
 
