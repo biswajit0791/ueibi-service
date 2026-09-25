@@ -3,6 +3,7 @@ import { createTask, listTasks, updateTaskStatus, updateTask, deleteTask } from 
 import {
   listSubTasks, createSubTask, updateSubTask, deleteSubTask, reorderSubTasks, listBoardSubTasks,
 } from '../controllers/subTask.controller.js';
+import { getTeamWeightage, setTaskFinalWeight, getTeamWeightageSummary } from '../controllers/taskWeightage.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
 
@@ -14,6 +15,17 @@ router.patch('/tasks/:id/status', requireAuth, requireTenant, updateTaskStatus);
 router.patch('/tasks/:id', requireAuth, requireTenant, updateTask);
 router.put('/tasks/:id', requireAuth, requireTenant, updateTask);
 router.delete('/tasks/:id', requireAuth, requireTenant, deleteTask);
+
+// ── Weightage ledger ───────────────────────────────────────────────────────
+// What each task was planned to be worth, what completing it earned, whether
+// it ran late, and the manager's final figure. Setting the final weightage
+// writes ONLY to managerFinalWeight — never to Task.weight, so the goal's
+// 100% rule and execution lock are untouched.
+// Registered BEFORE '/team/:id/weightage' so the literal path is not
+// swallowed by the :id parameter.
+router.get('/team/weightage-summary', requireAuth, requireTenant, getTeamWeightageSummary);
+router.get('/team/:id/weightage', requireAuth, requireTenant, getTeamWeightage);
+router.patch('/tasks/:id/final-weight', requireAuth, requireTenant, setTaskFinalWeight);
 
 // ── Sub-tasks ──────────────────────────────────────────────────────────────
 // A checklist under a task: what someone is working through, and when each
