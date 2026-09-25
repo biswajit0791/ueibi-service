@@ -11,6 +11,89 @@ import {
 } from '../services/goalWeight.service.js';
 import { timingUpdates, isWorkStarted, taskTiming } from '../lib/taskTiming.js';
 
+// ─── Helper: actual start / completion dates ───────────────────────────────
+//
+// These are normally stamped automatically as a task moves, which is what
+// makes the delay figures trustworthy. They can also be entered by hand, for
+// the real case of work that began before it was entered into the system.
+//
+// Two rules apply, and they are asymmetric on purpose:
+//   - BACKWARDS is allowed. Recording that work actually started last Tuesday
+//     is the whole point of letting these be set.
+//   - FORWARDS is not. A task cannot have started or finished in the future;
+//     that is not a correction, it is nonsense, and it would produce negative
+//     delays that quietly flatter the numbers.
+// Completion may also not precede the start.
+function resolveActualDates({ suppliedStart, suppliedCompletion, auto, existing = {} }) {
+  const out = { ...auto };
+  const now = Date.now();
+
+  const parse = (value, label) => {
+    if (value === undefined) return undefined;
+    if (value === null || value === '') return null;
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) {
+      throw { status: 400, message: `${label} is not a valid date` };
+    }
+    if (d.getTime() > now) {
+      throw { status: 400, message: `${label} cannot be in the future` };
+    }
+    return d;
+  };
+
+  const start = parse(suppliedStart, 'Actual start date');
+  const completion = parse(suppliedCompletion, 'Actual completion date');
+
+  if (start !== undefined) out.actualStartDate = start;
+  if (completion !== undefined) out.actualCompletionDate = completion;
+
+  // When a completion date is recorded by hand and no start date is known,
+  // do NOT keep the automatic start of "now". Auto-stamping assumes a task
+  // completed without ever being started began at the moment it finished,
+  // which is fine live but wrong for history: it would place the start after
+  // the completion and trip the ordering rule below with a confusing message.
+  // An unknown start is better recorded as unknown.
+  if (completion !== undefined && completion !== null
+      && start === undefined && !existing.actualStartDate) {
+    delete out.actualStartDate;
+  }
+
+  const finalStart = out.actualStartDate !== undefined ? out.actualStartDate : existing.actualStartDate;
+  const finalCompletion = out.actualCompletionDate !== undefined
+    ? out.actualCompletionDate : existing.actualCompletionDate;
+
+  if (finalStart && finalCompletion && new Date(finalCompletion) < new Date(finalStart)) {
+    throw { status: 400, message: 'Actual completion date cannot be earlier than the actual start date' };
+  }
+
+  return {
+    data: out,
+    manuallySet: start !== undefined || completion !== undefined,
+  };
+}
+
+/**
+ * A task carrying an actual completion date IS complete.
+ *
+ * Without this, recording "this ran from the 11th to the 22nd" on a new task
+ * left it at todo/0% while holding a completion date, and the timing helper
+ * quite rightly called it OVERDUE. That is contradictory data, not a reporting
+ * bug. So: recording a completion date completes the task, and stating the
+ * opposite outright is refused rather than silently resolved one way.
+ */
+function reconcileCompletion({ completionDate, status, progress }) {
+  if (!completionDate) return null;
+  const saysIncomplete = (status !== undefined && status !== null && status !== 'done')
+    || (progress !== undefined && progress !== null && Number(progress) < 100);
+  if (saysIncomplete) {
+    throw {
+      status: 400,
+      message: 'A task with an actual completion date is complete. Either clear the completion date, or set the task to 100%.',
+    };
+  }
+  return { status: 'done', progress: 100 };
+}
+
 // ─── Helper: weight-rule failures ──────────────────────────────────────────
 // These carry a summary the UI needs (what the total is, what is missing), so
 // they are answered here rather than handed to the generic error handler,
@@ -169,7 +252,7 @@ export async function createTask(req, res, next) {
       title, priority, startDate, dueDate, financialYear,
       tags, goalId, isPrivate, isStandalone, weight,
       description, employeeId, employeeIds, dependency, isDependencyOf,
-      status, progress,
+      status, progress, actualStartDate, actualCompletionDate,
     } = parsed.data;
 
     // 3. Date validation: dueDate must not be earlier than startDate
@@ -237,15 +320,72 @@ export async function createTask(req, res, next) {
       }
     }
 
-    // 5c. A task may only be CREATED already in flight when the goal's own
+    // 5c. Actual dates: auto-stamped, or as supplied for work that began
+    //     before it was entered here.
+    //
+    //     The contradiction is checked FIRST. "Finished on the 23rd, 40% done"
+    //     is a statement about the work, and saying so plainly beats the date
+    //     ordering rule catching it afterwards and blaming the timestamps.
+    let effStatus = status || 'todo';
+    let effProgress = progress || 0;
+    try {
+      const done = reconcileCompletion({
+        completionDate: actualCompletionDate, status, progress,
+      });
+      if (done) { effStatus = done.status; effProgress = done.progress; }
+    } catch (e) {
+      return res.status(e.status || 400).json({ success: false, message: e.message });
+    }
+
+    let actualDates;
+    try {
+      actualDates = resolveActualDates({
+        suppliedStart: actualStartDate,
+        suppliedCompletion: actualCompletionDate,
+        auto: timingUpdates({}, { status: effStatus, progress: effProgress }),
+      });
+    } catch (e) {
+      return res.status(e.status || 400).json({ success: false, message: e.message });
+    }
+
+    // 5d. A task may only be CREATED already in flight when the goal's own
     //     execution is unlocked. Creating plain 'todo' tasks is how a locked
     //     goal reaches 100% in the first place, so that is never blocked.
-    if (resolvedGoalId && isWorkStarted({ status, progress })) {
-      try {
-        await assertGoalUnlocked(resolvedGoalId);
-      } catch (e) {
-        if (sendWeightError(res, e)) return;
-        return res.status(e.status || 500).json({ success: false, message: e.message });
+    //     Measured on the EFFECTIVE state: recording a completion date makes
+    //     the task done, and that is work landing on the goal like any other.
+    //
+    //     The weight is measured on the goal as it will be ONCE THIS TASK
+    //     EXISTS, not as it is now. Checking the current total made the first
+    //     task on a goal impossible to create in flight: an empty goal is at
+    //     0%, so adding its one 100%-weight task was refused for leaving the
+    //     goal unplanned — by a check that ran before the very task that
+    //     completes the plan. Approval is still judged on the goal as it
+    //     stands, because adding a task does not approve anything.
+    if (resolvedGoalId && isWorkStarted({ status: effStatus, progress: effProgress })) {
+      const summary = await goalWeightSummary(resolvedGoalId);
+      if (summary?.awaitingApproval) {
+        return res.status(409).json({
+          success: false,
+          code: 'GOAL_AWAITING_APPROVAL',
+          error: summary.reason,
+          message: summary.reason,
+          weightSummary: summary,
+        });
+      }
+      if (summary && !summary.exempt) {
+        const projected = summary.totalWeight + (resolvedWeight * targetEmployeeIds.length);
+        if (projected !== 100) {
+          const reason = projected > 100
+            ? `Task weights for this goal would total ${projected}%, which exceeds 100%.`
+            : `Task weights would total ${projected}%. A goal must be fully planned at 100% before work can be recorded against it.`;
+          return res.status(409).json({
+            success: false,
+            code: 'GOAL_WEIGHT_INCOMPLETE',
+            error: reason,
+            message: reason,
+            weightSummary: { ...summary, projectedTotal: projected },
+          });
+        }
       }
     }
 
@@ -287,8 +427,8 @@ export async function createTask(req, res, next) {
             data: {
               title: title.trim(),
               priority: priority || 'medium',
-              status: status || 'todo',
-              progress: progress || 0,
+              status: effStatus,
+              progress: effProgress,
               startDate: startDate ? new Date(startDate) : undefined,
               dueDate: dueDate ? new Date(dueDate) : undefined,
               financialYear: financialYear || null,
@@ -299,8 +439,9 @@ export async function createTask(req, res, next) {
               description: description || null,
               dependency: dependency || null,
               isDependencyOf: isDependencyOf || null,
-              // A task created already in progress has actually started now.
-              ...timingUpdates({}, { status: status || 'todo', progress: progress || 0 }),
+              // A task created already in progress has actually started now,
+              // unless the caller recorded when it really began.
+              ...actualDates.data,
               // ─ Relations ─
               employee: { connect: { id: target.id } },
               tenant: { connect: { id: tenantId } },
@@ -328,6 +469,20 @@ export async function createTask(req, res, next) {
         action: 'created',
         details: `Task "${task.title}" created.`,
       });
+
+      // An actual date entered by hand is recorded, so a back-dated task can
+      // always be told apart from one the system stamped itself.
+      if (actualDates.manuallySet) {
+        const parts = [];
+        if (task.actualStartDate) parts.push(`actual start ${task.actualStartDate.toISOString().slice(0, 10)}`);
+        if (task.actualCompletionDate) parts.push(`actual completion ${task.actualCompletionDate.toISOString().slice(0, 10)}`);
+        await logTaskAudit({
+          taskId: task.id,
+          performedById: req.user.id,
+          action: 'edited',
+          details: `Actual dates entered manually at creation: ${parts.join(', ') || 'cleared'}.`,
+        }).catch(() => {});
+      }
 
       emitToTenant(tenantId, 'task_updated', {
         action: 'create',
@@ -627,6 +782,7 @@ export async function updateTask(req, res, next) {
       title, priority, startDate, dueDate, financialYear,
       tags, goalId, isPrivate, isStandalone, weight,
       description, status, progress, dependency, isDependencyOf, employeeId,
+      actualStartDate, actualCompletionDate,
     } = parsed.data;
 
     // Date validation on update too
@@ -776,13 +932,43 @@ export async function updateTask(req, res, next) {
       && Number(weight) !== Number(existing.weight)
       && (isElevated || isDirectManager);
 
-    const runUpdate = (tx) => tx.task.update({
-      where: { id },
-      data: {
-        ...timingUpdates(existing, {
+    // Actual dates: whatever the movement implies, overridden by anything the
+    // caller recorded explicitly.
+    let actualDates;
+    try {
+      actualDates = resolveActualDates({
+        suppliedStart: actualStartDate,
+        suppliedCompletion: actualCompletionDate,
+        auto: timingUpdates(existing, {
           status: finalStatus !== undefined ? finalStatus : existing.status,
           progress: finalProgress !== undefined ? finalProgress : existing.progress,
         }),
+        existing,
+      });
+    } catch (e) {
+      return res.status(e.status || 400).json({ success: false, message: e.message });
+    }
+
+    // Recording a completion date completes the task here too. Only applied
+    // when a completion date is being SET in this request — an edit that
+    // merely touches the title must not resurrect a done flag from a date the
+    // task already held.
+    if (actualCompletionDate !== undefined && actualCompletionDate !== null && actualCompletionDate !== '') {
+      try {
+        const done = reconcileCompletion({
+          completionDate: actualDates.data.actualCompletionDate,
+          status, progress,
+        });
+        if (done) { finalStatus = done.status; finalProgress = done.progress; }
+      } catch (e) {
+        return res.status(e.status || 400).json({ success: false, message: e.message });
+      }
+    }
+
+    const runUpdate = (tx) => tx.task.update({
+      where: { id },
+      data: {
+        ...actualDates.data,
         ...(title !== undefined && { title: title.trim() }),
         ...(priority !== undefined && { priority }),
         ...(finalStatus !== undefined && { status: finalStatus }),
@@ -894,6 +1080,25 @@ export async function updateTask(req, res, next) {
       action,
       details,
     });
+
+    // A hand-entered actual date leaves a trail of its own, naming what it was
+    // before. Delay figures are only worth anything if a correction is visible.
+    if (actualDates.manuallySet) {
+      const show = (d) => (d ? new Date(d).toISOString().slice(0, 10) : 'not recorded');
+      const changes = [];
+      if (actualStartDate !== undefined) {
+        changes.push(`actual start ${show(existing.actualStartDate)} → ${show(updated.actualStartDate)}`);
+      }
+      if (actualCompletionDate !== undefined) {
+        changes.push(`actual completion ${show(existing.actualCompletionDate)} → ${show(updated.actualCompletionDate)}`);
+      }
+      await logTaskAudit({
+        taskId: id,
+        performedById: req.user.id,
+        action: 'edited',
+        details: `Actual dates changed by hand: ${changes.join('; ')}.`,
+      }).catch(() => {});
+    }
 
     emitToTenant(tenantId, 'task_updated', {
       action: 'update',

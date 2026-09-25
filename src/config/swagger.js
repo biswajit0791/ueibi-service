@@ -601,6 +601,8 @@ const options = {
             isPrivate: { type: 'boolean', example: false },
             isStandalone: { type: 'boolean', example: false },
             weight: { type: 'integer', minimum: 1, maximum: 100, example: 30, description: 'Percentage share of the parent goal. Omit it and the API assigns whatever is left of the goal’s 100%, so a goal cannot silently become unreachable. Rejected with GOAL_WEIGHT_EXCEEDED if it would take the goal past 100% (grandfathered goals are exempt).' },
+            actualStartDate: { type: 'string', format: 'date-time', nullable: true, description: 'When work REALLY began. Omit it and it is stamped automatically the first time the task leaves ‘todo’. Supply it to record work that started before it was entered here. May be back-dated but NOT set in the future, and any manual entry is written to the task audit log.' },
+            actualCompletionDate: { type: 'string', format: 'date-time', nullable: true, description: 'When work REALLY finished. Stamped automatically at 100% if omitted. May not precede actualStartDate, may not be in the future, and a manual entry is audited.' },
             description: { type: 'string', example: 'Create endpoints for adding items to cart' },
             employeeId: { type: 'string', example: 'cmtclxzzq0001uuek23nbb04s' },
             dependency: { $ref: '#/components/schemas/TaskDependency', nullable: true },
@@ -3286,7 +3288,8 @@ const options = {
               content: { 'application/json': { schema: { type: 'object', properties: {
                 goalId: { type: 'string' },
                 taskCount: { type: 'integer' },
-                totalWeight: { type: 'integer', example: 80 },
+                totalWeight: { type: 'integer', example: 100, description: 'How much of the goal has been PLANNED — the sum of task weights. A gate, not progress.' },
+                completionPercent: { type: 'integer', example: 50, description: 'How much of the goal is DONE, weighted by task weight. A goal with a 50%-weight task finished and a 50%-weight task untouched is 100 allocated and 50 complete. Same formula as the goal’s stored progress.' },
                 requiredTotal: { type: 'integer', example: 100 },
                 remaining: { type: 'integer', example: 20, description: 'Negative when over-allocated.' },
                 isComplete: { type: 'boolean', description: 'totalWeight is exactly 100.' },

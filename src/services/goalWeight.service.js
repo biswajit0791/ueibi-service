@@ -69,6 +69,8 @@ export async function goalWeightSummary(goalId, client = prisma) {
   return {
     goalId: goal.id,
     awaitingApproval,
+    /** How much of the goal is DONE. Deliberately distinct from totalWeight. */
+    completionPercent: weightedCompletion(tasks),
     taskCount: tasks.length,
     totalWeight,
     requiredTotal: REQUIRED_TOTAL,
@@ -86,9 +88,31 @@ export async function goalWeightSummary(goalId, client = prisma) {
     reason: lockReason({ locked, exempt, totalWeight, taskCount: tasks.length, awaitingApproval }),
     tasks: tasks.map((t) => ({
       id: t.id, title: t.title, weight: Number(t.weight || 0),
+      progress: Number(t.progress || 0),
       status: t.status, employeeId: t.employeeId,
     })),
   };
+}
+
+/**
+ * Weighted completion across a goal's tasks: how much of the goal is actually
+ * DONE, as opposed to how much of it has been planned.
+ *
+ * These two are easy to confuse and were being shown as one number. A goal
+ * with a 50%-weight task finished and a 50%-weight task untouched is 100%
+ * ALLOCATED but only 50% COMPLETE. The panel reported "100%", which reads as
+ * finished when nothing of the sort is true.
+ *
+ * Same formula as goalService.recalculateProgress, so this figure and the
+ * goal's stored `progress` cannot drift apart.
+ */
+function weightedCompletion(tasks) {
+  const totalWeight = tasks.reduce((sum, t) => sum + Number(t.weight || 0), 0);
+  if (totalWeight <= 0) return 0;
+  const earned = tasks.reduce(
+    (sum, t) => sum + (Number(t.progress || 0) * Number(t.weight || 0)), 0,
+  );
+  return Math.min(100, Math.round(earned / totalWeight));
 }
 
 function lockReason({ locked, exempt, totalWeight, taskCount, awaitingApproval }) {
@@ -246,6 +270,7 @@ export async function summariseGoals(goalIds, client = prisma) {
     out[goal.id] = {
       goalId: goal.id,
       awaitingApproval,
+      completionPercent: weightedCompletion(tasks),
       taskCount: tasks.length,
       totalWeight,
       requiredTotal: REQUIRED_TOTAL,

@@ -81,6 +81,7 @@ model Tenant {
   goals                Goal[]
   goalAssignments      GoalAssignment[]
   tasks                Task[]
+  subTasks             SubTask[]
   policies             Policy[]
   policyAssignments    PolicyAssignment[]
   policyAcceptances    PolicyAcceptance[]
@@ -251,6 +252,9 @@ model TenantUser {
 
   // Activity & Notifications
   taskComments        TaskComment[]        @relation("TaskCommentAuthor")
+  subTasksAssigned    SubTask[]            @relation("SubTaskAssignee")
+  subTasksCompleted   SubTask[]            @relation("SubTaskCompletedBy")
+  subTasksCreated     SubTask[]            @relation("SubTaskCreatedBy")
   taskAuditLogs       TaskAuditLog[]       @relation("TaskAuditPerformer")
   goalComments        GoalComment[]        @relation("GoalCommentAuthor")
   goalAuditLogs       GoalAuditLog[]       @relation("GoalAuditPerformer")
@@ -820,6 +824,7 @@ model Task {
   dependency     Json? // serialised dep object: { assigneeId, depTitle, status, escalated, depTaskId }
   isDependencyOf String? // parent task ID this task is a companion dep of
   comments       TaskComment[]
+  subTasks       SubTask[]
   auditLogs      TaskAuditLog[]
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
@@ -828,6 +833,43 @@ model Task {
   @@index([employeeId])
   @@index([goalId])
   @@map("tasks")
+}
+
+/// A checklist item under a Task.
+///
+/// Deliberately its own model rather than a Task with a parent pointer. A
+/// sub-task carries no weight and no progress, and adding `parentTaskId` to
+/// Task would have pulled every checklist item into the goal's 100% weight
+/// total and the execution lock that depends on it.
+///
+/// Its purpose is visibility: what someone is actually working through inside
+/// a task, and when each piece was finished. It never changes the task's
+/// percentage.
+model SubTask {
+  id            String      @id @default(cuid())
+  tenantId      String
+  tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  taskId        String
+  task          Task        @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  title         String
+  isDone        Boolean     @default(false)
+  /// Who is meant to do this piece. Null means whoever owns the parent task.
+  assigneeId    String?
+  assignee      TenantUser? @relation("SubTaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  /// When it was ticked, and by whom — this is the time-tracking record.
+  completedAt   DateTime?
+  completedById String?
+  completedBy   TenantUser? @relation("SubTaskCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+  position      Int         @default(0)
+  createdById   String?
+  createdBy     TenantUser? @relation("SubTaskCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@index([tenantId])
+  @@index([taskId])
+  @@index([assigneeId])
+  @@map("sub_tasks")
 }
 
 // ── Task Activity ──────────────────────────────────────────────────────────

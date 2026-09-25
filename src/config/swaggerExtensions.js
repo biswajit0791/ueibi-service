@@ -3693,6 +3693,166 @@ export const swaggerExtensions = {
         },
       },
     },
+    '/tasks/{id}/subtasks': {
+      get: {
+        tags: ['Tasks'],
+        operationId: 'listSubTasks',
+        summary: 'Checklist under a task',
+        description: "A sub-task is a record of what someone is working through inside a task. It carries no weight and no progress: ticking one NEVER changes the parent task's percentage or the goal's 100% weight total. `checklistPercent` in the response is for display only and is not written anywhere. Access is inherited from the parent task.",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'The checklist and its counts', content: { 'application/json': { schema: { type: 'object', properties: {
+              items: { type: 'array', items: { type: 'object', properties: {
+                id: { type: 'string' }, taskId: { type: 'string' }, title: { type: 'string' },
+                isDone: { type: 'boolean' }, position: { type: 'integer' },
+                assigneeId: { type: 'string', nullable: true },
+                completedAt: { type: 'string', format: 'date-time', nullable: true },
+                completedById: { type: 'string', nullable: true },
+                assignee: { type: 'object', nullable: true },
+                completedBy: { type: 'object', nullable: true },
+              } } },
+              total: { type: 'integer' }, done: { type: 'integer' },
+              checklistPercent: { type: 'integer', description: 'Display only. Never written to the task.' },
+            } } } } },
+          403: { description: 'You cannot act on this task' },
+          404: { description: 'Task not found' },
+        },
+      },
+      post: {
+        tags: ['Tasks'],
+        operationId: 'createSubTask',
+        summary: 'Add a checklist item',
+        description: "A sub-task is a record of what someone is working through inside a task. It carries no weight and no progress: ticking one NEVER changes the parent task's percentage or the goal's 100% weight total. `checklistPercent` in the response is for display only and is not written anywhere. `assigneeId` hands the piece to a specific colleague in the same tenant; null means whoever owns the parent task.",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object', required: ['title'],
+          properties: {
+            title: { type: 'string', maxLength: 300 },
+            assigneeId: { type: 'string', nullable: true },
+            isDone: { type: 'boolean' },
+            position: { type: 'integer', minimum: 0, maximum: 9999 },
+          },
+        } } } },
+        responses: {
+          201: { description: 'Created', content: { 'application/json': { schema: { type: 'object', properties: {
+              items: { type: 'array', items: { type: 'object', properties: {
+                id: { type: 'string' }, taskId: { type: 'string' }, title: { type: 'string' },
+                isDone: { type: 'boolean' }, position: { type: 'integer' },
+                assigneeId: { type: 'string', nullable: true },
+                completedAt: { type: 'string', format: 'date-time', nullable: true },
+                completedById: { type: 'string', nullable: true },
+                assignee: { type: 'object', nullable: true },
+                completedBy: { type: 'object', nullable: true },
+              } } },
+              total: { type: 'integer' }, done: { type: 'integer' },
+              checklistPercent: { type: 'integer', description: 'Display only. Never written to the task.' },
+            } } } } },
+          400: { description: 'Validation failed, or the assignee is not in your organisation' },
+          403: { description: 'You cannot act on this task' },
+        },
+      },
+    },
+    '/tasks/{id}/subtasks-order': {
+      patch: {
+        tags: ['Tasks'],
+        operationId: 'reorderSubTasks',
+        summary: 'Reorder the checklist',
+        description: "Every id supplied must already belong to this task; a stray one is rejected rather than silently ignored. A sub-task is a record of what someone is working through inside a task. It carries no weight and no progress: ticking one NEVER changes the parent task's percentage or the goal's 100% weight total. `checklistPercent` in the response is for display only and is not written anywhere.",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object', required: ['order'],
+          properties: { order: { type: 'array', maxItems: 200, items: { type: 'string' } } },
+        } } } },
+        responses: {
+          200: { description: 'Reordered', content: { 'application/json': { schema: { type: 'object', properties: {
+              items: { type: 'array', items: { type: 'object', properties: {
+                id: { type: 'string' }, taskId: { type: 'string' }, title: { type: 'string' },
+                isDone: { type: 'boolean' }, position: { type: 'integer' },
+                assigneeId: { type: 'string', nullable: true },
+                completedAt: { type: 'string', format: 'date-time', nullable: true },
+                completedById: { type: 'string', nullable: true },
+                assignee: { type: 'object', nullable: true },
+                completedBy: { type: 'object', nullable: true },
+              } } },
+              total: { type: 'integer' }, done: { type: 'integer' },
+              checklistPercent: { type: 'integer', description: 'Display only. Never written to the task.' },
+            } } } } },
+          400: { description: 'An id does not belong to this task' },
+          403: { description: 'You cannot act on this task' },
+        },
+      },
+    },
+    '/tasks/{id}/subtasks/{sid}': {
+      patch: {
+        tags: ['Tasks'],
+        operationId: 'updateSubTask',
+        summary: 'Tick, rename or reassign a checklist item',
+        description: "Ticking records who completed it and when — that timestamp is the point of the feature. Un-ticking clears both, because an item that is open again was not completed. A sub-task is a record of what someone is working through inside a task. It carries no weight and no progress: ticking one NEVER changes the parent task's percentage or the goal's 100% weight total. `checklistPercent` in the response is for display only and is not written anywhere.",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'sid', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', maxLength: 300 },
+            assigneeId: { type: 'string', nullable: true },
+            isDone: { type: 'boolean' },
+            position: { type: 'integer', minimum: 0, maximum: 9999 },
+          },
+        } } } },
+        responses: {
+          200: { description: 'Updated', content: { 'application/json': { schema: { type: 'object', properties: {
+              items: { type: 'array', items: { type: 'object', properties: {
+                id: { type: 'string' }, taskId: { type: 'string' }, title: { type: 'string' },
+                isDone: { type: 'boolean' }, position: { type: 'integer' },
+                assigneeId: { type: 'string', nullable: true },
+                completedAt: { type: 'string', format: 'date-time', nullable: true },
+                completedById: { type: 'string', nullable: true },
+                assignee: { type: 'object', nullable: true },
+                completedBy: { type: 'object', nullable: true },
+              } } },
+              total: { type: 'integer' }, done: { type: 'integer' },
+              checklistPercent: { type: 'integer', description: 'Display only. Never written to the task.' },
+            } } } } },
+          400: { description: 'Validation failed' },
+          403: { description: 'You cannot act on this task' },
+          404: { description: 'Sub-task not found on this task' },
+        },
+      },
+      delete: {
+        tags: ['Tasks'],
+        operationId: 'deleteSubTask',
+        summary: 'Remove a checklist item',
+        description: "A sub-task is a record of what someone is working through inside a task. It carries no weight and no progress: ticking one NEVER changes the parent task's percentage or the goal's 100% weight total. `checklistPercent` in the response is for display only and is not written anywhere.",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'sid', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        responses: {
+          200: { description: 'Removed', content: { 'application/json': { schema: { type: 'object', properties: {
+              items: { type: 'array', items: { type: 'object', properties: {
+                id: { type: 'string' }, taskId: { type: 'string' }, title: { type: 'string' },
+                isDone: { type: 'boolean' }, position: { type: 'integer' },
+                assigneeId: { type: 'string', nullable: true },
+                completedAt: { type: 'string', format: 'date-time', nullable: true },
+                completedById: { type: 'string', nullable: true },
+                assignee: { type: 'object', nullable: true },
+                completedBy: { type: 'object', nullable: true },
+              } } },
+              total: { type: 'integer' }, done: { type: 'integer' },
+              checklistPercent: { type: 'integer', description: 'Display only. Never written to the task.' },
+            } } } } },
+          403: { description: 'You cannot act on this task' },
+          404: { description: 'Sub-task not found on this task' },
+        },
+      },
+    },
     '/platform/alerts': {
       get: {
         tags: ['Platform'],
