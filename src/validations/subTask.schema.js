@@ -48,3 +48,12 @@ export const subTaskChildParamSchema = z.object({
   id: z.string().min(1),
   sid: z.string().min(1),
 });
+
+/**
+ * The sub-task board: every sub-task on the tasks the caller can see.
+ * `employeeId` accepts 'all' exactly as the task board does.
+ */
+export const boardSubTasksQuerySchema = z.object({
+  employeeId: z.string().max(100).optional(),
+  fy: z.string().max(20).optional(),
+});

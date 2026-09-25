@@ -1,5 +1,5 @@
 import { prisma } from '../lib/prisma.js';
-import { ELEVATED_ROLES, hasRole } from '../lib/roles.js';
+import { ELEVATED_ROLES, MANAGER_OR_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
 import { goalService } from './goal.service.js';
 
 /**
@@ -14,6 +14,8 @@ import { goalService } from './goal.service.js';
  *  - an elevated role (SUPER_ADMIN / ADMIN / CMD / HR)
  *  - the assigned employee
  *  - a manager anywhere up the reporting chain of the assigned employee
+ *  - anyone who may act on the GOAL the task belongs to
+ *  - a line manager whose reach covers the assignee (same rule as elsewhere)
  *  - (for companion dependency tasks) the owner/manager of the parent task
  *
  * @returns {Promise<object>} the task record
@@ -30,6 +32,36 @@ export async function loadTaskForUser(taskId, user, tenantId) {
 
   if (task.employeeId && await goalService.isSubordinate(user.id, task.employeeId, tenantId)) {
     return task;
+  }
+
+  // If the caller may act on the GOAL, they may act on its tasks. Without
+  // this, a manager could open a goal, approve it and edit it, yet be refused
+  // on every task inside it — because this function accepted only the
+  // managerId chain while the goal rules have always used a wider reach, and
+  // most employees here have no manager set at all.
+  if (task.goalId) {
+    const goal = await prisma.goal.findFirst({
+      where: { id: task.goalId, tenantId },
+      include: { assignments: { select: { employeeId: true } } },
+    });
+    if (goal && await goalService.canAccessGoal(goal, user, tenantId)) return task;
+  }
+
+  // The same reach over a STANDALONE task, which has no goal to defer to:
+  // a manager covers their department and anyone without an explicit manager,
+  // but never a peer manager or anyone above them.
+  if (String(user.role || '').toUpperCase() === 'MANAGER' && task.employeeId) {
+    const [caller, target] = await Promise.all([
+      prisma.tenantUser.findUnique({ where: { id: user.id }, select: { department: true } }),
+      prisma.tenantUser.findFirst({
+        where: { id: task.employeeId, tenantId },
+        select: { role: true, department: true, managerId: true },
+      }),
+    ]);
+    if (target && !hasRole(target.role, MANAGER_OR_ELEVATED_ROLES)) {
+      const sameDept = caller?.department && target.department === caller.department;
+      if (sameDept || !target.managerId) return task;
+    }
   }
 
   if (task.isDependencyOf) {
