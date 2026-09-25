@@ -28,8 +28,9 @@ import { emitToTenant } from '../lib/socket.js';
 import { taskTiming } from '../lib/taskTiming.js';
 import {
   createSubTaskSchema, updateSubTaskSchema, reorderSubTasksSchema,
-  subTaskParamSchema, subTaskChildParamSchema,
+  subTaskParamSchema, subTaskChildParamSchema, boardSubTasksQuerySchema,
 } from '../validations/subTask.schema.js';
+import { visibleTaskWhere } from '../services/taskVisibility.service.js';
 
 const SUBTASK_SELECT = {
   id: true, taskId: true, title: true, description: true, isDone: true, position: true,
@@ -40,6 +41,36 @@ const SUBTASK_SELECT = {
   completedBy: { select: { id: true, name: true } },
 };
 
+/**
+ * The derived fields every sub-task carries: its state and how long it took.
+ *
+ * Both derived rather than stored, so they cannot fall out of step with the
+ * dates they come from. Shared by the per-task list and the board.
+ */
+function decorate(s) {
+  const dayUTC = (d) => Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  return {
+    ...s,
+    // IN_PROGRESS the moment an actual start exists and it is not yet ticked.
+    state: s.isDone ? 'DONE' : (s.actualStartDate ? 'IN_PROGRESS' : 'NOT_STARTED'),
+    // Whole days from actual start to actual completion. Null until both
+    // exist; 0 means started and finished on the same day.
+    durationDays: (s.actualStartDate && s.actualCompletionDate)
+      ? Math.max(0, Math.round((dayUTC(s.actualCompletionDate) - dayUTC(s.actualStartDate)) / 86400000))
+      : null,
+    // A sub-task is done or not, so it is fed to the shared timing helper as
+    // 100% or 0% — the same delay arithmetic tasks use, not a second copy.
+    timing: taskTiming({
+      status: s.isDone ? 'done' : 'todo',
+      progress: s.isDone ? 100 : 0,
+      startDate: s.startDate,
+      dueDate: s.dueDate,
+      actualStartDate: s.actualStartDate,
+      actualCompletionDate: s.actualCompletionDate,
+    }),
+  };
+}
+
 /** The list plus the counts every screen wants, with delay figures per row. */
 async function listFor(taskId) {
   const rows = await prisma.subTask.findMany({
@@ -49,17 +80,7 @@ async function listFor(taskId) {
   });
   // A sub-task is either done or not, so it is fed to the shared timing helper
   // as 100% or 0% — the same delay arithmetic tasks use, no second copy of it.
-  const items = rows.map((s) => ({
-    ...s,
-    timing: taskTiming({
-      status: s.isDone ? 'done' : 'todo',
-      progress: s.isDone ? 100 : 0,
-      startDate: s.startDate,
-      dueDate: s.dueDate,
-      actualStartDate: s.actualStartDate,
-      actualCompletionDate: s.actualCompletionDate,
-    }),
-  }));
+  const items = rows.map(decorate);
   const done = items.filter((s) => s.isDone).length;
   return {
     items,
@@ -180,6 +201,13 @@ export async function createSubTask(req, res, next) {
     const isDone = parsed.data.isDone === true;
     // Ticking it on creation records the completion now, unless one was given.
     if (isDone && dates.actualCompletionDate === undefined) dates.actualCompletionDate = new Date();
+    // Nothing finishes without having started. A completed sub-task showing
+    // "Actual Start: Not recorded" is the gap this closes — the start falls
+    // back to the completion, which is the earliest moment we can honestly
+    // claim, rather than being left blank.
+    if (isDone && dates.actualStartDate === undefined) {
+      dates.actualStartDate = dates.actualCompletionDate;
+    }
 
     const last = await prisma.subTask.findFirst({
       where: { taskId: id }, orderBy: { position: 'desc' }, select: { position: true },
@@ -246,7 +274,17 @@ export async function updateSubTask(req, res, next) {
         if (dates.actualCompletionDate === undefined && !existing.actualCompletionDate) {
           dates.actualCompletionDate = new Date();
         }
+        // Ticking something nobody ever started still means it was done. The
+        // start falls back to the completion so a finished sub-task is never
+        // left reading "Not recorded" — anyone wanting a real duration uses
+        // Start first, which stamps the true beginning.
+        if (dates.actualStartDate === undefined && !existing.actualStartDate) {
+          dates.actualStartDate = dates.actualCompletionDate
+            ?? existing.actualCompletionDate ?? new Date();
+        }
       } else if (dates.actualCompletionDate === undefined) {
+        // Reopening clears the completion. The start is kept: that work began
+        // on a given day stays true even when it turns out not to be finished.
         dates.actualCompletionDate = null;
       }
     }
@@ -342,6 +380,63 @@ export async function reorderSubTasks(req, res, next) {
     const summary = await listFor(id);
     notifyTenant(task.tenantId, id, summary);
     res.json(summary);
+  } catch (err) {
+    if (err.status) return fail(res, err);
+    next(err);
+  }
+}
+
+// ─── GET /api/subtasks ──────────────────────────────────────────────────────
+/**
+ * The sub-task board: every sub-task across the tasks the caller can see,
+ * grouped by state.
+ *
+ * Visibility is delegated to `visibleTaskWhere` — the very rule the task board
+ * uses — applied as a nested filter on the parent task. A sub-task is exactly
+ * as visible as the task it belongs to, and there is no second access rule
+ * here to drift out of step with that one.
+ */
+export async function listBoardSubTasks(req, res, next) {
+  try {
+    const parsed = boardSubTasksQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    }
+
+    const { where, error } = await visibleTaskWhere({
+      user: req.user,
+      tenantId: req.tenantId,
+      employeeId: parsed.data.employeeId,
+      fy: parsed.data.fy,
+    });
+    if (error) return res.status(error.status).json({ error: error.message });
+
+    const rows = await prisma.subTask.findMany({
+      where: { tenantId: req.tenantId, task: where },
+      orderBy: [{ isDone: 'asc' }, { dueDate: 'asc' }, { position: 'asc' }],
+      select: {
+        ...SUBTASK_SELECT,
+        task: { select: { id: true, title: true, goalId: true, employeeId: true } },
+      },
+    });
+
+    const items = rows.map(decorate);
+    const columns = {
+      NOT_STARTED: items.filter((s) => s.state === 'NOT_STARTED'),
+      IN_PROGRESS: items.filter((s) => s.state === 'IN_PROGRESS'),
+      DONE: items.filter((s) => s.state === 'DONE'),
+    };
+
+    res.json({
+      items,
+      columns,
+      counts: {
+        NOT_STARTED: columns.NOT_STARTED.length,
+        IN_PROGRESS: columns.IN_PROGRESS.length,
+        DONE: columns.DONE.length,
+        total: items.length,
+      },
+    });
   } catch (err) {
     if (err.status) return fail(res, err);
     next(err);

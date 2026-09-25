@@ -3693,6 +3693,38 @@ export const swaggerExtensions = {
         },
       },
     },
+    '/subtasks': {
+      get: {
+        tags: ['Tasks'],
+        operationId: 'listBoardSubTasks',
+        summary: 'Sub-task board across every visible task',
+        description: "Every sub-task on the tasks the caller can see, grouped into NOT_STARTED / IN_PROGRESS / DONE. Visibility is the SAME rule the task board uses, applied as a nested filter on the parent task — a sub-task is exactly as visible as the task it belongs to. `employeeId` accepts 'all'. Sub-tasks carry no weight and never affect any percentage.",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: 'employeeId', in: 'query', required: false, schema: { type: 'string' }, description: "A user id, or 'all'. Defaults to the caller." },
+          { name: 'fy', in: 'query', required: false, schema: { type: 'string' }, description: 'Financial year of the parent task.' },
+        ],
+        responses: {
+          200: {
+            description: 'The board',
+            content: { 'application/json': { schema: { type: 'object', properties: {
+              items: { type: 'array', items: { type: 'object' } },
+              columns: { type: 'object', properties: {
+                NOT_STARTED: { type: 'array', items: { type: 'object' } },
+                IN_PROGRESS: { type: 'array', items: { type: 'object' } },
+                DONE: { type: 'array', items: { type: 'object' } },
+              } },
+              counts: { type: 'object', properties: {
+                NOT_STARTED: { type: 'integer' }, IN_PROGRESS: { type: 'integer' },
+                DONE: { type: 'integer' }, total: { type: 'integer' },
+              } },
+            } } } },
+          },
+          403: { description: 'You may not view that board' },
+          404: { description: 'Target employee not found' },
+        },
+      },
+    },
     '/tasks/{id}/subtasks': {
       get: {
         tags: ['Tasks'],
