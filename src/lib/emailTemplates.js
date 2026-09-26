@@ -371,3 +371,81 @@ export function renderPasswordResetEmail({ resetUrl, expiresMinutes = 30, name =
   return { html, text };
 }
 
+/**
+ * Employee Invitation Email Template — secure password-setup link variant.
+ * Sends a branded invitation with a one-time "Set Your Password" link instead
+ * of a plaintext temporary password.
+ *
+ * @param {{ setupUrl: string, expiresHours: number, name: string, companyName: string, email: string }} opts
+ * @returns {{ html: string, text: string }}
+ */
+export function renderInvitationEmail({ setupUrl, expiresHours = 72, name, companyName, email }) {
+  const greeting = name ? `Hello ${name},` : 'Hello,';
+  const contentHtml = `
+    <div style="text-align: center; margin-bottom: 24px;">
+      <div style="display: inline-block; width: 52px; height: 52px; background-color: #e0e7ff; border-radius: 50%; margin-bottom: 16px; line-height: 52px; text-align: center;">
+        <span style="font-size: 24px;">🎉</span>
+      </div>
+      <h1 style="margin: 0 0 8px 0; font-size: 22px; font-weight: 700; color: #0f172a;">Welcome to ${companyName}!</h1>
+      <p style="margin: 0; font-size: 15px; color: #475569; line-height: 1.5;">
+        ${greeting} You have been invited to join the <strong>${companyName}</strong> workspace on UEIBI.
+      </p>
+    </div>
+
+    <!-- Account Details -->
+    <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 24px;">
+      <h3 style="margin: 0 0 12px 0; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px; color: #64748b; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px;">Your Account</h3>
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="font-size: 14px; line-height: 1.8;">
+        <tr>
+          <td style="color: #64748b; width: 40%; font-weight: 500;">Login Email:</td>
+          <td style="color: #0f172a; font-weight: 600; font-family: monospace;">${email}</td>
+        </tr>
+        <tr>
+          <td style="color: #64748b; font-weight: 500;">Organization:</td>
+          <td style="color: #0f172a; font-weight: 600;">${companyName}</td>
+        </tr>
+      </table>
+    </div>
+
+    <!-- CTA Button -->
+    <div style="text-align: center; margin: 32px 0;">
+      <a href="${setupUrl}" target="_blank" rel="noopener noreferrer" style="display: inline-block; background: linear-gradient(135deg, #4f46e5 0%, #3b82f6 100%); color: #ffffff; font-size: 15px; font-weight: 600; text-decoration: none; padding: 14px 36px; border-radius: 8px; box-shadow: 0 4px 12px rgba(79, 70, 229, 0.25);">
+        Set Your Password &amp; Get Started &rarr;
+      </a>
+    </div>
+
+    <div style="background-color: #fffbe0; border-left: 4px solid #eab308; padding: 12px 16px; border-radius: 4px; margin-bottom: 24px;">
+      <p style="margin: 0; font-size: 13px; color: #854d0e; line-height: 1.5;">
+        ⏱️ This invitation link will expire in <strong>${expiresHours} hours</strong> and can only be used once. After setting your password you can log in at any time.
+      </p>
+    </div>
+
+    <p style="margin: 0 0 16px 0; font-size: 13px; color: #64748b; line-height: 1.5;">
+      If you did not expect this invitation, you can safely ignore this email.
+    </p>
+
+    <div style="border-top: 1px solid #e2e8f0; padding-top: 16px; margin-top: 24px;">
+      <p style="margin: 0; font-size: 12px; color: #94a3b8; word-break: break-all;">
+        If the button above does not work, copy and paste this URL into your browser:<br/>
+        <a href="${setupUrl}" target="_blank" rel="noopener noreferrer" style="color: #6366f1; text-decoration: underline;">${setupUrl}</a>
+      </p>
+    </div>
+  `;
+
+  const html = renderEmailWrapper({
+    title: `You're invited to join ${companyName} on UEIBI`,
+    preheader: `${name}, set your password to get started with ${companyName}.`,
+    contentHtml,
+  });
+
+  const text = `${greeting}\n\n` +
+    `You have been invited to join ${companyName} on the UEIBI platform.\n\n` +
+    `Login Email: ${email}\n\n` +
+    `Please set your password using the link below:\n${setupUrl}\n\n` +
+    `This link will expire in ${expiresHours} hours and can only be used once.\n\n` +
+    `After setting your password you can log in at any time at ${env.frontendOrigin}/login\n\n` +
+    `UEIBI Platform`;
+
+  return { html, text };
+}
+

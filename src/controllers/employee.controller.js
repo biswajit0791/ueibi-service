@@ -4,10 +4,13 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { sendMail } from '../lib/mailer.js';
 import { emitToTenant } from '../lib/socket.js';
+import { generateRawToken, hashToken } from '../lib/tokens.js';
+import { renderInvitationEmail } from '../lib/emailTemplates.js';
 import {
   updateExEmployeeSchema,
   updateNonJoinerSchema,
   inviteEmployeeSchema,
+  bulkInviteEmployeesSchema,
   onboardEmployeeSchema,
   updateEmployeeSchema,
   createExEmployeeSchema,
@@ -21,7 +24,42 @@ import {
 import { env } from '../config/env.js';
 import { canCreateRole, getAllowedRoles } from '../lib/roleHierarchy.js';
 import { validatePasswordStrength } from '../lib/passwordPolicy.js';
-import { getLicenseStats, assertLicenseAvailable } from '../services/license.service.js';
+import {
+  getLicenseStats,
+  assertLicenseAvailable,
+  assertBulkLicenseAvailable,
+  listEligibleManagers,
+} from '../services/license.service.js';
+
+/**
+ * Issues a one-time password setup token (PasswordResetToken model) for employee invitation.
+ */
+async function issueInvitePasswordToken(tx, userId) {
+  const rawToken = generateRawToken();
+  const tokenHash = hashToken(rawToken);
+  const expiresMinutes = (env.passwordResetTokenExpiresMinutes || 72 * 60);
+  const expiresAt = new Date(Date.now() + expiresMinutes * 60 * 1000);
+  const tokenId = `prt_${crypto.randomBytes(12).toString('hex')}`;
+
+  await tx.$executeRawUnsafe(
+    `UPDATE "password_reset_tokens"
+     SET "usedAt" = CURRENT_TIMESTAMP
+     WHERE "userId" = $1 AND "usedAt" IS NULL`,
+    userId
+  );
+
+  await tx.$executeRawUnsafe(
+    `INSERT INTO "password_reset_tokens" ("id", "userId", "tokenHash", "expiresAt", "usedAt", "createdAt")
+     VALUES ($1, $2, $3, $4, NULL, CURRENT_TIMESTAMP)`,
+    tokenId,
+    userId,
+    tokenHash,
+    expiresAt
+  );
+
+  const setupUrl = `${env.frontendOrigin}/reset-password?token=${rawToken}`;
+  return { rawToken, setupUrl, expiresHours: Math.round(expiresMinutes / 60) };
+}
 
 export async function inviteEmployee(req, res, next) {
   try {
@@ -29,15 +67,21 @@ export async function inviteEmployee(req, res, next) {
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
-    const { email, name, role, designation, department, band, managerId, joinDate, phone, pan, dob, feedbackRemarks } = parsed.data;
+    const { email, firstName, lastName, name, role, designation, department, band, managerId, joinDate, phone, pan, dob, feedbackRemarks } = parsed.data;
+
+    const resolvedName = (firstName || lastName)
+      ? `${firstName || ''} ${lastName || ''}`.trim()
+      : (name || '').trim();
+
+    if (!resolvedName) {
+      return res.status(400).json({ error: 'Employee name is required' });
+    }
 
     const tenantId = req.tenantId;
 
     // ── Role-creation authorization ───────────────────────────────────────────
-    // Determine the target role (default EMPLOYEE for backward compatibility).
     const targetRole = (role || 'EMPLOYEE').toUpperCase();
 
-    // Validate the target role is a known UserRole value.
     const validRoles = [
       'SUPER_ADMIN', 'ADMIN', 'CMD', 'HR', 'FINANCE',
       'MANAGER', 'EMPLOYEE', 'STUDENT', 'MENTOR',
@@ -46,7 +90,6 @@ export async function inviteEmployee(req, res, next) {
       return res.status(400).json({ error: `Invalid role: ${targetRole}` });
     }
 
-    // Backend is the security authority — check creator permission.
     const creatorRole = req.user.role;
     if (!canCreateRole(creatorRole, targetRole)) {
       return res.status(403).json({
@@ -54,9 +97,7 @@ export async function inviteEmployee(req, res, next) {
         allowedRoles: getAllowedRoles(creatorRole),
       });
     }
-    // ─────────────────────────────────────────────────────────────────────────
 
-    // Validate the reporting manager (if supplied) belongs to this tenant.
     let resolvedManagerId = null;
     if (managerId) {
       const mgr = await prisma.tenantUser.findFirst({
@@ -69,11 +110,9 @@ export async function inviteEmployee(req, res, next) {
       resolvedManagerId = mgr.id;
     }
 
-    // Generate temp password — 12 hex chars (~48 bits) plus a prefix.
-    const tempPassword = 'UEIBI-' + crypto.randomBytes(6).toString('hex').toUpperCase();
-    const passwordHash = await bcrypt.hash(tempPassword, 10);
+    const initialPlaceholder = 'INVITED_NO_PASS_' + crypto.randomBytes(16).toString('hex');
+    const passwordHash = await bcrypt.hash(initialPlaceholder, 10);
 
-    // Safely parse date fields
     const parsedJoinDate = joinDate ? (() => {
       const d = new Date(joinDate);
       return isNaN(d.getTime()) ? new Date() : d;
@@ -86,56 +125,47 @@ export async function inviteEmployee(req, res, next) {
       return isNaN(d.getTime()) ? null : d;
     })() : null;
 
-    // Check duplicate
     const existing = await prisma.tenantUser.findUnique({
       where: { email: email.trim().toLowerCase() },
     });
+
     if (existing) {
       if (existing.status === 'INVITED') {
+        const { setupUrl, expiresHours } = await prisma.$transaction(async (tx) => {
+          await tx.tenantUser.update({
+            where: { id: existing.id },
+            data: {
+              name: resolvedName,
+              role: targetRole,
+              designation: designation ? designation.trim() : existing.designation,
+              department: department ? department.trim() : existing.department,
+              band: band || existing.band,
+              managerId: resolvedManagerId || existing.managerId,
+              phone: phone ? phone.trim() : existing.phone,
+              pan: pan ? pan.trim().toUpperCase() : existing.pan,
+              dob: parsedDob || existing.dob,
+            },
+          });
+          return issueInvitePasswordToken(tx, existing.id);
+        });
+
         const tenant = await prisma.tenant.findUnique({
           where: { id: tenantId },
-          select: { id: true, companyName: true },
+          select: { companyName: true },
         });
         const companyName = tenant?.companyName || 'your organization';
 
-        const updatedUser = await prisma.tenantUser.update({
-          where: { id: existing.id },
-          data: {
-            passwordHash,
-            name: name.trim(),
-            role: targetRole,
-            designation: designation ? designation.trim() : existing.designation,
-            department: department ? department.trim() : existing.department,
-            band: band || existing.band,
-            managerId: resolvedManagerId || existing.managerId,
-            phone: phone ? phone.trim() : existing.phone,
-            pan: pan ? pan.trim().toUpperCase() : existing.pan,
-            dob: parsedDob || existing.dob,
-          },
+        const { html, text } = renderInvitationEmail({
+          setupUrl,
+          expiresHours,
+          name: resolvedName,
+          companyName,
+          email,
         });
-
-        // Send invitation email
-        const subject = `Welcome to UEIBI - Invitation to join ${companyName}`;
-        const text = `Hello ${name},\n\nYou have been invited to join the ${companyName} workspace on UEIBI.\n\nYour temporary login credentials are:\nEmail: ${email}\nPassword: ${tempPassword}\n\nPlease log in and complete your onboarding profile here: ${env.frontendOrigin}/login`;
-        const html = `
-          <div style="font-family: sans-serif; padding: 20px; line-height: 1.6;">
-            <h2 style="color: #4f46e5;">Welcome to UEIBI</h2>
-            <p>Hello <strong>${name}</strong>,</p>
-            <p>You have been invited to join the <strong>${companyName}</strong> workspace on the UEIBI Employee Registry portal.</p>
-            <div style="background-color: #f3f4f6; border-left: 4px solid #4f46e5; padding: 15px; margin: 20px 0;">
-              <p style="margin: 0 0 8px 0;"><strong>Your Temporary Credentials:</strong></p>
-              <p style="margin: 0 0 4px 0;">Email: <code>${email}</code></p>
-              <p style="margin: 0;">Password: <code>${tempPassword}</code></p>
-            </div>
-            <p>Please log in with these temporary credentials to complete your onboarding profile:</p>
-            <a href="${env.frontendOrigin}/login" style="display: inline-block; background-color: #4f46e5; color: white; padding: 10px 20px; text-decoration: none; border-radius: 6px; margin: 15px 0;">Log In & Complete Profile</a>
-            <p style="color: #6b7280; font-size: 13px;">For security reasons, you will be required to change your password upon your first login.</p>
-          </div>
-        `;
 
         await sendMail({
           to: email,
-          subject,
+          subject: `Invitation to join ${companyName} - Set Your Password`,
           text,
           html,
           event: 'EMPLOYEE_INVITED',
@@ -145,11 +175,11 @@ export async function inviteEmployee(req, res, next) {
         return res.status(200).json({
           message: 'Invitation re-sent successfully',
           user: {
-            id: updatedUser.id,
-            email: updatedUser.email,
-            name: updatedUser.name,
-            role: updatedUser.role,
-            status: updatedUser.status,
+            id: existing.id,
+            email: existing.email,
+            name: resolvedName,
+            role: targetRole,
+            status: 'INVITED',
           },
           licenseStats,
         });
@@ -158,14 +188,8 @@ export async function inviteEmployee(req, res, next) {
       return res.status(409).json({ error: 'A user with this email address already exists' });
     }
 
-    // ── Atomic license capacity check ────────────────────────────────────────
-    // Using a Prisma interactive transaction ensures the count() and the
-    // subsequent create() are serialized, preventing race conditions when two
-    // admins invite employees simultaneously at the last available slot.
-
-    // Atomic transaction: capacity check + create to prevent race conditions
-    const { user, tenant } = await prisma.$transaction(async (tx) => {
-      // Re-check license inside the transaction (prevents double-booking)
+    // Atomic transaction: capacity check + create
+    const { user, tenant, setupUrl, expiresHours } = await prisma.$transaction(async (tx) => {
       await assertLicenseAvailable(tx, tenantId);
 
       const t = await tx.tenant.findUnique({
@@ -178,8 +202,8 @@ export async function inviteEmployee(req, res, next) {
           tenantId,
           email: email.trim().toLowerCase(),
           passwordHash,
-          name: name.trim(),
-          role: targetRole, // validated & authorized above
+          name: resolvedName,
+          role: targetRole,
           status: 'INVITED',
           mustChangePassword: true,
           designation: designation ? designation.trim() : 'Member',
@@ -194,39 +218,27 @@ export async function inviteEmployee(req, res, next) {
         },
       });
 
-      return { user: u, tenant: t };
+      const tokenData = await issueInvitePasswordToken(tx, u.id);
+      return { user: u, tenant: t, ...tokenData };
     });
 
     const companyName = tenant?.companyName || 'your organization';
-
-    // Send invitation email
-    const subject = `Welcome to UEIBI - Invitation to join ${companyName}`;
-    const text = `Hello ${name},\n\nYou have been invited to join the ${companyName} workspace on UEIBI.\n\nYour temporary login credentials are:\nEmail: ${email}\nPassword: ${tempPassword}\n\nPlease log in and complete your onboarding profile here: ${env.frontendOrigin}/login`;
-    const html = `
-      <div style="font-family: sans-serif; padding: 20px; line-height: 1.6;">
-        <h2 style="color: #4f46e5;">Welcome to UEIBI</h2>
-        <p>Hello <strong>${name}</strong>,</p>
-        <p>You have been invited to join the <strong>${companyName}</strong> workspace on the UEIBI Employee Registry portal.</p>
-        <div style="background-color: #f3f4f6; border-left: 4px solid #4f46e5; padding: 15px; margin: 20px 0;">
-          <p style="margin: 0 0 8px 0;"><strong>Your Temporary Credentials:</strong></p>
-          <p style="margin: 0 0 4px 0;">Email: <code>${email}</code></p>
-          <p style="margin: 0;">Password: <code>${tempPassword}</code></p>
-        </div>
-        <p>Please log in with these temporary credentials to complete your onboarding profile:</p>
-        <a href="${env.frontendOrigin}/login" style="display: inline-block; background-color: #4f46e5; color: white; padding: 10px 20px; text-decoration: none; border-radius: 6px; margin: 15px 0;">Log In & Complete Profile</a>
-        <p style="color: #6b7280; font-size: 13px;">For security reasons, you will be required to change your password upon your first login.</p>
-      </div>
-    `;
+    const { html, text } = renderInvitationEmail({
+      setupUrl,
+      expiresHours,
+      name: resolvedName,
+      companyName,
+      email,
+    });
 
     await sendMail({
       to: email,
-      subject,
+      subject: `Welcome to ${companyName} - Set Your Password`,
       text,
       html,
       event: 'EMPLOYEE_INVITED',
     }).catch((err) => console.warn('[EMPLOYEE] Failed to send invite email:', err.message));
 
-    // Fetch updated license stats to return in response
     const licenseStats = await getLicenseStats(tenantId);
 
     res.status(201).json({
@@ -241,7 +253,6 @@ export async function inviteEmployee(req, res, next) {
       licenseStats,
     });
   } catch (err) {
-    // Propagate structured license errors as HTTP 400
     if (err.statusCode) {
       return res.status(err.statusCode).json({
         error: err.message,
@@ -252,6 +263,194 @@ export async function inviteEmployee(req, res, next) {
     next(err);
   }
 }
+
+export async function bulkInviteEmployees(req, res, next) {
+  try {
+    const parsed = bulkInviteEmployeesSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    }
+
+    const tenantId = req.tenantId;
+    const creatorRole = req.user.role;
+    const items = parsed.data.employees;
+
+    const emailsSeen = new Set();
+    const batchDuplicates = [];
+    for (const emp of items) {
+      const em = emp.email.trim().toLowerCase();
+      if (emailsSeen.has(em)) {
+        batchDuplicates.push(em);
+      }
+      emailsSeen.add(em);
+    }
+    if (batchDuplicates.length > 0) {
+      return res.status(400).json({
+        error: `Duplicate emails found within the import file: ${batchDuplicates.join(', ')}`,
+      });
+    }
+
+    const existingUsers = await prisma.tenantUser.findMany({
+      where: {
+        email: { in: Array.from(emailsSeen) },
+      },
+      select: { email: true, status: true },
+    });
+    if (existingUsers.length > 0) {
+      const existingEmails = existingUsers.map(u => u.email).join(', ');
+      return res.status(409).json({
+        error: `The following email(s) already exist in the system: ${existingEmails}`,
+      });
+    }
+
+    const createdUsers = await prisma.$transaction(async (tx) => {
+      await assertBulkLicenseAvailable(tx, tenantId, items.length);
+
+      const tenant = await tx.tenant.findUnique({
+        where: { id: tenantId },
+        select: { companyName: true },
+      });
+      const companyName = tenant?.companyName || 'your organization';
+
+      const results = [];
+      for (const emp of items) {
+        const targetRole = (emp.role || 'EMPLOYEE').toUpperCase();
+        if (!canCreateRole(creatorRole, targetRole)) {
+          throw new Error(`Forbidden: Cannot assign role ${targetRole} to ${emp.email}`);
+        }
+
+        const resolvedName = (emp.firstName || emp.lastName)
+          ? `${emp.firstName || ''} ${emp.lastName || ''}`.trim()
+          : (emp.name || '').trim();
+
+        const initialPlaceholder = 'INVITED_NO_PASS_' + crypto.randomBytes(16).toString('hex');
+        const passwordHash = await bcrypt.hash(initialPlaceholder, 10);
+
+        const parsedJoinDate = emp.joinDate ? new Date(emp.joinDate) : new Date();
+
+        const u = await tx.tenantUser.create({
+          data: {
+            tenantId,
+            email: emp.email.trim().toLowerCase(),
+            passwordHash,
+            name: resolvedName || emp.email.split('@')[0],
+            role: targetRole,
+            status: 'INVITED',
+            mustChangePassword: true,
+            designation: emp.designation ? emp.designation.trim() : 'Member',
+            department: emp.department ? emp.department.trim() : 'General',
+            managerId: emp.managerId || null,
+            joinDate: isNaN(parsedJoinDate.getTime()) ? new Date() : parsedJoinDate,
+            phone: emp.phone ? emp.phone.trim() : null,
+          },
+        });
+
+        const tokenData = await issueInvitePasswordToken(tx, u.id);
+        results.push({ user: u, companyName, ...tokenData });
+      }
+
+      return results;
+    });
+
+    for (const item of createdUsers) {
+      const { html, text } = renderInvitationEmail({
+        setupUrl: item.setupUrl,
+        expiresHours: item.expiresHours,
+        name: item.user.name,
+        companyName: item.companyName,
+        email: item.user.email,
+      });
+
+      sendMail({
+        to: item.user.email,
+        subject: `Welcome to ${item.companyName} - Set Your Password`,
+        text,
+        html,
+        event: 'EMPLOYEE_INVITED',
+      }).catch((err) => console.warn(`[BULK_INVITE] Failed email to ${item.user.email}:`, err.message));
+    }
+
+    const licenseStats = await getLicenseStats(tenantId);
+
+    return res.status(201).json({
+      message: `Successfully onboarded ${createdUsers.length} employee(s)`,
+      count: createdUsers.length,
+      licenseStats,
+    });
+  } catch (err) {
+    if (err.statusCode) {
+      return res.status(err.statusCode).json({
+        error: err.message,
+        code: err.code || undefined,
+        details: err.details || undefined,
+      });
+    }
+    next(err);
+  }
+}
+
+export async function getEligibleManagers(req, res, next) {
+  try {
+    const managers = await listEligibleManagers(req.tenantId);
+    return res.status(200).json({ managers });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function resendInvite(req, res, next) {
+  try {
+    const paramParsed = employeeIdOnlyParamSchema.safeParse(req.params || {});
+    if (!paramParsed.success) {
+      return res.status(400).json({ error: 'Invalid employee ID', details: paramParsed.error.issues });
+    }
+    const { id } = paramParsed.data;
+    const tenantId = req.tenantId;
+
+    const user = await prisma.tenantUser.findFirst({
+      where: { id, tenantId, isDeleted: false },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+
+    if (user.status !== 'INVITED') {
+      return res.status(400).json({ error: 'Invitation can only be re-sent to employees with status INVITED' });
+    }
+
+    const { setupUrl, expiresHours } = await prisma.$transaction(async (tx) => {
+      return issueInvitePasswordToken(tx, user.id);
+    });
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { companyName: true },
+    });
+    const companyName = tenant?.companyName || 'your organization';
+
+    const { html, text } = renderInvitationEmail({
+      setupUrl,
+      expiresHours,
+      name: user.name,
+      companyName,
+      email: user.email,
+    });
+
+    await sendMail({
+      to: user.email,
+      subject: `Invitation to join ${companyName} - Set Your Password`,
+      text,
+      html,
+      event: 'EMPLOYEE_INVITED',
+    });
+
+    return res.status(200).json({ message: 'Invitation email re-sent successfully' });
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function onboardEmployee(req, res, next) {
   try {
     const parsed = onboardEmployeeSchema.safeParse(req.body || {});

@@ -136,3 +136,79 @@ export async function assertLicenseAvailable(tx, tenantId) {
     throw err;
   }
 }
+
+/**
+ * Asserts that the tenant has at least `requiredSlots` available license slots.
+ * Designed for bulk import: validates the entire batch fits BEFORE creating any
+ * rows. Must be called inside a Prisma interactive transaction.
+ *
+ * @param {import('@prisma/client').PrismaClient} tx  — the Prisma transaction client
+ * @param {string} tenantId
+ * @param {number} requiredSlots — number of new users to be created
+ */
+export async function assertBulkLicenseAvailable(tx, tenantId, requiredSlots) {
+  const tenant = await tx.tenant.findUnique({
+    where: { id: tenantId },
+    select: { licenseLimit: true },
+  });
+
+  if (!tenant) {
+    const err = new Error('Tenant not found');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const activeCount = await tx.tenantUser.count({
+    where: {
+      tenantId,
+      isDeleted: false,
+      status: { in: ['ACTIVE', 'INVITED'] },
+    },
+  });
+
+  const available = Math.max(0, tenant.licenseLimit - activeCount);
+
+  if (requiredSlots > available) {
+    const err = new Error(
+      `Not enough license slots. Need ${requiredSlots} but only ${available} available ` +
+      `(${activeCount}/${tenant.licenseLimit} used). ` +
+      `Offboard existing employees or upgrade your license to continue.`
+    );
+    err.statusCode = 400;
+    err.code = 'LICENSE_LIMIT_EXCEEDED';
+    err.details = {
+      totalCapacity: tenant.licenseLimit,
+      activeEmployees: activeCount,
+      availableLicenses: available,
+      requiredSlots,
+    };
+    throw err;
+  }
+}
+
+/**
+ * Returns a list of active (non-deleted, ACTIVE or INVITED) employees for a
+ * tenant that are eligible to be assigned as a reporting manager.
+ * Used to populate the manager dropdown on the invite / bulk import form.
+ *
+ * @param {string} tenantId
+ * @returns {Promise<Array<{ id: string, name: string, designation: string, department: string }>>}
+ */
+export async function listEligibleManagers(tenantId) {
+  return prisma.tenantUser.findMany({
+    where: {
+      tenantId,
+      isDeleted: false,
+      status: { in: ['ACTIVE', 'INVITED'] },
+    },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      designation: true,
+      department: true,
+      role: true,
+    },
+    orderBy: { name: 'asc' },
+  });
+}

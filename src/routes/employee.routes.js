@@ -1,6 +1,9 @@
 import { Router } from 'express';
 import {
   inviteEmployee,
+  bulkInviteEmployees,
+  getEligibleManagers,
+  resendInvite,
   onboardEmployee,
   listEmployees,
   getEmployee,
@@ -28,6 +31,8 @@ const router = Router();
 
 // ── Active Employees ─────────────────────────────────────────────────────────
 router.post('/employees', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'MANAGER'), inviteEmployee);
+router.post('/employees/bulk-invite', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'MANAGER'), bulkInviteEmployees);
+router.get('/employees/managers', requireAuth, requireTenant, getEligibleManagers);
 router.patch('/employees/onboard', requireAuth, requireTenant, onboardEmployee);
 router.get('/employees', requireAuth, requireTenant, listEmployees);
 
@@ -37,7 +42,8 @@ router.get('/employees/stats', requireAuth, requireTenant, authorize('SUPER_ADMI
 router.patch('/employees/:id', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), updateEmployee);
 router.delete('/employees/:id', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), deleteEmployee);
 
-// Exit and Reactivation workflows
+// Invitation resend & Exit/Reactivation workflows
+router.post('/employees/:id/resend-invite', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'MANAGER'), resendInvite);
 router.post('/employees/:id/exit', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), exitEmployee);
 router.post('/employees/:id/reactivate', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), reactivateEmployee);
 
@@ -56,7 +62,7 @@ router.patch('/employees/offers/:id', requireAuth, requireTenant, authorizeRoleO
 router.delete('/employees/offers/:id', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), deleteNonJoiner);
 
 // Single-employee detail — registered LAST among /employees GET routes so it
-// never shadows the more specific /employees/ex, /employees/offers, /employees/stats.
+// never shadows the more specific /employees/ex, /employees/offers, /employees/stats, /employees/managers.
 router.get('/employees/:id', requireAuth, requireTenant, getEmployee);
 
 export default router;
