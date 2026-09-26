@@ -314,10 +314,9 @@ export async function bulkInviteEmployees(req, res, next) {
 
       const results = [];
       for (const emp of items) {
-        const targetRole = (emp.role || 'EMPLOYEE').toUpperCase();
-        if (!canCreateRole(creatorRole, targetRole)) {
-          throw new Error(`Forbidden: Cannot assign role ${targetRole} to ${emp.email}`);
-        }
+        // Excel bulk import ALWAYS explicitly assigns default EMPLOYEE role.
+        // Role cannot be overridden or accepted from Excel input.
+        const targetRole = 'EMPLOYEE';
 
         const resolvedName = (emp.firstName || emp.lastName)
           ? `${emp.firstName || ''} ${emp.lastName || ''}`.trim()
