@@ -454,6 +454,28 @@ export const swaggerExtensions = {
         feedback: { type: 'string', example: 'Smooth offboarding with knowledge transfer completed.' },
       },
     },
+    BulkInviteEmployeesRequest: {
+      type: 'object',
+      required: ['employees'],
+      properties: {
+        employees: {
+          type: 'array',
+          items: {
+            type: 'object',
+            required: ['email'],
+            properties: {
+              email: { type: 'string', format: 'email', example: 'john@example.com' },
+              firstName: { type: 'string', example: 'John' },
+              lastName: { type: 'string', example: 'Doe' },
+              designation: { type: 'string', example: 'Developer' },
+              department: { type: 'string', example: 'Engineering' },
+              managerId: { type: 'string', example: 'Jane Smith' },
+              joinDate: { type: 'string', example: '26-09-2026' },
+            },
+          },
+        },
+      },
+    },
 
     // ── Ex-Employee Records ──
     ExEmployeeRecord: {
