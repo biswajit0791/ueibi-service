@@ -486,9 +486,9 @@ const options = {
         },
         InviteEmployeeRequest: {
           type: 'object',
-          required: ['email', 'name'],
+          required: ['email'],
           description:
-            'Creates a new tenant user with INVITED status and sends a temporary-password email.\n\n' +
+            'Creates or re-invites a tenant user with INVITED status and sends a password-setup link email.\n\n' +
             '**Server-side role validation (authoritative — cannot be bypassed by the frontend):**\n\n' +
             '| Caller role | Assignable roles |\n' +
             '|---|---|\n' +
@@ -500,7 +500,9 @@ const options = {
             'Omitting `role` defaults to `EMPLOYEE` (backward compatible).',
           properties: {
             email: { type: 'string', format: 'email', example: 'ravi@acmecorp.com' },
-            name: { type: 'string', example: 'Ravi Teja' },
+            firstName: { type: 'string', example: 'Ravi' },
+            lastName: { type: 'string', example: 'Teja' },
+            name: { type: 'string', example: 'Ravi Teja', description: 'Full name (optional if firstName/lastName provided)' },
             role: {
               type: 'string',
               enum: ['SUPER_ADMIN', 'ADMIN', 'CMD', 'HR', 'FINANCE', 'MANAGER', 'EMPLOYEE', 'STUDENT', 'MENTOR'],
@@ -513,11 +515,42 @@ const options = {
             },
             designation: { type: 'string', example: 'Backend Engineer' },
             department: { type: 'string', example: 'Engineering' },
+            managerId: { type: 'string', example: 'us_mgr123', description: 'Reporting Manager TenantUser ID' },
             joinDate: { type: 'string', format: 'date', example: '2026-09-15', description: 'ISO date string for the employee\'s joining date.' },
             phone: { type: 'string', example: '9876543210' },
             pan: { type: 'string', example: 'ABCDE1234F', description: 'PAN card number (stored in uppercase).' },
             dob: { type: 'string', example: '1994', description: 'Birth year (YYYY). Stored as DateTime midnight on Jan 1 of that year.' },
             feedbackRemarks: { type: 'string', example: 'Referred by design team.' },
+          },
+        },
+        BulkInviteEmployeesRequest: {
+          type: 'object',
+          required: ['employees'],
+          properties: {
+            employees: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/InviteEmployeeRequest' },
+              description: 'Array of employee invitation payloads',
+            },
+          },
+        },
+        EligibleManagersResponse: {
+          type: 'object',
+          properties: {
+            managers: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  name: { type: 'string' },
+                  email: { type: 'string' },
+                  role: { type: 'string' },
+                  designation: { type: 'string' },
+                  department: { type: 'string' },
+                },
+              },
+            },
           },
         },
         OnboardEmployeeRequest: {

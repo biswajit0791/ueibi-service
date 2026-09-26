@@ -2007,6 +2007,60 @@ export const swaggerExtensions = {
         },
       },
     },
+    '/employees/bulk-invite': {
+      post: {
+        tags: ['Employees'],
+        summary: 'Bulk invite active employees with seat license assertion',
+        description: 'Enforces atomic license capacity checks for the entire batch before creating TenantUser records and emailing password setup links.',
+        operationId: 'bulkInviteEmployees',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { $ref: '#/components/schemas/BulkInviteEmployeesRequest' } } },
+        },
+        responses: {
+          201: {
+            description: 'Employees onboarded successfully',
+            content: { 'application/json': { schema: { type: 'object', properties: { message: { type: 'string' }, count: { type: 'integer' }, licenseStats: { $ref: '#/components/schemas/EmployeeStats' } } } } },
+          },
+          400: { description: 'Validation failed or license capacity exceeded' },
+          409: { description: 'Duplicate email address encountered' },
+        },
+      },
+    },
+    '/employees/managers': {
+      get: {
+        tags: ['Employees'],
+        summary: 'List eligible reporting managers in tenant',
+        description: 'Returns list of non-deleted tenant users eligible to serve as reporting managers.',
+        operationId: 'getEligibleManagers',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        responses: {
+          200: {
+            description: 'Eligible managers retrieved',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/EligibleManagersResponse' } } },
+          },
+        },
+      },
+    },
+    '/employees/{id}/resend-invite': {
+      post: {
+        tags: ['Employees'],
+        summary: 'Re-send invitation email with password setup link',
+        description: 'Issues a new PasswordResetToken and emails a fresh password setup link to an employee in INVITED status.',
+        operationId: 'resendInvite',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: {
+            description: 'Invitation re-sent successfully',
+            content: { 'application/json': { schema: { type: 'object', properties: { message: { type: 'string' } } } } },
+          },
+          400: { description: 'Employee not in INVITED status or invalid ID' },
+          404: { description: 'Employee not found' },
+        },
+      },
+    },
     '/employees/{id}/exit': {
       post: {
         tags: ['Employees'],

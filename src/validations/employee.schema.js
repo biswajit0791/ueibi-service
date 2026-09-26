@@ -26,7 +26,9 @@ export const listEmployeesQuerySchema = z.object({
 
 export const inviteEmployeeSchema = z.object({
   email: z.string().trim().toLowerCase().email("A valid email address is required"),
-  name: z.string().trim().min(2, "Name must be at least 2 characters"),
+  firstName: z.string().trim().optional().nullable().or(z.literal('')),
+  lastName: z.string().trim().optional().nullable().or(z.literal('')),
+  name: z.string().trim().optional().nullable().or(z.literal('')),
   role: z.string().optional().nullable().or(z.literal('')),
   designation: z.string().optional().nullable().or(z.literal('')),
   department: z.string().optional().nullable().or(z.literal('')),
@@ -38,6 +40,23 @@ export const inviteEmployeeSchema = z.object({
   dob: z.string().optional().nullable().or(z.literal('')),
   feedbackRemarks: z.string().optional().nullable().or(z.literal('')),
 }).passthrough();
+
+export const bulkInviteEmployeesSchema = z.object({
+  employees: z.array(
+    z.object({
+      email: z.string().trim().toLowerCase().email("Valid email required"),
+      firstName: z.string().trim().optional().nullable().or(z.literal('')),
+      lastName: z.string().trim().optional().nullable().or(z.literal('')),
+      name: z.string().trim().optional().nullable().or(z.literal('')),
+      role: z.string().optional().nullable().or(z.literal('')),
+      designation: z.string().optional().nullable().or(z.literal('')),
+      department: z.string().optional().nullable().or(z.literal('')),
+      joinDate: z.string().optional().nullable().or(z.literal('')),
+      managerId: z.string().optional().nullable().or(z.literal('')),
+      phone: z.string().optional().nullable().or(z.literal('')),
+    }).passthrough()
+  ).min(1, "At least one employee must be provided"),
+});
 
 // Explicit allow-list of fields an HR/Admin edit may change on an active employee.
 // Anything not listed here (passwordHash, status, role, isDeleted, tenantId, …) is ignored.
