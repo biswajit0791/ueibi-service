@@ -194,6 +194,27 @@ model TenantUser {
   uan     String?
   esic    String?
 
+  // Address Details
+  presentAddressLine1   String?
+  presentAddressLine2   String?
+  presentCity           String?
+  presentState          String?
+  presentPincode        String?
+
+  permanentAddressLine1 String?
+  permanentAddressLine2 String?
+  permanentCity         String?
+  permanentState        String?
+  permanentPincode      String?
+
+  sameAsPresentAddress  Boolean @default(false)
+
+  // Professional & Skills
+  linkedinUrl     String?
+  profilePhoto    String?
+  primarySkills   String[] @default([])
+  secondarySkills String[] @default([])
+
   // Smart HR Relations
   capabilities               UserCapability[]         @relation("UserCapabilities")
   cxoMessagesRaised          CxoMessage[]             @relation("CxoRaisedBy")
@@ -205,6 +226,7 @@ model TenantUser {
   capabilityAuditActor       CapabilityAuditLog[]     @relation("CapabilityAuditActor")
   bankDetails                BankDetails?
   workHistory                WorkHistory[]
+  educations                 EmployeeEducation[]
   exitDetails                ExitDetails?
   goals                      Goal[]                   @relation("GoalAssignee")
   createdGoals               Goal[]                   @relation("GoalCreatedBy")
@@ -305,9 +327,26 @@ model WorkHistory {
   startDate      DateTime
   endDate        DateTime? // null = still employed there ("current")
   reasonForExit  String?
+  remarks        String?
   verifiedStatus String     @default("PENDING") // PENDING | VERIFIED | REJECTED
 
   @@map("work_histories")
+}
+
+model EmployeeEducation {
+  id              String     @id @default(cuid())
+  userId          String
+  user            TenantUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  qualification   String
+  institutionName String
+  boardUniversity String
+  passingYear     String
+  percentageCgpa  String?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  @@index([userId])
+  @@map("employee_educations")
 }
 
 model ExitDetails {
