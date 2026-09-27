@@ -1,0 +1,40 @@
+import { Router } from 'express';
+import {
+  initiateExit,
+  saveExitInterview,
+  approveClearance,
+  getExitStatus,
+  listPendingExits,
+  completeExit,
+  generateCertificate,
+} from '../controllers/exit.controller.js';
+import { requireAuth } from '../middleware/auth.js';
+import { requireTenant } from '../middleware/tenantScope.js';
+import { authorize } from '../middleware/rbac.js';
+
+const router = Router();
+
+// ── Exit Workflow ────────────────────────────────────────────────────────────
+
+// List all pending exits for this tenant
+router.get('/exit/pending', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), listPendingExits);
+
+// Initiate exit process for an employee
+router.post('/exit/:employeeId/initiate', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), initiateExit);
+
+// Get exit status for an employee
+router.get('/exit/:employeeId/status', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'MANAGER', 'FINANCE'), getExitStatus);
+
+// Save exit interview
+router.patch('/exit/:id/interview', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), saveExitInterview);
+
+// Approve department clearance
+router.patch('/exit/:id/clearance', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'MANAGER', 'FINANCE'), approveClearance);
+
+// Complete exit (finalize — mark EXITED, free license, archive)
+router.post('/exit/:id/complete', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), completeExit);
+
+// Generate certificate (relieving / service)
+router.post('/exit/:id/certificate/:type', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), generateCertificate);
+
+export default router;

@@ -26,6 +26,8 @@ export const listEmployeesQuerySchema = z.object({
 
 export const inviteEmployeeSchema = z.object({
   email: z.string().trim().toLowerCase().email("A valid email address is required"),
+  employeeId: z.string().trim().optional().nullable().or(z.literal('')),
+  empType: z.string().optional().nullable().or(z.literal('')),
   firstName: z.string().trim().optional().nullable().or(z.literal('')),
   lastName: z.string().trim().optional().nullable().or(z.literal('')),
   name: z.string().trim().optional().nullable().or(z.literal('')),
@@ -45,6 +47,8 @@ export const bulkInviteEmployeesSchema = z.object({
   employees: z.array(
     z.object({
       email: z.string().trim().toLowerCase().email("Valid email required"),
+      employeeId: z.string().trim().optional().nullable().or(z.literal('')),
+      empType: z.string().optional().nullable().or(z.literal('')),
       firstName: z.string().trim().optional().nullable().or(z.literal('')),
       lastName: z.string().trim().optional().nullable().or(z.literal('')),
       name: z.string().trim().optional().nullable().or(z.literal('')),
@@ -62,11 +66,12 @@ export const bulkInviteEmployeesSchema = z.object({
 // Anything not listed here (passwordHash, status, role, isDeleted, tenantId, …) is ignored.
 export const updateEmployeeSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters").optional(),
+  employeeId: z.string().trim().optional().nullable().or(z.literal('')),
   designation: z.string().min(2, "Designation is required").optional(),
   department: z.string().optional(),
   band: z.string().optional().nullable(),
   officeLocation: z.string().optional().nullable(),
-  empType: z.enum(['PERMANENT', 'CONTRACT', 'PROBATION', 'INTERN']).optional(),
+  empType: z.enum(['PERMANENT', 'CONTRACT', 'PROBATION', 'INTERN', 'PART_TIME']).optional(),
   managerId: z.string().min(1).optional().nullable(),
   joinDate: z.string().optional().nullable(),
   confirmationDate: z.string().optional().nullable(),

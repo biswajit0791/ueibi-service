@@ -61,13 +61,24 @@ async function issueInvitePasswordToken(tx, userId) {
   return { rawToken, setupUrl, expiresHours: Math.round(expiresMinutes / 60) };
 }
 
+export function normalizeEmploymentType(val) {
+  if (!val) return 'PERMANENT';
+  const clean = String(val).trim().toUpperCase().replace(/[\s\-_]+/g, '_');
+  if (['PERMANENT', 'FULL_TIME', 'FULLTIME', 'REGULAR'].includes(clean)) return 'PERMANENT';
+  if (['CONTRACT', 'CONTRACTOR', 'CONSULTANT'].includes(clean)) return 'CONTRACT';
+  if (['PROBATION', 'TRAINEE'].includes(clean)) return 'PROBATION';
+  if (['INTERN', 'INTERNSHIP'].includes(clean)) return 'INTERN';
+  if (['PART_TIME', 'PARTTIME', 'HALF_TIME'].includes(clean)) return 'PART_TIME';
+  return 'PERMANENT';
+}
+
 export async function inviteEmployee(req, res, next) {
   try {
     const parsed = inviteEmployeeSchema.safeParse(req.body || {});
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
-    const { email, firstName, lastName, name, role, designation, department, band, managerId, joinDate, phone, pan, dob, feedbackRemarks } = parsed.data;
+    const { email, employeeId, empType, firstName, lastName, name, role, designation, department, band, managerId, joinDate, phone, pan, dob, feedbackRemarks } = parsed.data;
 
     const resolvedName = (firstName || lastName)
       ? `${firstName || ''} ${lastName || ''}`.trim()
@@ -137,6 +148,8 @@ export async function inviteEmployee(req, res, next) {
             data: {
               name: resolvedName,
               role: targetRole,
+              employeeId: employeeId ? employeeId.trim() : existing.employeeId,
+              empType: empType ? normalizeEmploymentType(empType) : existing.empType,
               designation: designation ? designation.trim() : existing.designation,
               department: department ? department.trim() : existing.department,
               band: band || existing.band,
@@ -206,6 +219,8 @@ export async function inviteEmployee(req, res, next) {
           role: targetRole,
           status: 'INVITED',
           mustChangePassword: true,
+          employeeId: employeeId ? employeeId.trim() : null,
+          empType: normalizeEmploymentType(empType),
           designation: designation ? designation.trim() : 'Member',
           department: department ? department.trim() : 'General',
           band: band || undefined,
@@ -249,6 +264,8 @@ export async function inviteEmployee(req, res, next) {
         name: user.name,
         role: user.role,
         status: user.status,
+        employeeId: user.employeeId,
+        empType: user.empType,
       },
       licenseStats,
     });
@@ -336,6 +353,8 @@ export async function bulkInviteEmployees(req, res, next) {
             role: targetRole,
             status: 'INVITED',
             mustChangePassword: true,
+            employeeId: emp.employeeId ? String(emp.employeeId).trim() : null,
+            empType: normalizeEmploymentType(emp.empType),
             designation: emp.designation ? emp.designation.trim() : 'Member',
             department: emp.department ? emp.department.trim() : 'General',
             managerId: emp.managerId || null,
@@ -706,6 +725,7 @@ export async function listEmployees(req, res, next) {
       where.OR = [
         { name: { contains: search, mode: 'insensitive' } },
         { email: { contains: search, mode: 'insensitive' } },
+        { employeeId: { contains: search, mode: 'insensitive' } },
       ];
     }
 
@@ -714,6 +734,8 @@ export async function listEmployees(req, res, next) {
     const select = isPrivileged
       ? {
           id: true,
+          employeeId: true,
+          empType: true,
           email: true,
           name: true,
           role: true,
@@ -756,6 +778,8 @@ export async function listEmployees(req, res, next) {
         }
       : {
           id: true,
+          employeeId: true,
+          empType: true,
           email: true,
           name: true,
           role: true,
@@ -792,6 +816,8 @@ export async function getEmployee(req, res, next) {
     const select = isPrivileged
       ? {
           id: true,
+          employeeId: true,
+          empType: true,
           email: true,
           name: true,
           role: true,
@@ -834,6 +860,8 @@ export async function getEmployee(req, res, next) {
         }
       : {
           id: true,
+          employeeId: true,
+          empType: true,
           email: true,
           name: true,
           role: true,
@@ -1359,7 +1387,7 @@ export async function updateEmployee(req, res, next) {
     }
 
     // Clean up empty optional strings so Prisma gets null instead of ''
-    for (const k of ['band', 'aadhaar', 'officeLocation', 'uan', 'esic', 'gender', 'bloodGroup', 'phone', 'personalEmail', 'emergencyContact']) {
+    for (const k of ['band', 'aadhaar', 'officeLocation', 'uan', 'esic', 'gender', 'bloodGroup', 'phone', 'personalEmail', 'emergencyContact', 'employeeId']) {
       if (updates[k] === '') updates[k] = null;
     }
 
@@ -1368,6 +1396,7 @@ export async function updateEmployee(req, res, next) {
       data: updates,
       select: {
         id: true, email: true, name: true, role: true, status: true,
+        employeeId: true, empType: true,
         department: true, designation: true, band: true,
         phone: true, pan: true, aadhaar: true, dob: true, joinDate: true, docs: true,
       }

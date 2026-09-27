@@ -13,16 +13,6 @@ const MONTH_NAMES = [
  */
 export async function ensureAppraisalColumns() {
   try {
-    // 0. Auto-generate Prisma Client if year/month fields are not in runtime model
-    try {
-      const prismaBin = path.resolve(process.cwd(), 'node_modules', 'prisma', 'build', 'index.js');
-      console.log('[dbInit] Ensuring Prisma Client is generated with year/month fields...');
-      const output = execSync(`node "${prismaBin}" generate`, { encoding: 'utf8' });
-      console.log('[dbInit] prisma generate succeeded:\n', output);
-    } catch (genErr) {
-      console.warn('[dbInit] prisma generate note:', genErr?.message || genErr);
-    }
-
     // 1. Add columns to appraisal_cycles table if missing
     await prisma.$executeRawUnsafe(`
       DO $$

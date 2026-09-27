@@ -153,6 +153,7 @@ enum EmploymentType {
   CONTRACT
   PROBATION
   INTERN
+  PART_TIME
 }
 
 model TenantUser {
@@ -169,6 +170,7 @@ model TenantUser {
   mustChangePassword Boolean    @default(true)
 
   // Employment Details
+  employeeId       String?
   empType          EmploymentType @default(PERMANENT)
   department       String?
   designation      String?
@@ -301,6 +303,7 @@ model TenantUser {
   updatedAt DateTime @updatedAt
 
   @@index([tenantId])
+  @@index([tenantId, employeeId])
   @@map("tenant_users")
 }
 
@@ -349,24 +352,55 @@ model EmployeeEducation {
   @@map("employee_educations")
 }
 
+enum ExitStatus {
+  INITIATED
+  INTERVIEW_DONE
+  PENDING_CLEARANCE
+  ALL_CLEARED
+  COMPLETED
+}
+
 model ExitDetails {
   id              String     @id @default(cuid())
   userId          String     @unique
   user            TenantUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenantId        String
   resignationDate DateTime
   lastWorkingDay  DateTime
   exitReason      String
   feedbackRemarks String?
+  exitStatus      ExitStatus @default(INITIATED)
+  noticePeriodDays Int?
 
-  // Clearances
-  itCleared        Boolean @default(false)
-  hrCleared        Boolean @default(false)
-  financeCleared   Boolean @default(false)
-  settlementStatus String  @default("PENDING") // PENDING | COMPLETED
+  // Exit Interview
+  exitInterviewNotes      String?   @db.Text
+  exitInterviewDate       DateTime?
+  exitInterviewConductedBy String?
+
+  // Clearances (with timestamps and who cleared)
+  itCleared        Boolean   @default(false)
+  itClearedAt      DateTime?
+  itClearedBy      String?
+  hrCleared        Boolean   @default(false)
+  hrClearedAt      DateTime?
+  hrClearedBy      String?
+  financeCleared   Boolean   @default(false)
+  financeClearedAt DateTime?
+  financeClearedBy String?
+  managerCleared   Boolean   @default(false)
+  managerClearedAt DateTime?
+  managerClearedBy String?
+  settlementStatus String    @default("PENDING") // PENDING | COMPLETED
+
+  // Generated Certificates
+  relievingLetterUrl    String?
+  serviceCertificateUrl String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@index([tenantId])
+  @@index([exitStatus])
   @@map("exit_details")
 }
 
