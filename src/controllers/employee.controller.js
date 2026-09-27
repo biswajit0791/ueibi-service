@@ -469,6 +469,22 @@ export async function onboardEmployee(req, res, next) {
       emergencyContact,
       uan,
       esic,
+      presentAddressLine1,
+      presentAddressLine2,
+      presentCity,
+      presentState,
+      presentPincode,
+      permanentAddressLine1,
+      permanentAddressLine2,
+      permanentCity,
+      permanentState,
+      permanentPincode,
+      sameAsPresentAddress,
+      linkedinUrl,
+      primarySkills,
+      secondarySkills,
+      profilePhoto,
+      educationHistory,
       bankDetails,
       workHistory,
       docs,
@@ -515,6 +531,22 @@ export async function onboardEmployee(req, res, next) {
           emergencyContact: emergencyContact || undefined,
           uan: uan || undefined,
           esic: esic || undefined,
+          presentAddressLine1: presentAddressLine1 || undefined,
+          presentAddressLine2: presentAddressLine2 || undefined,
+          presentCity: presentCity || undefined,
+          presentState: presentState || undefined,
+          presentPincode: presentPincode || undefined,
+          permanentAddressLine1: permanentAddressLine1 || undefined,
+          permanentAddressLine2: permanentAddressLine2 || undefined,
+          permanentCity: permanentCity || undefined,
+          permanentState: permanentState || undefined,
+          permanentPincode: permanentPincode || undefined,
+          sameAsPresentAddress: typeof sameAsPresentAddress === 'boolean' ? sameAsPresentAddress : undefined,
+          linkedinUrl: linkedinUrl || undefined,
+          primarySkills: Array.isArray(primarySkills) ? primarySkills : undefined,
+          secondarySkills: Array.isArray(secondarySkills) ? secondarySkills : undefined,
+          profilePhoto: profilePhoto || undefined,
+          profileSnaps: profilePhoto ? [profilePhoto] : undefined,
           docs: docs || undefined,
           status: 'ACTIVE',
           mustChangePassword: false,
@@ -541,7 +573,26 @@ export async function onboardEmployee(req, res, next) {
         });
       }
 
-      // 3. Create work history entries if provided (refresh list to avoid duplicates)
+      // 3. Create education history entries if provided
+      if (educationHistory && Array.isArray(educationHistory) && educationHistory.length > 0) {
+        await tx.employeeEducation.deleteMany({ where: { userId } });
+        await Promise.all(
+          educationHistory.map((edu) => {
+            return tx.employeeEducation.create({
+              data: {
+                userId,
+                qualification: edu.qualification,
+                institutionName: edu.institutionName,
+                boardUniversity: edu.boardUniversity || null,
+                passingYear: edu.passingYear || null,
+                percentageCgpa: edu.percentageCgpa || null,
+              },
+            });
+          })
+        );
+      }
+
+      // 4. Create work history entries if provided (refresh list to avoid duplicates)
       if (workHistory && Array.isArray(workHistory) && workHistory.length > 0) {
         await tx.workHistory.deleteMany({ where: { userId } });
         await Promise.all(
@@ -558,6 +609,7 @@ export async function onboardEmployee(req, res, next) {
                 startDate: start,
                 endDate: end,
                 reasonForExit: history.reasonForExit || null,
+                remarks: history.remarks || null,
               },
             });
           })
@@ -570,7 +622,7 @@ export async function onboardEmployee(req, res, next) {
     // Fetch full updated user with relations for socket payload
     const fullUser = await prisma.tenantUser.findUnique({
       where: { id: updated.id },
-      include: { bankDetails: true, workHistory: true },
+      include: { bankDetails: true, workHistory: true, educations: true },
     });
 
     // Emit live status update to all HR/admins in this tenant
@@ -586,6 +638,7 @@ export async function onboardEmployee(req, res, next) {
       docs: fullUser.docs,
       bankDetails: fullUser.bankDetails,
       workHistory: fullUser.workHistory,
+      educations: fullUser.educations,
     });
 
     res.json({
@@ -596,6 +649,35 @@ export async function onboardEmployee(req, res, next) {
         name: updated.name,
         status: updated.status,
         mustChangePassword: updated.mustChangePassword,
+        phone: updated.phone,
+        pan: updated.pan,
+        aadhaar: updated.aadhaar,
+        dob: updated.dob,
+        gender: updated.gender,
+        bloodGroup: updated.bloodGroup,
+        personalEmail: updated.personalEmail,
+        emergencyContact: updated.emergencyContact,
+        uan: updated.uan,
+        esic: updated.esic,
+        presentAddressLine1: updated.presentAddressLine1,
+        presentAddressLine2: updated.presentAddressLine2,
+        presentCity: updated.presentCity,
+        presentState: updated.presentState,
+        presentPincode: updated.presentPincode,
+        permanentAddressLine1: updated.permanentAddressLine1,
+        permanentAddressLine2: updated.permanentAddressLine2,
+        permanentCity: updated.permanentCity,
+        permanentState: updated.permanentState,
+        permanentPincode: updated.permanentPincode,
+        sameAsPresentAddress: updated.sameAsPresentAddress,
+        linkedinUrl: updated.linkedinUrl,
+        primarySkills: updated.primarySkills,
+        secondarySkills: updated.secondarySkills,
+        profilePhoto: updated.profilePhoto,
+        profileSnaps: updated.profileSnaps,
+        bankDetails: fullUser.bankDetails,
+        workHistory: fullUser.workHistory,
+        educations: fullUser.educations,
       },
     });
   } catch (err) {

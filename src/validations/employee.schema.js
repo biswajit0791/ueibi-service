@@ -82,6 +82,21 @@ export const updateEmployeeSchema = z.object({
   esic: z.string().optional().nullable(),
   remarks: z.string().optional().nullable(),
   docs: z.any().optional(),
+  presentAddressLine1: z.string().optional().nullable(),
+  presentAddressLine2: z.string().optional().nullable(),
+  presentCity: z.string().optional().nullable(),
+  presentState: z.string().optional().nullable(),
+  presentPincode: z.string().optional().nullable(),
+  permanentAddressLine1: z.string().optional().nullable(),
+  permanentAddressLine2: z.string().optional().nullable(),
+  permanentCity: z.string().optional().nullable(),
+  permanentState: z.string().optional().nullable(),
+  permanentPincode: z.string().optional().nullable(),
+  sameAsPresentAddress: z.boolean().optional().nullable(),
+  linkedinUrl: z.string().optional().nullable().or(z.literal('')),
+  profilePhoto: z.string().optional().nullable(),
+  primarySkills: z.array(z.string()).optional(),
+  secondarySkills: z.array(z.string()).optional(),
 });
 
 const workHistoryEntrySchema = z.object({
@@ -91,6 +106,15 @@ const workHistoryEntrySchema = z.object({
   endDate: z.string().optional().nullable(),
   isCurrent: z.boolean().optional(),
   reasonForExit: z.string().optional().nullable(),
+  remarks: z.string().optional().nullable(),
+});
+
+const educationEntrySchema = z.object({
+  qualification: z.string().min(1, "Qualification is required"),
+  institutionName: z.string().min(1, "Institution name is required"),
+  boardUniversity: z.string().optional().nullable().or(z.literal('')),
+  passingYear: z.string().optional().nullable().or(z.literal('')),
+  percentageCgpa: z.string().optional().nullable().or(z.literal('')),
 });
 
 export const onboardEmployeeSchema = z.object({
@@ -106,12 +130,34 @@ export const onboardEmployeeSchema = z.object({
   emergencyContact: z.string().optional(),
   uan: z.string().optional(),
   esic: z.string().optional(),
+  // Address Details
+  presentAddressLine1: z.string().optional().nullable(),
+  presentAddressLine2: z.string().optional().nullable(),
+  presentCity: z.string().optional().nullable(),
+  presentState: z.string().optional().nullable(),
+  presentPincode: z.string().optional().nullable(),
+  permanentAddressLine1: z.string().optional().nullable(),
+  permanentAddressLine2: z.string().optional().nullable(),
+  permanentCity: z.string().optional().nullable(),
+  permanentState: z.string().optional().nullable(),
+  permanentPincode: z.string().optional().nullable(),
+  sameAsPresentAddress: z.boolean().optional().nullable(),
+  // Professional Details
+  linkedinUrl: z.string().optional().nullable().or(z.literal('')),
+  primarySkills: z.array(z.string()).optional(),
+  secondarySkills: z.array(z.string()).optional(),
+  // Profile Photo
+  profilePhoto: z.string().optional().nullable(),
+  // Education History
+  educationHistory: z.array(educationEntrySchema).optional(),
+  // Bank Details
   bankDetails: z.object({
     bankName: z.string().min(1),
     accountNumber: z.string().min(1),
     ifscCode: z.string().min(1),
     branchName: z.string().min(1),
   }).partial().optional(),
+  // Work History
   workHistory: z.array(workHistoryEntrySchema).optional(),
   docs: z.any().optional(),
 }).passthrough();

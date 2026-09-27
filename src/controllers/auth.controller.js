@@ -29,6 +29,7 @@ export async function login(req, res, next) {
         tenant: true,
         bankDetails: true,
         workHistory: true,
+        educations: true,
       },
     });
 
@@ -96,6 +97,7 @@ export async function login(req, res, next) {
               tenant: true,
               bankDetails: true,
               workHistory: true,
+              educations: true,
             },
           });
           console.log(`[AUTH] Auto-provisioned TenantUser: ${user.email} (${user.role}) in "${tenant.companyName}"`);
@@ -227,12 +229,28 @@ export async function login(req, res, next) {
         emergencyContact: user.emergencyContact,
         uan: user.uan,
         esic: user.esic,
+        presentAddressLine1: user.presentAddressLine1 || '',
+        presentAddressLine2: user.presentAddressLine2 || '',
+        presentCity: user.presentCity || '',
+        presentState: user.presentState || '',
+        presentPincode: user.presentPincode || '',
+        permanentAddressLine1: user.permanentAddressLine1 || '',
+        permanentAddressLine2: user.permanentAddressLine2 || '',
+        permanentCity: user.permanentCity || '',
+        permanentState: user.permanentState || '',
+        permanentPincode: user.permanentPincode || '',
+        sameAsPresentAddress: !!user.sameAsPresentAddress,
+        linkedinUrl: user.linkedinUrl || '',
+        primarySkills: Array.isArray(user.primarySkills) ? user.primarySkills : [],
+        secondarySkills: Array.isArray(user.secondarySkills) ? user.secondarySkills : [],
+        profilePhoto: user.profilePhoto || '',
         hubBio: user.hubBio || '',
         hubBirthday: user.hubBirthday || '',
-        profileSnaps: Array.isArray(user.profileSnaps) ? user.profileSnaps : [],
+        profileSnaps: Array.isArray(user.profileSnaps) ? user.profileSnaps : (user.profilePhoto ? [user.profilePhoto] : []),
         docs: user.docs || [],
         bankDetails: user.bankDetails,
         workHistory: user.workHistory,
+        educations: user.educations || [],
       },
     });
   } catch (err) {
@@ -251,7 +269,8 @@ export async function me(req, res, next) {
       include: { 
         tenant: true,
         bankDetails: true,
-        workHistory: true
+        workHistory: true,
+        educations: true,
       },
     });
 
@@ -262,7 +281,6 @@ export async function me(req, res, next) {
     if (user.status === 'EXITED') {
       return res.status(403).json({ error: 'Access forbidden: this account is inactive/exited' });
     }
-
 
     const userCapabilities = await loadCapabilities(user.id);
 
@@ -291,12 +309,28 @@ export async function me(req, res, next) {
         emergencyContact: user.emergencyContact,
         uan: user.uan,
         esic: user.esic,
+        presentAddressLine1: user.presentAddressLine1 || '',
+        presentAddressLine2: user.presentAddressLine2 || '',
+        presentCity: user.presentCity || '',
+        presentState: user.presentState || '',
+        presentPincode: user.presentPincode || '',
+        permanentAddressLine1: user.permanentAddressLine1 || '',
+        permanentAddressLine2: user.permanentAddressLine2 || '',
+        permanentCity: user.permanentCity || '',
+        permanentState: user.permanentState || '',
+        permanentPincode: user.permanentPincode || '',
+        sameAsPresentAddress: !!user.sameAsPresentAddress,
+        linkedinUrl: user.linkedinUrl || '',
+        primarySkills: Array.isArray(user.primarySkills) ? user.primarySkills : [],
+        secondarySkills: Array.isArray(user.secondarySkills) ? user.secondarySkills : [],
+        profilePhoto: user.profilePhoto || '',
         hubBio: user.hubBio || '',
         hubBirthday: user.hubBirthday || '',
-        profileSnaps: Array.isArray(user.profileSnaps) ? user.profileSnaps : [],
+        profileSnaps: Array.isArray(user.profileSnaps) ? user.profileSnaps : (user.profilePhoto ? [user.profilePhoto] : []),
         docs: user.docs || [],
         bankDetails: user.bankDetails,
         workHistory: user.workHistory,
+        educations: user.educations || [],
       },
     });
   } catch (err) {
