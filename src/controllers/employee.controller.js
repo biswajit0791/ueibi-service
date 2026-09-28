@@ -1771,6 +1771,206 @@ export async function deleteEmployee(req, res, next) {
   }
 }
 
+/**
+ * POST /api/employees/ex/:id/restore
+ * Restores an ex-employee back to active status.
+ *
+ * Handles two cases:
+ *  1. TenantUser exists (EXITED / isDeleted) → reactivate it, send password-reset invite
+ *  2. No TenantUser (manually added to registry) → create a new INVITED TenantUser, send invite
+ */
+export async function restoreExEmployee(req, res, next) {
+  try {
+    console.log('[RESTORE] ▶ Restore endpoint hit');
+    console.log('[RESTORE] req.params:', req.params);
+    console.log('[RESTORE] req.user:', req.user?.id, req.user?.role);
+    console.log('[RESTORE] req.tenantId:', req.tenantId);
+
+    const parsedParams = employeeIdOnlyParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      console.log('[RESTORE] ✗ Param validation failed:', parsedParams.error.issues);
+      return res.status(400).json({ error: 'Invalid record ID parameter', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
+    const tenantId = req.tenantId;
+    console.log('[RESTORE] Parsed ID:', id, '| tenantId:', tenantId);
+
+    // 1. Find the ex-employee registry record with flexible fallbacks
+    let exRecord = await prisma.exEmployeeRecord.findFirst({
+      where: { id, tenantId, isDeleted: false },
+      select: { id: true, email: true, firstName: true, lastName: true, designation: true, department: true },
+    });
+
+    if (!exRecord) {
+      console.log('[RESTORE] ExEmployeeRecord not found by tenant, trying without tenant filter...');
+      exRecord = await prisma.exEmployeeRecord.findFirst({
+        where: { id, isDeleted: false },
+        select: { id: true, email: true, firstName: true, lastName: true, designation: true, department: true },
+      });
+    }
+
+    if (!exRecord) {
+      console.log('[RESTORE] ExEmployeeRecord not found, checking TenantUser by ID or email...');
+      const tu = await prisma.tenantUser.findFirst({
+        where: {
+          OR: [{ id }, { email: { equals: id, mode: 'insensitive' } }],
+          tenantId,
+        },
+        select: { id: true, name: true, email: true, designation: true, department: true },
+      });
+      if (tu) {
+        console.log('[RESTORE] Fallback found TenantUser:', tu);
+        const nameParts = (tu.name || '').trim().split(/\s+/);
+        exRecord = {
+          id: tu.id,
+          email: tu.email,
+          firstName: nameParts[0] || 'Unknown',
+          lastName: nameParts.slice(1).join(' ') || nameParts[0] || 'Unknown',
+          designation: tu.designation || 'Member',
+          department: tu.department || 'General',
+          isTenantUserFallback: true,
+        };
+      }
+    }
+
+    console.log('[RESTORE] Resolved ExRecord lookup result:', exRecord);
+
+    if (!exRecord) {
+      console.log('[RESTORE] ✗ Ex-Employee record not found for id:', id, 'tenantId:', tenantId);
+      return res.status(404).json({ error: 'Ex-Employee record not found' });
+    }
+
+    const normalizedEmail = exRecord.email.trim().toLowerCase();
+    const restoredName = `${exRecord.firstName} ${exRecord.lastName}`.trim();
+    console.log('[RESTORE] Searching TenantUser for email:', normalizedEmail, '| tenantId:', tenantId);
+
+    // 2. Try to find an existing TenantUser (including deleted/exited ones)
+    const existingUser = await prisma.tenantUser.findFirst({
+      where: {
+        email: { equals: normalizedEmail, mode: 'insensitive' },
+        tenantId,
+      },
+      select: { id: true, name: true, email: true, status: true, isDeleted: true },
+    });
+    console.log('[RESTORE] TenantUser lookup result:', existingUser);
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { companyName: true },
+    });
+    const companyName = tenant?.companyName || 'your organization';
+
+    let restoredUserId;
+    let setupUrl;
+    let expiresHours;
+
+    if (existingUser) {
+      // ── Case 1: TenantUser exists — reactivate ───────────────────────────
+      console.log('[RESTORE] Case 1: Existing TenantUser found — status:', existingUser.status, '| isDeleted:', existingUser.isDeleted);
+      if (!existingUser.isDeleted && existingUser.status !== 'EXITED') {
+        console.log('[RESTORE] ✗ Already active, rejecting');
+        return res.status(409).json({ error: 'This employee is already active and does not need restoration' });
+      }
+
+      const result = await prisma.$transaction(async (tx) => {
+        console.log('[RESTORE] Checking license availability...');
+        await assertLicenseAvailable(tx, tenantId);
+        console.log('[RESTORE] License OK, updating TenantUser...');
+        await tx.tenantUser.update({
+          where: { id: existingUser.id },
+          data: { isDeleted: false, status: 'INVITED', mustChangePassword: true },
+        });
+        console.log('[RESTORE] TenantUser updated, issuing invite token...');
+        return issueInvitePasswordToken(tx, existingUser.id);
+      });
+
+      restoredUserId = existingUser.id;
+      setupUrl = result.setupUrl;
+      expiresHours = result.expiresHours;
+      console.log('[RESTORE] Case 1 complete. Setup URL generated:', !!setupUrl);
+    } else {
+      // ── Case 2: No TenantUser — create a fresh one ────────────────────────
+      console.log('[RESTORE] Case 2: No TenantUser found — creating new INVITED user for:', normalizedEmail);
+      const initialPlaceholder = 'INVITED_NO_PASS_' + crypto.randomBytes(16).toString('hex');
+      const passwordHash = await bcrypt.hash(initialPlaceholder, 10);
+
+      const result = await prisma.$transaction(async (tx) => {
+        await assertLicenseAvailable(tx, tenantId);
+
+        const u = await tx.tenantUser.create({
+          data: {
+            tenantId,
+            email: normalizedEmail,
+            passwordHash,
+            name: restoredName,
+            role: 'EMPLOYEE',
+            status: 'INVITED',
+            mustChangePassword: true,
+            designation: exRecord.designation || 'Member',
+            department: exRecord.department || 'General',
+          },
+        });
+
+        const tokenData = await issueInvitePasswordToken(tx, u.id);
+        console.log('[RESTORE] Case 2 TenantUser created:', u.id, '| invite token issued:', !!tokenData.setupUrl);
+        return { userId: u.id, ...tokenData };
+      });
+
+      restoredUserId = result.userId;
+      setupUrl = result.setupUrl;
+      expiresHours = result.expiresHours;
+    }
+
+    // Soft-delete the ExEmployeeRecord so it leaves the Ex-Employees tab
+    if (!exRecord.isTenantUserFallback) {
+      await prisma.exEmployeeRecord.update({
+        where: { id: exRecord.id },
+        data: { isDeleted: true },
+      }).catch((err) => console.warn('[RESTORE] Non-critical: Failed to soft-delete ExEmployeeRecord:', err.message));
+    }
+
+    // 3. Send password-setup invitation email
+    console.log('[RESTORE] Sending restore email to:', normalizedEmail);
+    const { html, text } = renderInvitationEmail({
+      setupUrl,
+      expiresHours,
+      name: restoredName,
+      companyName,
+      email: normalizedEmail,
+    });
+
+    await sendMail({
+      to: normalizedEmail,
+      subject: `Your account has been restored — Set Your Password | ${companyName}`,
+      text,
+      html,
+      event: 'EMPLOYEE_INVITED',
+    }).catch((err) => console.warn('[RESTORE] Failed to send restore email:', err.message));
+
+    const licenseStats = await getLicenseStats(tenantId);
+    console.log('[RESTORE] ✓ Restore complete for:', restoredName, '| userId:', restoredUserId);
+
+    // 4. Real-time update
+    emitToTenant(tenantId, 'employee_status_updated', { id: restoredUserId, status: 'INVITED' });
+
+    res.json({
+      message: `${restoredName} has been restored successfully. A password setup link has been sent to ${normalizedEmail}.`,
+      restoredUserId,
+      licenseStats,
+    });
+  } catch (err) {
+    if (err.statusCode) {
+      return res.status(err.statusCode).json({
+        error: err.message,
+        code: err.code || undefined,
+        details: err.details || undefined,
+      });
+    }
+    next(err);
+  }
+}
+
+
 export async function deleteExEmployee(req, res, next) {
   try {
     const parsedParams = employeeIdOnlyParamSchema.safeParse(req.params);

@@ -22,6 +22,7 @@ import {
   getEmployeeStats,
   exitEmployee,
   reactivateEmployee,
+  restoreExEmployee,
 } from '../controllers/employee.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
@@ -46,12 +47,15 @@ router.delete('/employees/:id', requireAuth, requireTenant, authorize('SUPER_ADM
 router.post('/employees/:id/resend-invite', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'MANAGER'), resendInvite);
 router.post('/employees/:id/exit', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), exitEmployee);
 router.post('/employees/:id/reactivate', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), reactivateEmployee);
+router.post('/employees/:id/restore', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), restoreExEmployee);
 
 // ── Ex-Employees ─────────────────────────────────────────────────────────────
 router.get('/employees/ex', requireAuth, requireTenant, authorizeRoleOrCapability(['SUPER_ADMIN', 'ADMIN', 'HR'], ['REGISTRY_SEARCH', 'REGISTRY_WRITE']), listExEmployees);
 router.post('/employees/ex', requireAuth, requireTenant, authorizeRoleOrCapability(['SUPER_ADMIN', 'ADMIN', 'HR'], ['REGISTRY_WRITE']), addExEmployee);
 router.post('/employees/ex/bulk', requireAuth, requireTenant, authorizeRoleOrCapability(['SUPER_ADMIN', 'ADMIN', 'HR'], ['REGISTRY_WRITE']), bulkAddExEmployees);
 router.patch('/employees/ex/:id', requireAuth, requireTenant, authorizeRoleOrCapability(['SUPER_ADMIN', 'ADMIN', 'HR'], ['REGISTRY_WRITE']), updateExEmployee);
+router.post('/employees/ex/:id/restore', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), restoreExEmployee);
+console.log('[ROUTES] POST /employees/ex/:id/restore → restoreExEmployee registered');
 router.delete('/employees/ex/:id', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), deleteExEmployee);
 
 // ── Non-Joiners / Offers ─────────────────────────────────────────────────────
