@@ -1357,6 +1357,55 @@ export async function updateEmployee(req, res, next) {
       return res.status(404).json({ error: 'Employee not found' });
     }
 
+    // ── Handover check for Department Switch ────────────────────────────────
+    if (updates.department !== undefined && updates.department !== '' && updates.department !== existing.department) {
+      const overrideHandover = req.body?.overrideHandover === true || req.body?.skipHandover === true;
+      const isLeadership = ['SUPER_ADMIN', 'ADMIN', 'HR', 'CMD'].includes(req.user?.role);
+
+      const pendingHandoverGoals = await prisma.goal.findMany({
+        where: {
+          tenantId,
+          employeeId: id,
+          status: { not: 'COMPLETED' },
+          OR: [
+            { isHandoverGoal: true },
+            { category: { contains: 'Handover', mode: 'insensitive' } },
+            { category: { contains: 'Exit', mode: 'insensitive' } },
+          ],
+        },
+        select: { id: true, title: true, progress: true, dueDate: true, category: true, status: true },
+      });
+
+      if (pendingHandoverGoals.length > 0 && !overrideHandover) {
+        return res.status(409).json({
+          error: `Employee has ${pendingHandoverGoals.length} pending handover goal(s) that must be completed before switching departments.`,
+          code: 'PENDING_DEPARTMENT_HANDOVER',
+          canOverride: isLeadership,
+          pendingGoals: pendingHandoverGoals.map((g) => ({
+            id: g.id,
+            title: g.title,
+            progress: g.progress,
+            dueDate: g.dueDate ? g.dueDate.toISOString().split('T')[0] : null,
+            category: g.category,
+            status: g.status,
+          })),
+        });
+      }
+
+      if (pendingHandoverGoals.length > 0 && overrideHandover && !isLeadership) {
+        return res.status(403).json({
+          error: 'Only Leadership (SUPER_ADMIN, ADMIN, HR, CMD) is authorized to bypass pending handover goals.',
+        });
+      }
+
+      if (pendingHandoverGoals.length > 0 && overrideHandover && isLeadership) {
+        await prisma.goal.updateMany({
+          where: { id: { in: pendingHandoverGoals.map((g) => g.id) } },
+          data: { handoverOverridden: true, handoverOverriddenBy: req.user.id },
+        });
+      }
+    }
+
     // Validate a re-assigned reporting manager stays within the tenant.
     if (updates.managerId !== undefined) {
       if (updates.managerId === null || updates.managerId === '') {
@@ -1605,12 +1654,59 @@ export async function exitEmployee(req, res, next) {
       return res.status(409).json({ error: 'This employee has already been exited' });
     }
 
+    // ── Handover / Exit Tasks Guardrail Check ────────────────────────────────
+    const overrideHandover = req.body?.overrideHandover === true || req.body?.skipHandover === true;
+    const isLeadership = ['SUPER_ADMIN', 'ADMIN', 'HR', 'CMD'].includes(req.user?.role);
+
+    const pendingHandoverGoals = await prisma.goal.findMany({
+      where: {
+        tenantId,
+        employeeId: id,
+        status: { not: 'COMPLETED' },
+        OR: [
+          { isHandoverGoal: true },
+          { category: { contains: 'Handover', mode: 'insensitive' } },
+          { category: { contains: 'Exit', mode: 'insensitive' } },
+        ],
+      },
+      select: { id: true, title: true, progress: true, dueDate: true, category: true, status: true },
+    });
+
+    if (pendingHandoverGoals.length > 0 && !overrideHandover) {
+      return res.status(409).json({
+        error: `Employee has ${pendingHandoverGoals.length} pending handover goal(s) that must be completed before offboarding.`,
+        code: 'PENDING_HANDOVER_GOALS',
+        canOverride: isLeadership,
+        pendingGoals: pendingHandoverGoals.map((g) => ({
+          id: g.id,
+          title: g.title,
+          progress: g.progress,
+          dueDate: g.dueDate ? g.dueDate.toISOString().split('T')[0] : null,
+          category: g.category,
+          status: g.status,
+        })),
+      });
+    }
+
+    if (pendingHandoverGoals.length > 0 && overrideHandover && !isLeadership) {
+      return res.status(403).json({
+        error: 'Only Leadership (SUPER_ADMIN, ADMIN, HR, CMD) is authorized to bypass pending handover goals.',
+      });
+    }
+
     const nameParts = (tenantUser.name || '').trim().split(/\s+/);
     const firstName = nameParts[0] || 'Unknown';
     const lastName = nameParts.slice(1).join(' ') || firstName;
 
     // Atomic transaction: deactivate + re-assign subordinates + create exit record
     const exitRecord = await prisma.$transaction(async (tx) => {
+      // Mark handover goals as overridden if leadership chose to bypass
+      if (pendingHandoverGoals.length > 0 && overrideHandover && isLeadership) {
+        await tx.goal.updateMany({
+          where: { id: { in: pendingHandoverGoals.map((g) => g.id) } },
+          data: { handoverOverridden: true, handoverOverriddenBy: req.user.id },
+        });
+      }
       // 1. Soft-delete the TenantUser
       await tx.tenantUser.update({
         where: { id },
@@ -2022,6 +2118,61 @@ export async function deleteNonJoiner(req, res, next) {
     });
 
     res.json({ success: true, message: 'Non-Joiner record soft-deleted successfully' });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /api/employees/:id/handover-status
+ * Returns real-time status of an employee's pending handover / exit tasks.
+ */
+export async function getEmployeeHandoverStatus(req, res, next) {
+  try {
+    const { id } = req.params;
+    const tenantId = req.tenantId;
+
+    const pendingHandoverGoals = await prisma.goal.findMany({
+      where: {
+        tenantId,
+        employeeId: id,
+        status: { not: 'COMPLETED' },
+        OR: [
+          { isHandoverGoal: true },
+          { category: { contains: 'Handover', mode: 'insensitive' } },
+          { category: { contains: 'Exit', mode: 'insensitive' } },
+        ],
+      },
+      select: {
+        id: true,
+        title: true,
+        progress: true,
+        dueDate: true,
+        category: true,
+        status: true,
+        handoverType: true,
+        targetDepartment: true,
+      },
+    });
+
+    const isLeadership = ['SUPER_ADMIN', 'ADMIN', 'HR', 'CMD'].includes(req.user?.role);
+
+    res.json({
+      employeeId: id,
+      pendingCount: pendingHandoverGoals.length,
+      hasPendingHandover: pendingHandoverGoals.length > 0,
+      canOverride: isLeadership,
+      pendingGoals: pendingHandoverGoals.map((g) => ({
+        id: g.id,
+        title: g.title,
+        progress: g.progress,
+        dueDate: g.dueDate ? g.dueDate.toISOString().split('T')[0] : null,
+        category: g.category,
+        status: g.status,
+        handoverType: g.handoverType,
+        targetDepartment: g.targetDepartment,
+      })),
+    });
   } catch (err) {
     next(err);
   }

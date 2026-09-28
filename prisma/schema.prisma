@@ -831,6 +831,14 @@ model Goal {
   /// Goals whose work had already begun when task weighting was introduced.
   /// They keep the old behaviour; the 100% rule applies to everything else.
   weightLockExempt    Boolean          @default(false)
+
+  // ── Handover / Exit Tasks Extensions ─────────────────────────────────────
+  isHandoverGoal       Boolean          @default(false)
+  handoverType         String?          // "EXIT" | "DEPARTMENT_SWITCH"
+  targetDepartment     String?
+  handoverOverridden   Boolean          @default(false)
+  handoverOverriddenBy String?
+
   tasks               Task[]
   comments            GoalComment[]
   auditLogs           GoalAuditLog[]
@@ -841,6 +849,7 @@ model Goal {
   @@index([tenantId])
   @@index([employeeId])
   @@index([createdById])
+  @@index([tenantId, isHandoverGoal, status])
   @@map("goals")
 }
 
