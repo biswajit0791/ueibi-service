@@ -152,5 +152,5 @@ export const listGoalsQuerySchema = z.object({
   category: z.string().max(100).optional(),
   scope: z.string().max(50).optional(),
   page: z.coerce.number().int().min(1).optional().default(1),
-  limit: z.coerce.number().int().min(1).max(200).optional().default(100),
+  limit: z.coerce.number().int().min(1).max(500).optional().default(100),
 });

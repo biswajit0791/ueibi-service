@@ -693,6 +693,16 @@ export async function listGoals(req, res, next) {
                   role: { notIn: forbiddenRoles },
                 },
               },
+              {
+                assignments: {
+                  some: {
+                    employee: {
+                      role: { notIn: forbiddenRoles },
+                    },
+                  },
+                },
+              },
+              { employeeId: null },
             ];
           }
         }
