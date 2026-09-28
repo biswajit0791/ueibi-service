@@ -11,6 +11,7 @@ export const GOAL_CATEGORIES = [
   'Business Operations',
   'Compliance & Security',
   'Product Innovation',
+  'Handover / Exit Tasks',
   'General',
 ];
 

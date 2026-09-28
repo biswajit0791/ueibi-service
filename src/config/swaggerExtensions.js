@@ -2119,6 +2119,64 @@ export const swaggerExtensions = {
         },
       },
     },
+    '/employees/ex/{id}/restore': {
+      post: {
+        tags: ['Employees'],
+        summary: 'Restore an ex-employee to active status',
+        description:
+          'Restores an ex-employee back to active status.\n' +
+          'Reactivates their TenantUser account (or provisions a new INVITED user if missing), sends a password-reset invite email, ' +
+          'and soft-deletes the ExEmployeeRecord so it leaves the ex-employees registry. Asserts license capacity before restoring.',
+        operationId: 'restoreExEmployee',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [
+          { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Ex-Employee Record ID or TenantUser ID' },
+        ],
+        responses: {
+          200: {
+            description: 'Ex-employee restored successfully',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    message: { type: 'string', example: 'Nihar Ranjan Rout has been restored successfully. A password setup link has been sent to nihar@usifdn.org.' },
+                    restoredUserId: { type: 'string', example: 'cmuky1773000xpzpqewpvax9a' },
+                    licenseStats: {
+                      type: 'object',
+                      properties: {
+                        licenseLimit: { type: 'integer', example: 50 },
+                        activeEmployees: { type: 'integer', example: 12 },
+                        availableSeats: { type: 'integer', example: 38 },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          400: { description: 'Invalid record ID parameter' },
+          404: { description: 'Ex-Employee record not found' },
+          409: { description: 'Employee is already active or license limit exceeded' },
+        },
+      },
+    },
+    '/employees/{id}/restore': {
+      post: {
+        tags: ['Employees'],
+        summary: 'Restore an ex-employee by ID (Alias)',
+        description: 'Alias route for restoring an ex-employee back to active status.',
+        operationId: 'restoreEmployeeAlias',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [
+          { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Ex-Employee Record ID or TenantUser ID' },
+        ],
+        responses: {
+          200: { description: 'Ex-employee restored successfully' },
+          404: { description: 'Ex-Employee record not found' },
+        },
+      },
+    },
     '/employees/ex': {
       get: {
         tags: ['Employees'],

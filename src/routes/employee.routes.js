@@ -23,6 +23,7 @@ import {
   exitEmployee,
   reactivateEmployee,
   restoreExEmployee,
+  getEmployeeHandoverStatus,
 } from '../controllers/employee.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
@@ -37,8 +38,9 @@ router.get('/employees/managers', requireAuth, requireTenant, getEligibleManager
 router.patch('/employees/onboard', requireAuth, requireTenant, onboardEmployee);
 router.get('/employees', requireAuth, requireTenant, listEmployees);
 
-// Stats — must be registered BEFORE /:id to avoid route collision
+// Stats & Handover Status — must be registered BEFORE /:id to avoid route collision
 router.get('/employees/stats', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'MANAGER'), getEmployeeStats);
+router.get('/employees/:id/handover-status', requireAuth, requireTenant, getEmployeeHandoverStatus);
 
 router.patch('/employees/:id', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), updateEmployee);
 router.delete('/employees/:id', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), deleteEmployee);

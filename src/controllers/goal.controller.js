@@ -377,6 +377,11 @@ export async function createGoal(req, res, next) {
 
     // Execute atomic creation in transaction
     const { goal, assignments } = await prisma.$transaction(async (tx) => {
+      const isHandover = Boolean(
+        req.body?.isHandoverGoal ||
+        (category && (category.includes('Handover') || category.includes('Exit')))
+      );
+
       const createdGoal = await tx.goal.create({
         data: {
           tenantId: req.tenantId,
@@ -397,6 +402,9 @@ export async function createGoal(req, res, next) {
           createdById: req.user.id,
           approvalMode: effectiveApprovalMode,
           status: initialStatus,
+          isHandoverGoal: isHandover,
+          handoverType: req.body?.handoverType || (isHandover ? 'EXIT' : null),
+          targetDepartment: req.body?.targetDepartment || null,
         },
       });
 
