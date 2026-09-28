@@ -1365,12 +1365,19 @@ export async function updateEmployee(req, res, next) {
       const pendingHandoverGoals = await prisma.goal.findMany({
         where: {
           tenantId,
-          employeeId: id,
           status: { not: 'COMPLETED' },
           OR: [
-            { isHandoverGoal: true },
-            { category: { contains: 'Handover', mode: 'insensitive' } },
-            { category: { contains: 'Exit', mode: 'insensitive' } },
+            { employeeId: id },
+            { assignments: { some: { employeeId: id } } },
+          ],
+          AND: [
+            {
+              OR: [
+                { isHandoverGoal: true },
+                { category: { contains: 'Handover', mode: 'insensitive' } },
+                { category: { contains: 'Exit', mode: 'insensitive' } },
+              ],
+            },
           ],
         },
         select: { id: true, title: true, progress: true, dueDate: true, category: true, status: true },
@@ -1661,12 +1668,19 @@ export async function exitEmployee(req, res, next) {
     const pendingHandoverGoals = await prisma.goal.findMany({
       where: {
         tenantId,
-        employeeId: id,
         status: { not: 'COMPLETED' },
         OR: [
-          { isHandoverGoal: true },
-          { category: { contains: 'Handover', mode: 'insensitive' } },
-          { category: { contains: 'Exit', mode: 'insensitive' } },
+          { employeeId: id },
+          { assignments: { some: { employeeId: id } } },
+        ],
+        AND: [
+          {
+            OR: [
+              { isHandoverGoal: true },
+              { category: { contains: 'Handover', mode: 'insensitive' } },
+              { category: { contains: 'Exit', mode: 'insensitive' } },
+            ],
+          },
         ],
       },
       select: { id: true, title: true, progress: true, dueDate: true, category: true, status: true },
@@ -2135,12 +2149,19 @@ export async function getEmployeeHandoverStatus(req, res, next) {
     const pendingHandoverGoals = await prisma.goal.findMany({
       where: {
         tenantId,
-        employeeId: id,
         status: { not: 'COMPLETED' },
         OR: [
-          { isHandoverGoal: true },
-          { category: { contains: 'Handover', mode: 'insensitive' } },
-          { category: { contains: 'Exit', mode: 'insensitive' } },
+          { employeeId: id },
+          { assignments: { some: { employeeId: id } } },
+        ],
+        AND: [
+          {
+            OR: [
+              { isHandoverGoal: true },
+              { category: { contains: 'Handover', mode: 'insensitive' } },
+              { category: { contains: 'Exit', mode: 'insensitive' } },
+            ],
+          },
         ],
       },
       select: {

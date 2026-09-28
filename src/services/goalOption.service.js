@@ -42,12 +42,26 @@ function defaultsFor(kind) {
 }
 
 async function seedIfEmpty(tenantId, kind) {
-  const count = await prisma.goalOption.count({ where: { tenantId, kind } });
-  if (count > 0) return;
-  await prisma.goalOption.createMany({
-    data: defaultsFor(kind).map((o) => ({ ...o, tenantId, kind })),
-    skipDuplicates: true,
+  const defaults = defaultsFor(kind);
+  const existing = await prisma.goalOption.findMany({
+    where: { tenantId, kind },
+    select: { value: true },
   });
+  if (existing.length === 0) {
+    await prisma.goalOption.createMany({
+      data: defaults.map((o) => ({ ...o, tenantId, kind })),
+      skipDuplicates: true,
+    });
+    return;
+  }
+  const existingSet = new Set(existing.map((e) => e.value.toLowerCase()));
+  const missing = defaults.filter((d) => !existingSet.has(d.value.toLowerCase()));
+  if (missing.length > 0) {
+    await prisma.goalOption.createMany({
+      data: missing.map((o) => ({ ...o, tenantId, kind })),
+      skipDuplicates: true,
+    });
+  }
 }
 
 export class GoalOptionService {

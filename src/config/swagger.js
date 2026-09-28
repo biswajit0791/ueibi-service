@@ -754,6 +754,11 @@ const options = {
             specialNotes: { type: 'string', example: 'Ensure that the indexes are added to tenantId.' },
             dueDate: { type: 'string', format: 'date' },
             employeeId: { type: 'string', nullable: true },
+            isHandoverGoal: { type: 'boolean', example: false, description: 'True if designated as a handover or exit task' },
+            handoverType: { type: 'string', enum: ['EXIT', 'DEPARTMENT_SWITCH'], nullable: true, example: 'EXIT', description: 'Transition trigger: EXIT or DEPARTMENT_SWITCH' },
+            targetDepartment: { type: 'string', nullable: true, example: 'Engineering', description: 'Destination department if handoverType is DEPARTMENT_SWITCH' },
+            handoverOverridden: { type: 'boolean', example: false, description: 'True if leadership bypassed this incomplete goal during offboarding or department switch' },
+            handoverOverriddenBy: { type: 'string', nullable: true, example: 'usr_cl123', description: 'User ID of leadership member who authorized the bypass' },
             milestones: { type: 'integer', example: 4 },
             completedMilestones: { type: 'integer', example: 1 },
             assignments: {
@@ -770,7 +775,7 @@ const options = {
           properties: {
             title: { type: 'string', example: 'Improve product stability' },
             description: { type: 'string', example: 'Refactor goals repository module to support direct tenancy.' },
-            category: { type: 'string', example: 'Project Delivery' },
+            category: { type: 'string', example: 'Handover / Exit Tasks' },
             goalType: { type: 'string', example: 'General' },
             priority: { type: 'string', enum: ['high', 'medium', 'low', 'critical'], example: 'medium' },
             financialYear: { type: 'string', example: 'FY 2026-27' },
@@ -780,6 +785,10 @@ const options = {
             dueDate: { type: 'string', format: 'date' },
             attachments: { type: 'array', items: { type: 'string' } },
             specialNotes: { type: 'string', example: 'Ensure that the indexes are added to tenantId.' },
+            isHandoverGoal: { type: 'boolean', example: false, description: 'Designate this goal as a handover or exit task' },
+            handoverType: { type: 'string', enum: ['EXIT', 'DEPARTMENT_SWITCH'], example: 'EXIT', description: 'Trigger type: EXIT for staff offboarding, DEPARTMENT_SWITCH for internal transfer' },
+            targetDepartment: { type: 'string', nullable: true, example: 'Engineering', description: 'Target department if handoverType is DEPARTMENT_SWITCH' },
+            approvalMode: { type: 'string', enum: ['MANAGER_APPROVAL', 'AUTO_APPROVE'], nullable: true, description: 'Approval flow when manager assigns to subordinate' },
             employeeIds: {
               type: 'array',
               items: { type: 'string' },
@@ -1994,6 +2003,20 @@ const options = {
             },
             400: { description: 'Missing fields' },
             401: { description: 'Invalid credentials' },
+            403: {
+              description: 'Access forbidden: account is inactive/exited or tenant organization is suspended',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      error: { type: 'string', example: 'Access forbidden: account is inactive/exited' },
+                      code: { type: 'string', example: 'ACCOUNT_EXITED' },
+                    },
+                  },
+                },
+              },
+            },
           },
         },
       },
@@ -2700,6 +2723,7 @@ const options = {
                     aadhaar: { type: 'string', example: '4tt5t' },
                     dob: { type: 'string', format: 'date', example: '2026-08-21' },
                     joinDate: { type: 'string', format: 'date', example: '2026-08-29' },
+                    overrideHandover: { type: 'boolean', default: false, description: 'Leadership override to bypass pending handover goals when changing department' },
                     docs: {
                       type: 'array',
                       items: {
@@ -2719,7 +2743,24 @@ const options = {
             200: { description: 'Employee updated successfully' },
             400: { description: 'Validation failed' },
             401: { description: 'Not authenticated or authorized' },
-            404: { description: 'Employee not found' }
+            403: { description: 'Only Leadership is authorized to bypass pending handover goals' },
+            404: { description: 'Employee not found' },
+            409: {
+              description: 'Employee has pending handover goals that must be completed before switching departments',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      error: { type: 'string', example: 'Employee has 2 pending handover goal(s) that must be completed before switching departments.' },
+                      code: { type: 'string', example: 'PENDING_DEPARTMENT_HANDOVER' },
+                      canOverride: { type: 'boolean', example: true },
+                      pendingGoals: { type: 'array', items: { type: 'object' } },
+                    },
+                  },
+                },
+              },
+            },
           }
         },
         delete: {
@@ -3205,7 +3246,10 @@ const options = {
             { name: 'employeeId', in: 'query', schema: { type: 'string' }, description: 'Employee ID filter ("all" for all team/tenant goals, or specific employee ID)' },
             { name: 'status', in: 'query', schema: { type: 'string' }, description: 'Filter by goal status' },
             { name: 'financialYear', in: 'query', schema: { type: 'string' }, description: 'Filter by financial year' },
-            { name: 'category', in: 'query', schema: { type: 'string' }, description: 'Filter by category' },
+            { name: 'category', in: 'query', schema: { type: 'string' }, description: 'Filter by category (e.g. "Handover / Exit Tasks")' },
+            { name: 'scope', in: 'query', schema: { type: 'string' }, description: 'Scope filter (e.g. "team", "organization")' },
+            { name: 'page', in: 'query', schema: { type: 'integer', default: 1 }, description: 'Page number' },
+            { name: 'limit', in: 'query', schema: { type: 'integer', default: 100, minimum: 1, maximum: 500 }, description: 'Number of goals to return per page (1-500)' },
           ],
           responses: {
             200: {
@@ -3865,6 +3909,9 @@ const options = {
             { name: 'status', in: 'query', schema: { type: 'string' }, description: 'Filter by workflow status' },
             { name: 'financialYear', in: 'query', schema: { type: 'string' }, description: 'Filter by financial year' },
             { name: 'category', in: 'query', schema: { type: 'string' }, description: 'Filter by category' },
+            { name: 'scope', in: 'query', schema: { type: 'string' }, description: 'Scope filter' },
+            { name: 'page', in: 'query', schema: { type: 'integer', default: 1 }, description: 'Page number' },
+            { name: 'limit', in: 'query', schema: { type: 'integer', default: 100, minimum: 1, maximum: 500 }, description: 'Limit per page (1-500)' },
           ],
           responses: {
             200: {
