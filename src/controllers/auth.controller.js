@@ -110,10 +110,6 @@ export async function login(req, res, next) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
-    if (user.status === 'EXITED') {
-      return res.status(403).json({ error: 'Access forbidden: this account is inactive/exited' });
-    }
-
     let match = await bcrypt.compare(password, user.passwordHash);
 
     // Fallback: If password did not match user.passwordHash, check if password matches CompanyRegistration
