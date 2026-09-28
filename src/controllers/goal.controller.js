@@ -382,30 +382,35 @@ export async function createGoal(req, res, next) {
         (category && (category.includes('Handover') || category.includes('Exit')))
       );
 
+      const goalPayload = {
+        tenantId: req.tenantId,
+        title: title.trim(),
+        description: description || null,
+        category: category || 'General',
+        goalType: goalType || 'General',
+        priority: priority || 'medium',
+        financialYear: financialYear || getCurrentFinancialYear(),
+        quarter: quarter || getCurrentQuarter(),
+        startDate: startDate ? new Date(startDate) : undefined,
+        targetDate: targetDate ? new Date(targetDate) : undefined,
+        dueDate: dueDate ? new Date(dueDate) : (targetDate ? new Date(targetDate) : undefined),
+        attachments: attachments || [],
+        specialNotes: specialNotes || null,
+        employeeId: targetEmployeeIds[0],
+        createdBy: req.user.name,
+        createdById: req.user.id,
+        approvalMode: effectiveApprovalMode,
+        status: initialStatus,
+      };
+
+      if (isHandover) {
+        goalPayload.isHandoverGoal = true;
+        goalPayload.handoverType = req.body?.handoverType || 'EXIT';
+        goalPayload.targetDepartment = req.body?.targetDepartment || null;
+      }
+
       const createdGoal = await tx.goal.create({
-        data: {
-          tenantId: req.tenantId,
-          title: title.trim(),
-          description: description || null,
-          category: category || 'General',
-          goalType: goalType || 'General',
-          priority: priority || 'medium',
-          financialYear: financialYear || getCurrentFinancialYear(),
-          quarter: quarter || getCurrentQuarter(),
-          startDate: startDate ? new Date(startDate) : undefined,
-          targetDate: targetDate ? new Date(targetDate) : undefined,
-          dueDate: dueDate ? new Date(dueDate) : (targetDate ? new Date(targetDate) : undefined),
-          attachments: attachments || [],
-          specialNotes: specialNotes || null,
-          employeeId: targetEmployeeIds[0],
-          createdBy: req.user.name,
-          createdById: req.user.id,
-          approvalMode: effectiveApprovalMode,
-          status: initialStatus,
-          isHandoverGoal: isHandover,
-          handoverType: req.body?.handoverType || (isHandover ? 'EXIT' : null),
-          targetDepartment: req.body?.targetDepartment || null,
-        },
+        data: goalPayload,
       });
 
       const createdAssignments = await Promise.all(
@@ -668,14 +673,14 @@ export async function listGoals(req, res, next) {
 
         where.OR = managerOrConditions;
       } else if (isElevated || req.user.role === 'FINANCE') {
-        // HR/Admin/Finance: If employeeId is not specified, default to own
-        if (!employeeId) {
+        // HR / Admin / SuperAdmin / CMD / Finance
+        if (scope === 'me') {
           where.OR = [
             { employeeId: req.user.id },
             { assignments: { some: { employeeId: req.user.id } } },
           ];
-        } else if (employeeId === 'all') {
-          // If caller is HR, ADMIN, or FINANCE, exclude goals belonging exclusively to higher roles
+        } else {
+          // Default for elevated roles: Show all goals across the organization
           const allRoles = ['SUPER_ADMIN', 'ADMIN', 'CMD', 'HR', 'FINANCE', 'MANAGER', 'EMPLOYEE'];
           const forbiddenRoles = allRoles.filter((r) => !canViewDashboard(req.user.role, r));
           if (forbiddenRoles.length > 0) {
