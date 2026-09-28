@@ -140,6 +140,12 @@ export async function login(req, res, next) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
+    // ── Exited or Deactivated Account ─────────────────────────────────────────
+    if (user.status === 'EXITED' || user.isDeleted) {
+      console.warn(`[AUTH] 403: Attempted login by exited/inactive user "${cleanEmail}"`);
+      return res.status(403).json({ error: 'Access forbidden: account is inactive/exited', code: 'ACCOUNT_EXITED' });
+    }
+
     // ── Suspended company ────────────────────────────────────────────────────
     // Checked only AFTER the password matched, so this never reveals whether an
     // address exists to someone guessing. The message is specific on purpose: a

@@ -452,6 +452,61 @@ export const swaggerExtensions = {
           example: 'Good',
         },
         feedback: { type: 'string', example: 'Smooth offboarding with knowledge transfer completed.' },
+        overrideHandover: {
+          type: 'boolean',
+          default: false,
+          description: 'Leadership Override: bypass outstanding handover goals to authorize offboarding (requires SUPER_ADMIN, ADMIN, HR, or CMD role)',
+          example: false,
+        },
+      },
+    },
+    PendingHandoverGoalsResponse: {
+      type: 'object',
+      properties: {
+        error: { type: 'string', example: 'Employee has 2 pending handover goal(s) that must be completed before offboarding.' },
+        code: { type: 'string', example: 'PENDING_HANDOVER_GOALS' },
+        canOverride: { type: 'boolean', example: true },
+        pendingGoals: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', example: 'goal_cl123' },
+              title: { type: 'string', example: 'Client Accounts Handover & Knowledge Transfer' },
+              progress: { type: 'integer', example: 50 },
+              dueDate: { type: 'string', format: 'date', nullable: true, example: '2026-10-01' },
+              category: { type: 'string', example: 'Handover / Exit Tasks' },
+              status: { type: 'string', example: 'IN_PROGRESS' },
+              handoverType: { type: 'string', example: 'EXIT' },
+              targetDepartment: { type: 'string', nullable: true },
+            },
+          },
+        },
+      },
+    },
+    EmployeeHandoverStatusResponse: {
+      type: 'object',
+      properties: {
+        employeeId: { type: 'string', example: 'usr_cl123' },
+        pendingCount: { type: 'integer', example: 1 },
+        hasPendingHandover: { type: 'boolean', example: true },
+        canOverride: { type: 'boolean', example: true },
+        pendingGoals: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', example: 'goal_cl123' },
+              title: { type: 'string', example: 'Codebase Documentation & Knowledge Transfer' },
+              progress: { type: 'integer', example: 60 },
+              dueDate: { type: 'string', format: 'date', nullable: true, example: '2026-10-05' },
+              category: { type: 'string', example: 'Handover / Exit Tasks' },
+              status: { type: 'string', example: 'IN_PROGRESS' },
+              handoverType: { type: 'string', example: 'EXIT' },
+              targetDepartment: { type: 'string', nullable: true },
+            },
+          },
+        },
       },
     },
     BulkInviteEmployeesRequest: {
@@ -2083,11 +2138,38 @@ export const swaggerExtensions = {
         },
       },
     },
+    '/employees/{id}/handover-status': {
+      get: {
+        tags: ['Employees', 'Goals'],
+        summary: 'Get employee pending handover and exit tasks status',
+        description: 'Returns real-time status of pending handover / exit tasks for an employee before offboarding or department switch.',
+        operationId: 'getEmployeeHandoverStatus',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [
+          { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'TenantUser ID of the employee' },
+        ],
+        responses: {
+          200: {
+            description: 'Employee handover status retrieved successfully',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/EmployeeHandoverStatusResponse' },
+              },
+            },
+          },
+          401: { description: 'Unauthorized' },
+          404: { description: 'Employee not found' },
+        },
+      },
+    },
     '/employees/{id}/exit': {
       post: {
         tags: ['Employees'],
         summary: 'Offboard an employee and create exit record',
-        description: 'Deactivates employee account, frees up 1 license seat, and creates an archived ExEmployeeRecord.',
+        description:
+          'Deactivates employee account, frees up 1 license seat, and creates an archived ExEmployeeRecord.\n' +
+          'Enforces Handover / Exit Tasks guardrail: if the employee has any incomplete handover goals, returns 409 PENDING_HANDOVER_GOALS with the outstanding goals list.\n' +
+          'Leadership roles (SUPER_ADMIN, ADMIN, HR, CMD) can supply `overrideHandover: true` to bypass the guardrail.',
         operationId: 'exitEmployee',
         security: [{ userCookie: [] }, { bearerAuth: [] }],
         parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
@@ -2098,7 +2180,21 @@ export const swaggerExtensions = {
             content: { 'application/json': { schema: { type: 'object', properties: { message: { type: 'string' }, exRecordId: { type: 'string' } } } } },
           },
           400: { $ref: '#/components/responses/ValidationError' },
+          403: { description: 'Only Leadership is authorized to bypass pending handover goals' },
           404: { description: 'Employee not found' },
+          409: {
+            description: 'Incomplete handover goals block offboarding, or employee is already exited',
+            content: {
+              'application/json': {
+                schema: {
+                  oneOf: [
+                    { $ref: '#/components/schemas/PendingHandoverGoalsResponse' },
+                    { type: 'object', properties: { error: { type: 'string', example: 'This employee has already been exited' } } },
+                  ],
+                },
+              },
+            },
+          },
         },
       },
     },
