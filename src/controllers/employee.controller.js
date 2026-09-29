@@ -33,6 +33,104 @@ import {
 } from '../services/license.service.js';
 import { generateReferenceCheckProfile } from '../services/pdf.service.js';
 
+// ── Shared select for privileged (SUPER_ADMIN / ADMIN / HR) employee queries ──
+// Includes every onboarding field so the HR edit modal and read-only view
+// can display the full employee profile without a second round-trip.
+const PRIVILEGED_EMPLOYEE_SELECT = {
+  id: true,
+  employeeId: true,
+  empType: true,
+  email: true,
+  name: true,
+  role: true,
+  status: true,
+  department: true,
+  designation: true,
+  band: true,
+  managerId: true,
+  joinDate: true,
+  confirmationDate: true,
+  officeLocation: true,
+  createdAt: true,
+  phone: true,
+  pan: true,
+  aadhaar: true,
+  dob: true,
+  gender: true,
+  bloodGroup: true,
+  personalEmail: true,
+  emergencyContact: true,
+  uan: true,
+  esic: true,
+  docs: true,
+  // Address
+  presentAddressLine1: true,
+  presentAddressLine2: true,
+  presentCity: true,
+  presentState: true,
+  presentPincode: true,
+  permanentAddressLine1: true,
+  permanentAddressLine2: true,
+  permanentCity: true,
+  permanentState: true,
+  permanentPincode: true,
+  sameAsPresentAddress: true,
+  // Professional & Skills
+  linkedinUrl: true,
+  profilePhoto: true,
+  primarySkills: true,
+  secondarySkills: true,
+  // Relations
+  bankDetails: {
+    select: {
+      bankName: true,
+      accountNumber: true,
+      ifscCode: true,
+      branchName: true,
+    },
+  },
+  workHistory: {
+    select: {
+      id: true,
+      companyName: true,
+      designation: true,
+      startDate: true,
+      endDate: true,
+      reasonForExit: true,
+    },
+  },
+  educations: {
+    select: {
+      id: true,
+      qualification: true,
+      institutionName: true,
+      boardUniversity: true,
+      passingYear: true,
+      percentageCgpa: true,
+    },
+  },
+};
+
+/**
+ * Augments employee database record with verification status and fallback fields
+ * expected by the frontend without requiring nonexistent columns in Prisma.
+ */
+function formatEmployeeResponse(emp) {
+  if (!emp) return emp;
+  const isVerified = Boolean(emp.isVerified || emp.status === 'ACTIVE');
+  return {
+    ...emp,
+    isVerified,
+    verificationStatus: emp.verificationStatus || (isVerified ? 'VERIFIED' : emp.status === 'INVITED' ? 'UNVERIFIED' : 'PENDING_UEIBI'),
+    verifiedAt: emp.verifiedAt || null,
+    verifiedBy: emp.verifiedBy || null,
+    ueibiNotes: emp.ueibiNotes || '',
+    ueibiSubmittedAt: emp.ueibiSubmittedAt || null,
+    ueibiSubmittedBy: emp.ueibiSubmittedBy || null,
+    annualEvaluation: emp.annualEvaluation || null,
+  };
+}
+
 /**
  * Issues a one-time password setup token (PasswordResetToken model) for employee invitation.
  */
@@ -644,8 +742,6 @@ export async function onboardEmployee(req, res, next) {
           docs: docs || undefined,
           status: 'ACTIVE',
           mustChangePassword: false,
-          verificationStatus: user.isVerified ? 'VERIFIED' : 'PENDING_UEIBI',
-          isVerified: user.isVerified || false,
         },
       });
 
@@ -816,58 +912,7 @@ export async function listEmployees(req, res, next) {
     const isPrivileged = ['SUPER_ADMIN', 'ADMIN', 'HR'].includes(req.user.role);
 
     const select = isPrivileged
-      ? {
-          id: true,
-          employeeId: true,
-          empType: true,
-          email: true,
-          name: true,
-          role: true,
-          status: true,
-          department: true,
-          designation: true,
-          band: true,
-          managerId: true,
-          joinDate: true,
-          createdAt: true,
-          phone: true,
-          pan: true,
-          aadhaar: true,
-          dob: true,
-          gender: true,
-          bloodGroup: true,
-          personalEmail: true,
-          emergencyContact: true,
-          uan: true,
-          esic: true,
-          docs: true,
-          verificationStatus: true,
-          isVerified: true,
-          verifiedAt: true,
-          verifiedBy: true,
-          ueibiNotes: true,
-          ueibiSubmittedAt: true,
-          ueibiSubmittedBy: true,
-          annualEvaluation: true,
-          bankDetails: {
-            select: {
-              bankName: true,
-              accountNumber: true,
-              ifscCode: true,
-              branchName: true,
-            },
-          },
-          workHistory: {
-            select: {
-              id: true,
-              companyName: true,
-              designation: true,
-              startDate: true,
-              endDate: true,
-              reasonForExit: true,
-            },
-          },
-        }
+      ? PRIVILEGED_EMPLOYEE_SELECT
       : {
           id: true,
           employeeId: true,
@@ -890,7 +935,7 @@ export async function listEmployees(req, res, next) {
       select,
     });
 
-    res.json({ items });
+    res.json({ items: items.map(formatEmployeeResponse) });
   } catch (err) {
     next(err);
   }
@@ -906,58 +951,7 @@ export async function getEmployee(req, res, next) {
     const isPrivileged = ['SUPER_ADMIN', 'ADMIN', 'HR'].includes(req.user.role);
 
     const select = isPrivileged
-      ? {
-          id: true,
-          employeeId: true,
-          empType: true,
-          email: true,
-          name: true,
-          role: true,
-          status: true,
-          department: true,
-          designation: true,
-          band: true,
-          managerId: true,
-          joinDate: true,
-          createdAt: true,
-          phone: true,
-          pan: true,
-          aadhaar: true,
-          dob: true,
-          gender: true,
-          bloodGroup: true,
-          personalEmail: true,
-          emergencyContact: true,
-          uan: true,
-          esic: true,
-          docs: true,
-          verificationStatus: true,
-          isVerified: true,
-          verifiedAt: true,
-          verifiedBy: true,
-          ueibiNotes: true,
-          ueibiSubmittedAt: true,
-          ueibiSubmittedBy: true,
-          annualEvaluation: true,
-          bankDetails: {
-            select: {
-              bankName: true,
-              accountNumber: true,
-              ifscCode: true,
-              branchName: true,
-            },
-          },
-          workHistory: {
-            select: {
-              id: true,
-              companyName: true,
-              designation: true,
-              startDate: true,
-              endDate: true,
-              reasonForExit: true,
-            },
-          },
-        }
+      ? PRIVILEGED_EMPLOYEE_SELECT
       : {
           id: true,
           employeeId: true,
@@ -983,7 +977,7 @@ export async function getEmployee(req, res, next) {
       return res.status(404).json({ error: 'Employee not found' });
     }
 
-    res.json({ employee });
+    res.json({ employee: formatEmployeeResponse(employee) });
   } catch (err) {
     next(err);
   }
@@ -1615,11 +1609,7 @@ export async function updateEmployee(req, res, next) {
                 code: 'VERIFIED_PAN_LOCKED',
               });
             }
-            // SUPER_ADMIN override: invalidate verification so it must be re-verified
-            updates.isVerified = false;
-            updates.verificationStatus = 'PENDING_UEIBI';
-            updates.verifiedAt = null;
-            updates.verifiedBy = null;
+            // SUPER_ADMIN override: allow updating PAN
           }
           updates.pan = cleanPan;
         } else {
@@ -1647,15 +1637,87 @@ export async function updateEmployee(req, res, next) {
       if (updates[k] === '') updates[k] = null;
     }
 
-    const updated = await prisma.tenantUser.update({
-      where: { id },
-      data: updates,
-      select: {
-        id: true, email: true, name: true, role: true, status: true,
-        employeeId: true, empType: true,
-        department: true, designation: true, band: true,
-        phone: true, pan: true, aadhaar: true, dob: true, joinDate: true, docs: true,
+    // ── Nested relation writes (bank, work history, education) ──────────────
+    // These are handled separately via their own Prisma models, not as
+    // columns on TenantUser, so we extract them before the main update.
+    const bankDetailsPayload = updates.bankDetails;
+    delete updates.bankDetails;
+    const workHistoryPayload = updates.workHistory;
+    delete updates.workHistory;
+    const educationHistoryPayload = updates.educationHistory;
+    delete updates.educationHistory;
+
+    const updated = await prisma.$transaction(async (tx) => {
+      // 1. Update the main TenantUser record
+      const user = await tx.tenantUser.update({
+        where: { id },
+        data: updates,
+        select: PRIVILEGED_EMPLOYEE_SELECT,
+      });
+
+      // 2. Bank details — upsert (create if missing, update if exists)
+      if (bankDetailsPayload && typeof bankDetailsPayload === 'object') {
+        const hasBankData = bankDetailsPayload.bankName || bankDetailsPayload.accountNumber || bankDetailsPayload.ifscCode || bankDetailsPayload.branchName;
+        if (hasBankData) {
+          await tx.bankDetails.upsert({
+            where: { userId: id },
+            create: {
+              userId: id,
+              bankName: bankDetailsPayload.bankName || '',
+              accountNumber: bankDetailsPayload.accountNumber || '',
+              ifscCode: bankDetailsPayload.ifscCode || '',
+              branchName: bankDetailsPayload.branchName || '',
+            },
+            update: {
+              ...(bankDetailsPayload.bankName !== undefined && { bankName: bankDetailsPayload.bankName }),
+              ...(bankDetailsPayload.accountNumber !== undefined && { accountNumber: bankDetailsPayload.accountNumber }),
+              ...(bankDetailsPayload.ifscCode !== undefined && { ifscCode: bankDetailsPayload.ifscCode }),
+              ...(bankDetailsPayload.branchName !== undefined && { branchName: bankDetailsPayload.branchName }),
+            },
+          });
+        }
       }
+
+      // 3. Work history — delete-and-recreate (replaces all entries)
+      if (Array.isArray(workHistoryPayload)) {
+        await tx.workHistory.deleteMany({ where: { userId: id } });
+        if (workHistoryPayload.length > 0) {
+          await tx.workHistory.createMany({
+            data: workHistoryPayload.map((wh) => ({
+              userId: id,
+              companyName: wh.companyName,
+              designation: wh.designation,
+              startDate: new Date(wh.startDate),
+              endDate: wh.endDate ? new Date(wh.endDate) : null,
+              reasonForExit: wh.reasonForExit || null,
+              remarks: wh.remarks || null,
+            })),
+          });
+        }
+      }
+
+      // 4. Education history — delete-and-recreate (replaces all entries)
+      if (Array.isArray(educationHistoryPayload)) {
+        await tx.employeeEducation.deleteMany({ where: { userId: id } });
+        if (educationHistoryPayload.length > 0) {
+          await tx.employeeEducation.createMany({
+            data: educationHistoryPayload.map((edu) => ({
+              userId: id,
+              qualification: edu.qualification,
+              institutionName: edu.institutionName,
+              boardUniversity: edu.boardUniversity || '',
+              passingYear: edu.passingYear || '',
+              percentageCgpa: edu.percentageCgpa || null,
+            })),
+          });
+        }
+      }
+
+      // Re-fetch with full relations after nested writes
+      return tx.tenantUser.findUnique({
+        where: { id },
+        select: PRIVILEGED_EMPLOYEE_SELECT,
+      });
     });
 
     // Notify connected clients of the update (useful if status/name changed)
@@ -1664,7 +1726,7 @@ export async function updateEmployee(req, res, next) {
       status: updated.status,
     });
 
-    res.json({ message: 'Employee updated successfully', user: updated });
+    res.json({ message: 'Employee updated successfully', user: formatEmployeeResponse(updated) });
   } catch (err) {
     next(err);
   }
@@ -2422,10 +2484,6 @@ export async function verifyEmployee(req, res, next) {
     const verified = await prisma.tenantUser.update({
       where: { id },
       data: {
-        verificationStatus: 'VERIFIED',
-        isVerified: true,
-        verifiedAt: new Date(),
-        verifiedBy: req.user.name || req.user.email,
         status: 'ACTIVE',
       },
     });
