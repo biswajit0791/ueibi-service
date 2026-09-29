@@ -85,6 +85,24 @@ export const bulkInviteEmployeesSchema = z.object({
   ).min(1, "At least one employee must be provided"),
 });
 
+const workHistoryEntrySchema = z.object({
+  companyName: z.string().min(1, "Company name is required"),
+  designation: z.string().min(1, "Designation is required"),
+  startDate: z.string().min(1, "Start date is required"),
+  endDate: z.string().optional().nullable(),
+  isCurrent: z.boolean().optional(),
+  reasonForExit: z.string().optional().nullable(),
+  remarks: z.string().optional().nullable(),
+});
+
+const educationEntrySchema = z.object({
+  qualification: z.string().min(1, "Qualification is required"),
+  institutionName: z.string().min(1, "Institution name is required"),
+  boardUniversity: z.string().optional().nullable().or(z.literal('')),
+  passingYear: z.string().optional().nullable().or(z.literal('')),
+  percentageCgpa: z.string().optional().nullable().or(z.literal('')),
+});
+
 // Explicit allow-list of fields an HR/Admin edit may change on an active employee.
 // Anything not listed here (passwordHash, status, role, isDeleted, tenantId, …) is ignored.
 export const updateEmployeeSchema = z.object({
@@ -125,24 +143,15 @@ export const updateEmployeeSchema = z.object({
   profilePhoto: z.string().optional().nullable(),
   primarySkills: z.array(z.string()).optional(),
   secondarySkills: z.array(z.string()).optional(),
-});
-
-const workHistoryEntrySchema = z.object({
-  companyName: z.string().min(1, "Company name is required"),
-  designation: z.string().min(1, "Designation is required"),
-  startDate: z.string().min(1, "Start date is required"),
-  endDate: z.string().optional().nullable(),
-  isCurrent: z.boolean().optional(),
-  reasonForExit: z.string().optional().nullable(),
-  remarks: z.string().optional().nullable(),
-});
-
-const educationEntrySchema = z.object({
-  qualification: z.string().min(1, "Qualification is required"),
-  institutionName: z.string().min(1, "Institution name is required"),
-  boardUniversity: z.string().optional().nullable().or(z.literal('')),
-  passingYear: z.string().optional().nullable().or(z.literal('')),
-  percentageCgpa: z.string().optional().nullable().or(z.literal('')),
+  // Nested relation payloads — handled separately in the controller via upsert/delete-recreate
+  bankDetails: z.object({
+    bankName: z.string().optional(),
+    accountNumber: z.string().optional(),
+    ifscCode: z.string().optional(),
+    branchName: z.string().optional(),
+  }).partial().optional().nullable(),
+  workHistory: z.array(workHistoryEntrySchema).optional().nullable(),
+  educationHistory: z.array(educationEntrySchema).optional().nullable(),
 });
 
 export const onboardEmployeeSchema = z.object({
