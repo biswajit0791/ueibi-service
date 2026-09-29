@@ -12,7 +12,7 @@
  */
 
 import { prisma } from '../lib/prisma.js';
-import { emitToUser } from '../lib/socket.js';
+import { emitToUser, emitToTenant } from '../lib/socket.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -314,4 +314,111 @@ export async function notifyLicensingActivity({
     console.error('[notifyLicensingActivity] Error notifying licensing activity:', err);
   }
 }
+
+/**
+ * Automatically notify HR and Finance when available license slots drop below 10% or 2 seats remaining,
+ * allowing proactive procurement before onboarding hits a hard block.
+ */
+export async function checkAndNotifyLowLicenseCapacity(tenantId) {
+  try {
+    if (!tenantId) return;
+    const stats = await getLicenseStats(tenantId);
+    const { totalCapacity, availableLicenses } = stats;
+
+    if (totalCapacity <= 0) return;
+
+    const percentRemaining = (availableLicenses / totalCapacity) * 100;
+    const isBelowThreshold = availableLicenses <= 2 || percentRemaining <= 10;
+
+    if (!isBelowThreshold) return;
+
+    // Deduplicate / Throttle: avoid spamming if an alert was already dispatched recently with the same or fewer available seats
+    const recentAlert = await prisma.notification.findFirst({
+      where: {
+        tenantId,
+        type: 'license_low_capacity',
+        createdAt: { gte: new Date(Date.now() - 12 * 60 * 60 * 1000) },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (recentAlert && recentAlert.body && recentAlert.body.includes(`${availableLicenses} of ${totalCapacity}`)) {
+      return;
+    }
+
+    const users = await prisma.tenantUser.findMany({
+      where: {
+        tenantId,
+        isDeleted: false,
+        status: { in: ['ACTIVE', 'INVITED'] },
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        department: true,
+        designation: true,
+        capabilities: { select: { capability: true } },
+      },
+    });
+
+    const isFinance = (u) =>
+      u.role === 'FINANCE' ||
+      /finance/i.test(u.department || '') ||
+      /finance/i.test(u.designation || '');
+
+    const isHr = (u) =>
+      u.role === 'HR' ||
+      /(hr|human resources?|people ops|talent)/i.test(u.department || '') ||
+      /(hr|talent acquisition|people ops)/i.test(u.designation || '');
+
+    const isCeo = (u) =>
+      ['SUPER_ADMIN', 'CMD'].includes(u.role) ||
+      u.capabilities?.some((c) => c.capability === 'LEADERSHIP') ||
+      /(ceo|chief executive|cmd|director|founder|managing director)/i.test(u.designation || '');
+
+    const roundedPercent = Math.round(percentRemaining);
+    const notifiedIds = new Set();
+
+    for (const u of users) {
+      if (!isFinance(u) && !isHr(u) && !isCeo(u)) continue;
+      if (notifiedIds.has(u.id)) continue;
+      notifiedIds.add(u.id);
+
+      let title = `⚠️ Low License Capacity (${availableLicenses} Remaining)`;
+      let body = '';
+
+      if (isHr(u)) {
+        body = `Only ${availableLicenses} of ${totalCapacity} license slots (${roundedPercent}%) remain available. Please submit a license expansion request to Finance to prevent onboarding delays.`;
+      } else {
+        // Finance and Leadership
+        body = `Only ${availableLicenses} of ${totalCapacity} license slots (${roundedPercent}%) remain available. Please review license capacity and purchase additional seats.`;
+      }
+
+      const notif = await prisma.notification.create({
+        data: {
+          tenantId,
+          recipientId: u.id,
+          type: 'license_low_capacity',
+          title,
+          body,
+          entityType: 'license',
+          entityId: null,
+        },
+      });
+
+      emitToUser(tenantId, u.id, 'notification', notif);
+    }
+
+    emitToTenant(tenantId, 'LOW_LICENSE_CAPACITY', {
+      availableLicenses,
+      totalCapacity,
+      percentRemaining: roundedPercent,
+    });
+  } catch (err) {
+    console.error('[checkAndNotifyLowLicenseCapacity] Error checking low license capacity:', err);
+  }
+}
+
 

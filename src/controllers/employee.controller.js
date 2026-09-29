@@ -31,6 +31,7 @@ import {
   assertBulkLicenseAvailable,
   listEligibleManagers,
   notifyLicensingActivity,
+  checkAndNotifyLowLicenseCapacity,
 } from '../services/license.service.js';
 import { generateReferenceCheckProfile } from '../services/pdf.service.js';
 
@@ -365,6 +366,9 @@ export async function inviteEmployee(req, res, next) {
     }).catch((err) => console.warn('[EMPLOYEE] Failed to send invite email:', err.message));
 
     const licenseStats = await getLicenseStats(tenantId);
+    checkAndNotifyLowLicenseCapacity(tenantId).catch((err) =>
+      console.warn('[LICENSE] Low capacity check failed:', err.message)
+    );
 
     res.status(201).json({
       message: 'Employee invited successfully',
@@ -550,6 +554,9 @@ export async function bulkInviteEmployees(req, res, next) {
     }
 
     const licenseStats = await getLicenseStats(tenantId);
+    checkAndNotifyLowLicenseCapacity(tenantId).catch((err) =>
+      console.warn('[LICENSE] Low capacity check failed:', err.message)
+    );
 
     return res.status(201).json({
       message: `Successfully onboarded ${createdUsers.length} employee(s)`,
@@ -1187,6 +1194,53 @@ export async function payAndAddLicenses(req, res, next) {
 
     const stats = await getLicenseStats(tenantId);
 
+    // Commercial Invoice Record (Audit & Accounting for Finance)
+    let generatedInvoiceNumber = null;
+    try {
+      const invCount = await prisma.invoice.count();
+      const invoiceNumber = `INV-${new Date().getFullYear()}-${String(invCount + 1).padStart(5, '0')}`;
+      const subtotal = additionalSeats * 499;
+      const gst = Math.round(subtotal * 0.18 * 100) / 100;
+      const total = totalPaid || (subtotal + gst);
+      const validMethod = ['UPI', 'CHEQUE', 'BANK_TRANSFER'].includes(paymentMethod)
+        ? paymentMethod
+        : 'ONLINE';
+
+      const inv = await prisma.invoice.create({
+        data: {
+          invoiceNumber,
+          tenantId,
+          state: 'PAID',
+          billToName: tenant.companyName || 'Corporate Client',
+          billToEmail: req.user.email,
+          issuedAt: new Date(),
+          dueAt: new Date(),
+          currency: 'INR',
+          quantity: additionalSeats,
+          unitPrice: 499.00,
+          subtotalAmount: subtotal,
+          gstRate: 0.18,
+          gstAmount: gst,
+          totalAmount: total,
+          amountPaid: total,
+          notes: `Employee license expansion (+${additionalSeats} seats). Payment Ref: ${paymentRef || targetRequest?.paymentRef || 'N/A'}`,
+          payments: {
+            create: {
+              amount: total,
+              method: validMethod,
+              reference: paymentRef || targetRequest?.paymentRef || `TXN-${Date.now().toString(36).toUpperCase()}`,
+              recordedById: req.user.id,
+              receivedAt: new Date(),
+              tenantId,
+            },
+          },
+        },
+      });
+      generatedInvoiceNumber = inv.invoiceNumber;
+    } catch (invErr) {
+      console.warn('[payAndAddLicenses] Invoice creation note:', invErr.message);
+    }
+
     // Notify CEO, Finance, and HR
     await notifyLicensingActivity({
       tenantId,
@@ -1195,7 +1249,7 @@ export async function payAndAddLicenses(req, res, next) {
       seats: additionalSeats,
       totalAmount: totalPaid,
       paymentMethod,
-      paymentRef: paymentRef || targetRequest?.paymentRef,
+      paymentRef: paymentRef || targetRequest?.paymentRef || generatedInvoiceNumber,
       reason: notes || targetRequest?.reason,
       requestId: targetRequest?.id,
       newCapacity: newLimit,
@@ -1212,7 +1266,8 @@ export async function payAndAddLicenses(req, res, next) {
       newCapacity: newLimit,
       addedSeats: additionalSeats,
       licenseStats: stats,
-      paymentRef: paymentRef || targetRequest?.paymentRef,
+      paymentRef: paymentRef || targetRequest?.paymentRef || generatedInvoiceNumber,
+      invoiceNumber: generatedInvoiceNumber,
       totalPaid,
     });
   } catch (err) {
@@ -2313,6 +2368,9 @@ export async function reactivateEmployee(req, res, next) {
     });
 
     const licenseStats = await getLicenseStats(tenantId);
+    checkAndNotifyLowLicenseCapacity(tenantId).catch((err) =>
+      console.warn('[LICENSE] Low capacity check failed:', err.message)
+    );
 
     res.json({
       message: `${tenantUser.name} has been reactivated. They will be prompted to change their password on next login.`,
@@ -2548,6 +2606,9 @@ export async function restoreExEmployee(req, res, next) {
     }).catch((err) => console.warn('[RESTORE] Failed to send restore email:', err.message));
 
     const licenseStats = await getLicenseStats(tenantId);
+    checkAndNotifyLowLicenseCapacity(tenantId).catch((err) =>
+      console.warn('[LICENSE] Low capacity check failed:', err.message)
+    );
     console.log('[RESTORE] ✓ Restore complete for:', restoredName, '| userId:', restoredUserId);
 
     // 4. Real-time update
