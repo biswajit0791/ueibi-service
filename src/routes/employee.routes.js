@@ -27,6 +27,10 @@ import {
   verifyEmployee,
   generateExEmployeeRefCheckPdf,
   addTenantLicenses,
+  listLicenseRequests,
+  requestTenantLicenses,
+  payAndAddLicenses,
+  rejectLicenseRequest,
 } from '../controllers/employee.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
@@ -41,8 +45,12 @@ router.get('/employees/managers', requireAuth, requireTenant, getEligibleManager
 router.patch('/employees/onboard', requireAuth, requireTenant, onboardEmployee);
 router.get('/employees', requireAuth, requireTenant, listEmployees);
 
-// License capacity management
-router.post('/employees/add-license', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), addTenantLicenses);
+// License capacity management & request workflow
+router.get('/employees/license-requests', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'FINANCE', 'CMD'), listLicenseRequests);
+router.post('/employees/request-license', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'CMD'), requestTenantLicenses);
+router.post('/employees/pay-license', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'FINANCE', 'CMD'), payAndAddLicenses);
+router.post('/employees/reject-license-request', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'FINANCE', 'CMD'), rejectLicenseRequest);
+router.post('/employees/add-license', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'FINANCE', 'CMD'), addTenantLicenses);
 
 // Stats & Handover Status — must be registered BEFORE /:id to avoid route collision
 router.get('/employees/stats', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'MANAGER'), getEmployeeStats);

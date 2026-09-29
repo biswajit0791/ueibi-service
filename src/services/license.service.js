@@ -12,6 +12,7 @@
  */
 
 import { prisma } from '../lib/prisma.js';
+import { emitToUser } from '../lib/socket.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -212,3 +213,105 @@ export async function listEligibleManagers(tenantId) {
     orderBy: { name: 'asc' },
   });
 }
+
+/**
+ * Notify CEO/CMD, Finance, and HR users about licensing activities (requests, payments, approvals, rejections).
+ */
+export async function notifyLicensingActivity({
+  tenantId,
+  actor,
+  action, // 'REQUESTED' | 'PURCHASED' | 'REJECTED'
+  seats,
+  totalAmount,
+  paymentMethod,
+  paymentRef,
+  reason,
+  requestId,
+  newCapacity,
+}) {
+  try {
+    const users = await prisma.tenantUser.findMany({
+      where: {
+        tenantId,
+        isDeleted: false,
+        status: { in: ['ACTIVE', 'INVITED'] },
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        department: true,
+        designation: true,
+        capabilities: { select: { capability: true } },
+      },
+    });
+
+    const isCeo = (u) =>
+      ['SUPER_ADMIN', 'CMD'].includes(u.role) ||
+      u.capabilities?.some((c) => c.capability === 'LEADERSHIP') ||
+      /(ceo|chief executive|cmd|director|founder|managing director)/i.test(u.designation || '');
+
+    const isFinance = (u) =>
+      u.role === 'FINANCE' ||
+      /finance/i.test(u.department || '') ||
+      /finance/i.test(u.designation || '');
+
+    const isHr = (u) =>
+      u.role === 'HR' ||
+      /(hr|human resources?|people ops|talent)/i.test(u.department || '') ||
+      /(hr|talent acquisition|people ops)/i.test(u.designation || '');
+
+    const notifiedIds = new Set();
+    const formattedAmount = totalAmount ? Number(totalAmount).toLocaleString('en-IN') : '0';
+
+    for (const u of users) {
+      let title = '';
+      let body = '';
+
+      if (action === 'REQUESTED') {
+        // Finance and CEO are alerted when HR requests additional licenses
+        if (isFinance(u) || isCeo(u)) {
+          title = `New License Request from HR (+${seats} Seats)`;
+          body = `${actor?.name || 'HR'} requested ${seats} employee licenses for "${reason || 'Onboarding'}". Total amount: ₹${formattedAmount}. Please review and process payment.`;
+        }
+      } else if (action === 'PURCHASED') {
+        // CEO, Finance, and HR are all notified of completed payment and license purchase
+        if (isCeo(u)) {
+          title = `License Capacity Expanded (+${seats} Seats)`;
+          body = `Finance (${actor?.name || 'Finance'}) completed payment of ₹${formattedAmount} for ${seats} employee licenses. Total capacity is now ${newCapacity} seats.`;
+        } else if (isFinance(u)) {
+          title = `License Payment Confirmed (+${seats} Seats)`;
+          body = `Payment of ₹${formattedAmount} via ${paymentMethod || 'Online'} (Ref: ${paymentRef || 'N/A'}) was confirmed. ${seats} new license seats added.`;
+        } else if (isHr(u)) {
+          title = `Licenses Approved & Purchased (+${seats} Seats)`;
+          body = `Finance has completed payment for ${seats} new employee licenses. Total capacity is now ${newCapacity}. You may now invite and onboard employees.`;
+        }
+      } else if (action === 'REJECTED') {
+        if (isHr(u) || isCeo(u)) {
+          title = `License Request Declined (${seats} Seats)`;
+          body = `Finance declined the request for ${seats} employee licenses. Reason: ${reason || 'Not approved at this time.'}`;
+        }
+      }
+
+      if (title && body && !notifiedIds.has(u.id)) {
+        notifiedIds.add(u.id);
+        const notif = await prisma.notification.create({
+          data: {
+            tenantId,
+            recipientId: u.id,
+            type: 'license_activity',
+            title,
+            body,
+            entityType: 'license',
+            entityId: requestId || null,
+          },
+        });
+        emitToUser(tenantId, u.id, 'notification', notif);
+      }
+    }
+  } catch (err) {
+    console.error('[notifyLicensingActivity] Error notifying licensing activity:', err);
+  }
+}
+

@@ -30,6 +30,7 @@ import {
   assertLicenseAvailable,
   assertBulkLicenseAvailable,
   listEligibleManagers,
+  notifyLicensingActivity,
 } from '../services/license.service.js';
 import { generateReferenceCheckProfile } from '../services/pdf.service.js';
 
@@ -1001,19 +1002,172 @@ export async function getEmployeeStats(req, res, next) {
 }
 
 /**
- * POST /api/employees/add-license
- * Allows HR / Admin / Super Admin to immediately add license seats to the tenant
- * to unblock onboarding of new employees.
+ * GET /api/employees/license-requests
+ * Returns all license requests (pending and past) for the tenant along with license capacity stats.
  */
-export async function addTenantLicenses(req, res, next) {
+export async function listLicenseRequests(req, res, next) {
   try {
     const tenantId = req.tenantId;
-    const parsed = addLicenseSchema.safeParse(req.body);
-    if (!parsed.success) {
-      return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid license quantity' });
+    const requests = await prisma.licenseRequest.findMany({
+      where: { tenantId },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        requestedBy: {
+          select: { id: true, name: true, email: true, role: true, designation: true },
+        },
+        paidBy: {
+          select: { id: true, name: true, email: true, role: true },
+        },
+      },
+    });
+
+    const stats = await getLicenseStats(tenantId);
+
+    res.json({
+      requests,
+      licenseStats: stats,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /api/employees/request-license
+ * Allows HR to submit a license purchase request to Finance with estimated price breakdown.
+ */
+export async function requestTenantLicenses(req, res, next) {
+  try {
+    const tenantId = req.tenantId;
+    const seats = parseInt(req.body.seats, 10);
+    const reason = req.body.reason || 'HR employee capacity expansion';
+
+    if (!seats || isNaN(seats) || seats < 1) {
+      return res.status(400).json({ error: 'Please specify at least 1 license seat to request.' });
     }
 
-    const { additionalSeats, reason } = parsed.data;
+    const unitPrice = 499.00;
+    const taxRate = 0.18;
+    const subtotal = seats * unitPrice;
+    const taxAmount = Math.round(subtotal * taxRate * 100) / 100;
+    const totalAmount = Math.round((subtotal + taxAmount) * 100) / 100;
+
+    const licenseReq = await prisma.licenseRequest.create({
+      data: {
+        tenantId,
+        requestedById: req.user.id,
+        seats,
+        unitPrice,
+        taxRate,
+        taxAmount,
+        totalAmount,
+        currency: 'INR',
+        reason,
+        status: 'PENDING_FINANCE_APPROVAL',
+      },
+      include: {
+        requestedBy: { select: { id: true, name: true, email: true, role: true } },
+      },
+    });
+
+    // Notify Finance & CEO about the pending license request
+    await notifyLicensingActivity({
+      tenantId,
+      actor: req.user,
+      action: 'REQUESTED',
+      seats,
+      totalAmount,
+      reason,
+      requestId: licenseReq.id,
+    });
+
+    emitToTenant(tenantId, 'LICENSE_REQUEST_CREATED', {
+      request: licenseReq,
+      message: `HR submitted a request for ${seats} additional licenses.`,
+    });
+
+    res.json({
+      message: `License request for ${seats} seat(s) submitted to Finance successfully. Estimated amount: ₹${totalAmount.toLocaleString('en-IN')}.`,
+      request: licenseReq,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /api/employees/pay-license
+ * Allows Finance / Leadership to review, pay, and purchase licenses.
+ * Increases the tenant's license capacity and notifies CEO, Finance, and HR.
+ */
+export async function payAndAddLicenses(req, res, next) {
+  try {
+    const tenantId = req.tenantId;
+    const { requestId, paymentMethod = 'UPI', paymentRef, notes } = req.body;
+    let additionalSeats = 0;
+    let targetRequest = null;
+    let totalPaid = 0;
+
+    if (requestId) {
+      targetRequest = await prisma.licenseRequest.findUnique({
+        where: { id: requestId },
+        include: { requestedBy: true },
+      });
+
+      if (!targetRequest || targetRequest.tenantId !== tenantId) {
+        return res.status(404).json({ error: 'License request not found.' });
+      }
+
+      if (targetRequest.status === 'PAID') {
+        return res.status(400).json({ error: 'This license request has already been paid and processed.' });
+      }
+
+      additionalSeats = targetRequest.seats;
+      totalPaid = Number(targetRequest.totalAmount);
+
+      await prisma.licenseRequest.update({
+        where: { id: requestId },
+        data: {
+          status: 'PAID',
+          paidById: req.user.id,
+          paidAt: new Date(),
+          paymentMethod: paymentMethod || 'ONLINE',
+          paymentRef: paymentRef || `TXN-${Date.now().toString(36).toUpperCase()}`,
+        },
+      });
+    } else {
+      // Direct license purchase by Finance / Admin
+      const seats = parseInt(req.body.seats || req.body.additionalSeats, 10);
+      if (!seats || isNaN(seats) || seats < 1) {
+        return res.status(400).json({ error: 'Please specify a valid number of license seats to purchase.' });
+      }
+
+      additionalSeats = seats;
+      const unitPrice = 499.00;
+      const taxRate = 0.18;
+      const subtotal = additionalSeats * unitPrice;
+      const taxAmount = Math.round(subtotal * taxRate * 100) / 100;
+      totalPaid = Math.round((subtotal + taxAmount) * 100) / 100;
+
+      targetRequest = await prisma.licenseRequest.create({
+        data: {
+          tenantId,
+          requestedById: req.user.id,
+          paidById: req.user.id,
+          paidAt: new Date(),
+          seats: additionalSeats,
+          unitPrice,
+          taxRate,
+          taxAmount,
+          totalAmount: totalPaid,
+          currency: 'INR',
+          reason: req.body.reason || 'Finance direct license purchase',
+          status: 'PAID',
+          paymentMethod: paymentMethod || 'ONLINE',
+          paymentRef: paymentRef || `TXN-${Date.now().toString(36).toUpperCase()}`,
+        },
+      });
+    }
 
     const tenant = await prisma.tenant.findUnique({
       where: { id: tenantId },
@@ -1021,7 +1175,7 @@ export async function addTenantLicenses(req, res, next) {
     });
 
     if (!tenant) {
-      return res.status(404).json({ error: 'Tenant not found' });
+      return res.status(404).json({ error: 'Tenant not found.' });
     }
 
     const newLimit = (tenant.licenseLimit || 0) + additionalSeats;
@@ -1033,22 +1187,96 @@ export async function addTenantLicenses(req, res, next) {
 
     const stats = await getLicenseStats(tenantId);
 
+    // Notify CEO, Finance, and HR
+    await notifyLicensingActivity({
+      tenantId,
+      actor: req.user,
+      action: 'PURCHASED',
+      seats: additionalSeats,
+      totalAmount: totalPaid,
+      paymentMethod,
+      paymentRef: paymentRef || targetRequest?.paymentRef,
+      reason: notes || targetRequest?.reason,
+      requestId: targetRequest?.id,
+      newCapacity: newLimit,
+    });
+
     // Broadcast license capacity update via WebSocket
     emitToTenant(tenantId, 'LICENSE_CAPACITY_UPDATED', {
       licenseStats: stats,
-      message: `Tenant license capacity increased by ${additionalSeats} seat(s).`,
+      message: `Tenant license capacity increased by ${additionalSeats} seat(s) after verified payment.`,
     });
 
     res.json({
-      message: `Successfully added ${additionalSeats} employee license seat(s). New capacity is ${newLimit}.`,
+      message: `Payment confirmed! Successfully purchased and added ${additionalSeats} employee license seat(s). New capacity is ${newLimit}. CEO, Finance, and HR have been notified.`,
       newCapacity: newLimit,
       addedSeats: additionalSeats,
       licenseStats: stats,
+      paymentRef: paymentRef || targetRequest?.paymentRef,
+      totalPaid,
     });
   } catch (err) {
     next(err);
   }
 }
+
+/**
+ * POST /api/employees/reject-license-request
+ * Allows Finance / Leadership to decline an HR license request.
+ */
+export async function rejectLicenseRequest(req, res, next) {
+  try {
+    const tenantId = req.tenantId;
+    const { requestId, rejectionReason } = req.body;
+
+    const targetRequest = await prisma.licenseRequest.findUnique({
+      where: { id: requestId },
+      include: { requestedBy: true },
+    });
+
+    if (!targetRequest || targetRequest.tenantId !== tenantId) {
+      return res.status(404).json({ error: 'License request not found.' });
+    }
+
+    if (targetRequest.status === 'PAID') {
+      return res.status(400).json({ error: 'Cannot reject an already paid license request.' });
+    }
+
+    const updated = await prisma.licenseRequest.update({
+      where: { id: requestId },
+      data: {
+        status: 'REJECTED',
+        rejectionReason: rejectionReason || 'Declined by Finance department.',
+      },
+    });
+
+    await notifyLicensingActivity({
+      tenantId,
+      actor: req.user,
+      action: 'REJECTED',
+      seats: targetRequest.seats,
+      reason: rejectionReason || 'Declined by Finance department.',
+      requestId: targetRequest.id,
+    });
+
+    emitToTenant(tenantId, 'LICENSE_REQUEST_UPDATED', {
+      request: updated,
+      message: `License request #${requestId} was declined.`,
+    });
+
+    res.json({
+      message: 'License request declined.',
+      request: updated,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Backward compatibility alias for POST /api/employees/add-license
+ */
+export const addTenantLicenses = payAndAddLicenses;
 
 
 export async function listExEmployees(req, res, next) {

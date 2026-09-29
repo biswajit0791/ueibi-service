@@ -117,6 +117,7 @@ model Tenant {
   cxoMessageReplies    CxoMessageReply[]
   subscriptions        Subscription[]
   invoices             Invoice[]
+  licenseRequests      LicenseRequest[]
 
   @@index([isPlatform])
   @@index([status])
@@ -299,6 +300,8 @@ model TenantUser {
   galleryPosts        GalleryPost[]        @relation("GalleryPostUploader")
   galleryLikes        GalleryLike[]        @relation("GalleryLikeUser")
   galleryComments     GalleryComment[]     @relation("GalleryCommentAuthor")
+  licenseRequests     LicenseRequest[]     @relation("UserLicenseRequests")
+  paidLicenseRequests LicenseRequest[]     @relation("PaidLicenseRequests")
 
   remarks   String?
   docs      Json?
@@ -2426,4 +2429,31 @@ model InvoiceSetting {
   createdAt   DateTime @default(now())
 
   @@map("invoice_settings")
+}
+
+model LicenseRequest {
+  id              String         @id @default(cuid())
+  tenantId        String
+  tenant          Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  requestedById   String
+  requestedBy     TenantUser     @relation("UserLicenseRequests", fields: [requestedById], references: [id], onDelete: Cascade)
+  seats           Int
+  unitPrice       Decimal        @default(499.00) @db.Decimal(10, 2)
+  taxRate         Decimal        @default(0.18) @db.Decimal(5, 4)
+  taxAmount       Decimal        @default(0.00) @db.Decimal(10, 2)
+  totalAmount     Decimal        @default(0.00) @db.Decimal(10, 2)
+  currency        String         @default("INR")
+  reason          String?        @db.Text
+  status          String         @default("PENDING_FINANCE_APPROVAL") // PENDING_FINANCE_APPROVAL | PAID | REJECTED | CANCELLED
+  paymentMethod   String?        // CARD | UPI | NET_BANKING | CHEQUE | BANK_TRANSFER
+  paymentRef      String?        // Transaction Reference / UTR
+  paidById        String?
+  paidBy          TenantUser?    @relation("PaidLicenseRequests", fields: [paidById], references: [id], onDelete: SetNull)
+  paidAt          DateTime?
+  rejectionReason String?        @db.Text
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([tenantId, status])
+  @@map("license_requests")
 }
