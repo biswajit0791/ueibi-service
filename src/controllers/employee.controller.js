@@ -578,36 +578,42 @@ export async function onboardEmployee(req, res, next) {
       docs,
     } = parsed.data;
 
-    const pwCheck = validatePasswordStrength(newPassword);
-    if (!pwCheck.ok) {
-      return res.status(400).json({ error: pwCheck.message });
-    }
-
     const userId = req.user.id;
 
     const user = await prisma.tenantUser.findUnique({
       where: { id: userId },
     });
 
-    if (!user) {
+    if (!user || user.isDeleted) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Onboarding is a one-time flow: only an INVITED user (or one still flagged
-    // to change their password) may run it. An already-onboarded ACTIVE user
-    // must use the normal profile / change-password endpoints instead.
-    if (user.status !== 'INVITED' && !user.mustChangePassword) {
-      return res.status(409).json({ error: 'Onboarding has already been completed for this account' });
+    if (user.status === 'EXITED') {
+      return res.status(403).json({ error: 'Exited employees cannot modify onboarding profile' });
     }
 
-    const newHash = await bcrypt.hash(newPassword, 10);
+    // A first-time invited user must set a new secure password.
+    // For already-active employees (e.g. uploaded via Excel or updating profile), new password is optional.
+    const isFirstTimeSetup = user.status === 'INVITED' || user.mustChangePassword;
+    if (isFirstTimeSetup && (!newPassword || !newPassword.trim())) {
+      return res.status(400).json({ error: 'New password is required to complete onboarding' });
+    }
+
+    let newHash = undefined;
+    if (newPassword && newPassword.trim()) {
+      const pwCheck = validatePasswordStrength(newPassword.trim());
+      if (!pwCheck.ok) {
+        return res.status(400).json({ error: pwCheck.message });
+      }
+      newHash = await bcrypt.hash(newPassword.trim(), 10);
+    }
 
     const updated = await prisma.$transaction(async (tx) => {
       // 1. Update user profile details
       const u = await tx.tenantUser.update({
         where: { id: userId },
         data: {
-          passwordHash: newHash,
+          passwordHash: newHash || undefined,
           phone: phone || undefined,
           pan: pan ? pan.toUpperCase() : undefined,
           aadhaar: aadhaar || undefined,
