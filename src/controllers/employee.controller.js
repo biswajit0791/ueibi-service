@@ -338,6 +338,7 @@ export async function bulkInviteEmployees(req, res, next) {
         where: { id: tenantId },
         select: { companyName: true },
       });
+      const companyName = tenant?.companyName || 'your organization';
       // Resolve reporting managers by name, email, or id across the organization
       const existingTenantUsers = await tx.tenantUser.findMany({
         where: { tenantId, isDeleted: false },
