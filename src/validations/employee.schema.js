@@ -146,7 +146,7 @@ const educationEntrySchema = z.object({
 });
 
 export const onboardEmployeeSchema = z.object({
-  newPassword: z.string().min(1, "New password is required to complete onboarding"),
+  newPassword: z.string().optional().nullable().or(z.literal('')),
   phone: z.string().optional().nullable().or(z.literal('')),
   pan: panSchema,
   aadhaar: aadhaarSchema,
