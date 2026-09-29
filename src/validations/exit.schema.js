@@ -30,7 +30,9 @@ export const clearanceSchema = z.object({
     errorMap: () => ({ message: 'Department must be one of: it, hr, finance, manager' }),
   }),
   cleared: z.boolean().default(true),
-  remarks: z.string().optional(),
+  remarks: z.string().optional().default(''),
+  fileUrl: z.string().optional().nullable(),
+  fileName: z.string().optional().nullable(),
 });
 
 // ── Complete Exit ────────────────────────────────────────────────────────────
@@ -46,9 +48,19 @@ export const completeExitSchema = z.object({
 
 // ── Certificate Generation ──────────────────────────────────────────────────
 export const certificateTypeSchema = z.object({
-  type: z.enum(['relieving', 'service', 'refcheck'], {
-    errorMap: () => ({ message: 'Certificate type must be "relieving", "service", or "refcheck"' }),
+  type: z.enum(['relieving', 'service', 'refcheck', 'termination'], {
+    errorMap: () => ({ message: 'Certificate type must be "relieving", "service", "refcheck", or "termination"' }),
   }),
+});
+
+// ── Send Exit Documents Email ───────────────────────────────────────────────
+export const sendExitDocumentsSchema = z.object({
+  recipientEmail: z.string().email().optional(),
+  includeRelieving: z.boolean().default(true),
+  includeService: z.boolean().default(true),
+  includeRefCheck: z.boolean().default(true),
+  includeTermination: z.boolean().default(false),
+  customMessage: z.string().optional(),
 });
 
 // ── Param schemas ────────────────────────────────────────────────────────────

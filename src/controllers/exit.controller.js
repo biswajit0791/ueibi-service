@@ -13,8 +13,14 @@
  */
 import { prisma } from '../lib/prisma.js';
 import { emitToTenant } from '../lib/socket.js';
+import { sendMail } from '../lib/mailer.js';
 import { getLicenseStats } from '../services/license.service.js';
-import { generateRelievingLetter, generateServiceCertificate, generateReferenceCheckProfile } from '../services/pdf.service.js';
+import {
+  generateRelievingLetter,
+  generateServiceCertificate,
+  generateReferenceCheckProfile,
+  generateTerminationLetter,
+} from '../services/pdf.service.js';
 import {
   initiateExitSchema,
   exitInterviewSchema,
@@ -23,6 +29,7 @@ import {
   exitIdParamSchema,
   employeeIdParamSchema,
   certificateTypeSchema,
+  sendExitDocumentsSchema,
 } from '../validations/exit.schema.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -170,7 +177,7 @@ export async function approveClearance(req, res, next) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
 
-    const { department, cleared } = parsed.data;
+    const { department, cleared, remarks, fileUrl, fileName } = parsed.data;
 
     const exitDetails = await prisma.exitDetails.findFirst({
       where: { id, tenantId: req.tenantId },
@@ -182,6 +189,34 @@ export async function approveClearance(req, res, next) {
 
     if (exitDetails.exitStatus === 'COMPLETED') {
       return res.status(409).json({ error: 'Exit process is already completed' });
+    }
+
+    // ── Department Role Enforcement ──
+    const userRole = req.user.role;
+    const isLeadership = ['SUPER_ADMIN', 'ADMIN', 'HR'].includes(userRole);
+
+    if (department === 'finance') {
+      if (!isLeadership && userRole !== 'FINANCE') {
+        return res.status(403).json({ error: 'Only Finance department personnel or HR/Admin may approve Finance clearance.' });
+      }
+    } else if (department === 'manager') {
+      const exitingUser = await prisma.tenantUser.findUnique({
+        where: { id: exitDetails.userId },
+        select: { managerId: true },
+      });
+      const isDirectManager = exitingUser?.managerId === req.user.id;
+      if (!isLeadership && !isDirectManager) {
+        return res.status(403).json({ error: "Only the employee's direct manager or HR/Admin may approve Manager clearance." });
+      }
+    } else if (department === 'it') {
+      const userDept = (req.user.department || '').toLowerCase();
+      if (!isLeadership && userDept !== 'it') {
+        return res.status(403).json({ error: 'Only IT department personnel or HR/Admin may approve IT clearance.' });
+      }
+    } else if (department === 'hr') {
+      if (!isLeadership) {
+        return res.status(403).json({ error: 'Only HR or Admin personnel may approve HR clearance.' });
+      }
     }
 
     // Build update data for the specific department
@@ -212,6 +247,28 @@ export async function approveClearance(req, res, next) {
         break;
     }
 
+    // Store clearance details (remarks, uploaded files such as Finance F&F statement)
+    let remarksObj = {};
+    try {
+      remarksObj = JSON.parse(exitDetails.feedbackRemarks || '{}');
+      if (typeof remarksObj !== 'object' || !remarksObj || Array.isArray(remarksObj)) {
+        remarksObj = { generalRemarks: exitDetails.feedbackRemarks || '' };
+      }
+    } catch (e) {
+      remarksObj = { generalRemarks: exitDetails.feedbackRemarks || '' };
+    }
+
+    if (!remarksObj.clearances) remarksObj.clearances = {};
+    remarksObj.clearances[department] = {
+      cleared,
+      remarks: remarks || '',
+      fileUrl: fileUrl || null,
+      fileName: fileName || null,
+      clearedBy: actorName,
+      clearedAt: now.toISOString(),
+    };
+    updateData.feedbackRemarks = JSON.stringify(remarksObj);
+
     // Check if all departments are now cleared (merge current state with this update)
     const mergedState = {
       itCleared: updateData.itCleared !== undefined ? updateData.itCleared : exitDetails.itCleared,
@@ -239,6 +296,9 @@ export async function approveClearance(req, res, next) {
       department,
       cleared,
       allCleared,
+      remarks: remarks || '',
+      fileUrl: fileUrl || null,
+      fileName: fileName || null,
     });
 
     res.json({
@@ -246,11 +306,26 @@ export async function approveClearance(req, res, next) {
         ? 'All departments cleared! Ready for final exit completion.'
         : `${department.toUpperCase()} clearance ${cleared ? 'approved' : 'revoked'}`,
       exitDetails: updated,
+      clearanceDetails: remarksObj.clearances,
       allCleared,
     });
   } catch (err) {
     next(err);
   }
+}
+
+// ── Helper to parse exit feedbackRemarks safely ──
+function parseExitRemarks(raw) {
+  let remarksObj = {};
+  try {
+    remarksObj = JSON.parse(raw || '{}');
+    if (typeof remarksObj !== 'object' || !remarksObj || Array.isArray(remarksObj)) {
+      remarksObj = { generalRemarks: raw || '' };
+    }
+  } catch (e) {
+    remarksObj = { generalRemarks: raw || '' };
+  }
+  return remarksObj;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -265,11 +340,16 @@ export async function getExitStatus(req, res, next) {
     }
     const { employeeId } = parsedParams.data;
 
+    // Regular employee can only view their own exit record
+    if (req.user.role === 'EMPLOYEE' && req.user.id !== employeeId) {
+      return res.status(403).json({ error: 'You are only authorized to view your own exit record.' });
+    }
+
     const exitDetails = await prisma.exitDetails.findFirst({
       where: { userId: employeeId, tenantId: req.tenantId },
       include: {
         user: {
-          select: { id: true, name: true, email: true, designation: true, department: true, employeeId: true, joinDate: true, profilePhoto: true },
+          select: { id: true, name: true, email: true, personalEmail: true, designation: true, department: true, employeeId: true, joinDate: true, profilePhoto: true },
         },
       },
     });
@@ -278,17 +358,63 @@ export async function getExitStatus(req, res, next) {
       return res.status(404).json({ error: 'No exit process found for this employee' });
     }
 
-    // Build clearance summary
+    const remarksObj = parseExitRemarks(exitDetails.feedbackRemarks);
+    const cd = remarksObj.clearances || {};
+
+    // Build clearance summary with attachments and remarks
     const clearances = [
-      { dept: 'IT', cleared: exitDetails.itCleared, clearedAt: exitDetails.itClearedAt, clearedBy: exitDetails.itClearedBy },
-      { dept: 'HR', cleared: exitDetails.hrCleared, clearedAt: exitDetails.hrClearedAt, clearedBy: exitDetails.hrClearedBy },
-      { dept: 'Finance', cleared: exitDetails.financeCleared, clearedAt: exitDetails.financeClearedAt, clearedBy: exitDetails.financeClearedBy },
-      { dept: 'Manager', cleared: exitDetails.managerCleared, clearedAt: exitDetails.managerClearedAt, clearedBy: exitDetails.managerClearedBy },
+      {
+        dept: 'IT',
+        key: 'it',
+        cleared: exitDetails.itCleared,
+        clearedAt: exitDetails.itClearedAt,
+        clearedBy: exitDetails.itClearedBy,
+        remarks: cd.it?.remarks || '',
+        fileUrl: cd.it?.fileUrl || null,
+        fileName: cd.it?.fileName || null,
+      },
+      {
+        dept: 'HR',
+        key: 'hr',
+        cleared: exitDetails.hrCleared,
+        clearedAt: exitDetails.hrClearedAt,
+        clearedBy: exitDetails.hrClearedBy,
+        remarks: cd.hr?.remarks || '',
+        fileUrl: cd.hr?.fileUrl || null,
+        fileName: cd.hr?.fileName || null,
+      },
+      {
+        dept: 'Finance',
+        key: 'finance',
+        cleared: exitDetails.financeCleared,
+        clearedAt: exitDetails.financeClearedAt,
+        clearedBy: exitDetails.financeClearedBy,
+        remarks: cd.finance?.remarks || '',
+        fileUrl: cd.finance?.fileUrl || null,
+        fileName: cd.finance?.fileName || null,
+      },
+      {
+        dept: 'Manager',
+        key: 'manager',
+        cleared: exitDetails.managerCleared,
+        clearedAt: exitDetails.managerClearedAt,
+        clearedBy: exitDetails.managerClearedBy,
+        remarks: cd.manager?.remarks || '',
+        fileUrl: cd.manager?.fileUrl || null,
+        fileName: cd.manager?.fileName || null,
+      },
     ];
 
     res.json({
       exitDetails,
       clearances,
+      documents: {
+        relievingLetterUrl: exitDetails.relievingLetterUrl || null,
+        serviceCertificateUrl: exitDetails.serviceCertificateUrl || null,
+        terminationLetterUrl: remarksObj.terminationLetterUrl || null,
+        documentsSentAt: remarksObj.documentsSentAt || null,
+        documentsSentTo: remarksObj.documentsSentTo || null,
+      },
       progress: {
         total: 4,
         completed: clearances.filter(c => c.cleared).length,
@@ -301,33 +427,68 @@ export async function getExitStatus(req, res, next) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// GET /api/exit/my-status
+// Convenience endpoint for the authenticated employee to fetch their own exit record.
+// ─────────────────────────────────────────────────────────────────────────────
+export async function getMyExitStatus(req, res, next) {
+  try {
+    req.params.employeeId = req.user.id;
+    return getExitStatus(req, res, next);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // GET /api/exit/pending
 // List all in-progress exit processes for the current tenant.
 // ─────────────────────────────────────────────────────────────────────────────
 export async function listPendingExits(req, res, next) {
   try {
     const tenantId = req.tenantId;
+    const includeCompleted = req.query.includeCompleted === 'true' || req.query.status === 'all' || req.query.status === 'COMPLETED';
+
+    const where = { tenantId };
+    if (req.query.status === 'COMPLETED') {
+      where.exitStatus = 'COMPLETED';
+    } else if (!includeCompleted) {
+      where.exitStatus = { not: 'COMPLETED' };
+    }
 
     const exits = await prisma.exitDetails.findMany({
-      where: {
-        tenantId,
-        exitStatus: { not: 'COMPLETED' },
-      },
+      where,
       include: {
         user: {
-          select: { id: true, name: true, email: true, designation: true, department: true, employeeId: true, profilePhoto: true },
+          select: { id: true, name: true, email: true, personalEmail: true, designation: true, department: true, employeeId: true, profilePhoto: true },
         },
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    // Enrich with clearance progress
+    // Enrich with clearance progress, clearance details and attachments
     const enriched = exits.map(exit => {
-      const cleared = [exit.itCleared, exit.hrCleared, exit.financeCleared, exit.managerCleared]
-        .filter(Boolean).length;
+      const remarksObj = parseExitRemarks(exit.feedbackRemarks);
+      const cd = remarksObj.clearances || {};
+      const clearances = [
+        { dept: 'IT', key: 'it', cleared: exit.itCleared, by: exit.itClearedBy, at: exit.itClearedAt, remarks: cd.it?.remarks || '', fileUrl: cd.it?.fileUrl || null, fileName: cd.it?.fileName || null },
+        { dept: 'HR', key: 'hr', cleared: exit.hrCleared, by: exit.hrClearedBy, at: exit.hrClearedAt, remarks: cd.hr?.remarks || '', fileUrl: cd.hr?.fileUrl || null, fileName: cd.hr?.fileName || null },
+        { dept: 'Finance', key: 'finance', cleared: exit.financeCleared, by: exit.financeClearedBy, at: exit.financeClearedAt, remarks: cd.finance?.remarks || '', fileUrl: cd.finance?.fileUrl || null, fileName: cd.finance?.fileName || null },
+        { dept: 'Manager', key: 'manager', cleared: exit.managerCleared, by: exit.managerClearedBy, at: exit.managerClearedAt, remarks: cd.manager?.remarks || '', fileUrl: cd.manager?.fileUrl || null, fileName: cd.manager?.fileName || null },
+      ];
+      const clearedCount = clearances.filter(c => c.cleared).length;
+
       return {
         ...exit,
-        clearanceProgress: { total: 4, completed: cleared, percentage: Math.round((cleared / 4) * 100) },
+        clearances,
+        clearanceDetails: cd,
+        documents: {
+          relievingLetterUrl: exit.relievingLetterUrl || null,
+          serviceCertificateUrl: exit.serviceCertificateUrl || null,
+          terminationLetterUrl: remarksObj.terminationLetterUrl || null,
+          documentsSentAt: remarksObj.documentsSentAt || null,
+          documentsSentTo: remarksObj.documentsSentTo || null,
+        },
+        clearanceProgress: { total: 4, completed: clearedCount, percentage: Math.round((clearedCount / 4) * 100) },
       };
     });
 
@@ -581,6 +742,14 @@ export async function generateCertificate(req, res, next) {
         where: { id },
         data: { relievingLetterUrl: pdfUrl },
       });
+    } else if (type === 'termination') {
+      pdfUrl = await generateTerminationLetter(pdfData);
+      const remarksObj = parseExitRemarks(exitDetails.feedbackRemarks);
+      remarksObj.terminationLetterUrl = pdfUrl;
+      await prisma.exitDetails.update({
+        where: { id },
+        data: { feedbackRemarks: JSON.stringify(remarksObj) },
+      });
     } else if (type === 'service') {
       // Fetch ex-employee record for ratings if available
       const exRecord = await prisma.exEmployeeRecord.findFirst({
@@ -622,6 +791,7 @@ export async function generateCertificate(req, res, next) {
 
     const typeLabels = {
       relieving: 'Relieving letter',
+      termination: 'Termination letter',
       service: 'Service certificate',
       refcheck: 'Reference check & verified profile dossier',
     };
@@ -629,6 +799,255 @@ export async function generateCertificate(req, res, next) {
     res.json({
       message: `${typeLabels[type] || 'Document'} generated successfully`,
       pdfUrl,
+      type,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/exit/:id/send-documents
+// Sends all exit certificates (Relieving, Service, Ref-Check, Termination) and clearance details
+// directly to the employee's email.
+// ─────────────────────────────────────────────────────────────────────────────
+export async function sendExitDocuments(req, res, next) {
+  try {
+    const parsedParams = exitIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid exit ID', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
+
+    const parsed = sendExitDocumentsSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    }
+    const {
+      recipientEmail,
+      includeRelieving,
+      includeService,
+      includeRefCheck,
+      includeTermination,
+      customMessage,
+    } = parsed.data;
+
+    const exitDetails = await prisma.exitDetails.findFirst({
+      where: { id, tenantId: req.tenantId },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            personalEmail: true,
+            designation: true,
+            department: true,
+            employeeId: true,
+            joinDate: true,
+            pan: true,
+            tenant: { select: { companyName: true } },
+          },
+        },
+      },
+    });
+
+    if (!exitDetails) {
+      return res.status(404).json({ error: 'Exit record not found' });
+    }
+
+    const employee = exitDetails.user;
+    const companyName = employee?.tenant?.companyName || 'UEIBI Organization';
+    const targetEmail = recipientEmail || employee.personalEmail || employee.email;
+
+    if (!targetEmail) {
+      return res.status(400).json({ error: 'No valid recipient email address found for this employee.' });
+    }
+
+    const pdfData = {
+      companyName,
+      employeeName: employee.name,
+      employeeId: employee.employeeId || employee.id,
+      designation: employee.designation || 'Member',
+      department: employee.department || 'General',
+      joinDate: employee.joinDate || exitDetails.resignationDate,
+      lastWorkingDay: exitDetails.lastWorkingDay,
+      resignationDate: exitDetails.resignationDate,
+      exitReason: exitDetails.exitReason,
+      authorizedSignatory: req.user.name || 'HR Department',
+    };
+
+    const remarksObj = parseExitRemarks(exitDetails.feedbackRemarks);
+    const generatedDocs = [];
+
+    // 1. Relieving Letter
+    let relievingUrl = exitDetails.relievingLetterUrl;
+    if (includeRelieving && !relievingUrl) {
+      relievingUrl = await generateRelievingLetter(pdfData);
+      await prisma.exitDetails.update({ where: { id }, data: { relievingLetterUrl: relievingUrl } });
+    }
+    if (includeRelieving && relievingUrl) {
+      generatedDocs.push({ label: 'Relieving Letter', url: relievingUrl, type: 'relieving' });
+    }
+
+    // 2. Service Certificate
+    let serviceUrl = exitDetails.serviceCertificateUrl;
+    if (includeService && !serviceUrl) {
+      const exRecord = await prisma.exEmployeeRecord.findFirst({
+        where: { email: employee.email, tenantId: req.tenantId },
+        orderBy: { createdAt: 'desc' },
+      });
+      pdfData.conductValue = exRecord?.conductValue || 'Good';
+      pdfData.techRating = exRecord?.techRating || 8;
+      pdfData.attitudeRating = exRecord?.attitudeRating || 8;
+      serviceUrl = await generateServiceCertificate(pdfData);
+      await prisma.exitDetails.update({ where: { id }, data: { serviceCertificateUrl: serviceUrl } });
+    }
+    if (includeService && serviceUrl) {
+      generatedDocs.push({ label: 'Service Certificate', url: serviceUrl, type: 'service' });
+    }
+
+    // 3. Termination Letter (if terminated or explicitly requested)
+    let terminationUrl = remarksObj.terminationLetterUrl;
+    const shouldIncludeTermination = includeTermination || exitDetails.exitReason === 'Terminated';
+    if (shouldIncludeTermination && !terminationUrl) {
+      terminationUrl = await generateTerminationLetter(pdfData);
+      remarksObj.terminationLetterUrl = terminationUrl;
+    }
+    if (shouldIncludeTermination && terminationUrl) {
+      generatedDocs.push({ label: 'Termination Letter', url: terminationUrl, type: 'termination' });
+    }
+
+    // 4. Ref-Check Profile Dossier
+    if (includeRefCheck) {
+      const [exRecord, userWithWorkHistory] = await Promise.all([
+        prisma.exEmployeeRecord.findFirst({
+          where: { email: employee.email, tenantId: req.tenantId },
+          orderBy: { createdAt: 'desc' },
+        }),
+        prisma.tenantUser.findUnique({
+          where: { id: employee.id },
+          include: { workHistory: true },
+        }),
+      ]);
+      pdfData.pan = employee.pan || exRecord?.pan || null;
+      pdfData.conductValue = exRecord?.conductValue || 'Good';
+      pdfData.techRating = exRecord?.techRating || 8;
+      pdfData.attitudeRating = exRecord?.attitudeRating || 8;
+      pdfData.feedback = exRecord?.feedback || remarksObj.generalRemarks || '';
+      pdfData.workHistory = userWithWorkHistory?.workHistory || [];
+      const refCheckUrl = await generateReferenceCheckProfile(pdfData);
+      generatedDocs.push({ label: 'Reference Check & Verified Profile Dossier', url: refCheckUrl, type: 'refcheck' });
+    }
+
+    // Include any attached clearance settlement files (e.g. from Finance)
+    const clearanceFiles = [];
+    if (remarksObj.clearances) {
+      for (const [deptKey, cData] of Object.entries(remarksObj.clearances)) {
+        if (cData.fileUrl) {
+          clearanceFiles.push({
+            dept: deptKey.toUpperCase(),
+            fileName: cData.fileName || `${deptKey}_clearance_slip.pdf`,
+            url: cData.fileUrl,
+          });
+        }
+      }
+    }
+
+    const formattedLastDay = new Date(exitDetails.lastWorkingDay).toLocaleDateString('en-IN', {
+      day: '2-digit', month: 'long', year: 'numeric',
+    });
+
+    const isTerminated = exitDetails.exitReason === 'Terminated';
+    const emailSubject = isTerminated
+      ? `Important: Formal Termination Notice & Separation Documents | ${companyName}`
+      : `Official Relieving & Experience Documents | ${companyName}`;
+
+    const docLinksHtml = generatedDocs.map(d => `
+      <li style="margin-bottom: 8px;">
+        <strong>${d.label}:</strong> <a href="${d.url}" style="color: #4f46e5; font-weight: 600; text-decoration: underline;" target="_blank">Download Document</a>
+      </li>
+    `).join('');
+
+    const clearanceFilesHtml = clearanceFiles.length > 0 ? `
+      <h4 style="color: #374151; margin-top: 16px; margin-bottom: 8px;">Department Clearance & Settlement Attachments:</h4>
+      <ul>
+        ${clearanceFiles.map(f => `<li style="margin-bottom: 6px;"><strong>${f.dept}:</strong> <a href="${f.url}" style="color: #059669; font-weight: 600;" target="_blank">${f.fileName} (Download)</a></li>`).join('')}
+      </ul>
+    ` : '';
+
+    const html = `
+      <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 620px; margin: 0 auto; padding: 24px; color: #1f2937; line-height: 1.6; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;">
+        <div style="border-bottom: 2px solid #4f46e5; padding-bottom: 12px; margin-bottom: 20px;">
+          <h2 style="color: #111827; margin: 0;">${companyName}</h2>
+          <p style="color: #6b7280; font-size: 13px; margin: 4px 0 0;">Human Resources & People Operations</p>
+        </div>
+
+        <p>Dear <strong>${employee.name}</strong>,</p>
+
+        <p>
+          This is an official communication regarding the completion of your offboarding process with <strong>${companyName}</strong>. 
+          Your effective separation date was <strong>${formattedLastDay}</strong>.
+        </p>
+
+        ${customMessage ? `<div style="background: #f3f4f6; border-left: 4px solid #4f46e5; padding: 12px 16px; margin: 16px 0; border-radius: 4px;"><p style="margin: 0; font-size: 13px; color: #374151;">${customMessage}</p></div>` : ''}
+
+        <p>All mandatory department clearances (IT, Finance, HR, Manager) have been finalized. Below are your official certified separation documents:</p>
+
+        <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin: 16px 0;">
+          <h4 style="margin-top: 0; color: #111827; margin-bottom: 12px;">Official Separation Documents</h4>
+          <ul style="padding-left: 20px; margin-bottom: 0;">
+            ${docLinksHtml}
+          </ul>
+          ${clearanceFilesHtml}
+        </div>
+
+        <p style="font-size: 13px; color: #4b5563;">
+          Please retain these documents safely for your career records, tax filing, and future employment reference. If you have questions regarding your Full & Final (F&F) settlement or PF/ESIC transfer, please reach out to our Finance & HR team.
+        </p>
+
+        <p style="margin-top: 24px;">
+          Sincerely,<br />
+          <strong>${req.user.name || 'HR Operations Team'}</strong><br />
+          ${companyName}
+        </p>
+
+        <div style="margin-top: 30px; border-top: 1px solid #e5e7eb; padding-top: 12px; font-size: 11px; color: #9ca3af; text-align: center;">
+          This is an automated separation notification from the enterprise workforce portal.
+        </div>
+      </div>
+    `;
+
+    const text = `Dear ${employee.name},\n\nYour separation process with ${companyName} has been completed effective ${formattedLastDay}.\n\nYour official documents:\n${generatedDocs.map(d => `- ${d.label}: ${d.url}`).join('\n')}\n\nSincerely,\nHR Operations Team\n${companyName}`;
+
+    await sendMail({
+      to: targetEmail,
+      subject: emailSubject,
+      html,
+      text,
+      event: 'EMPLOYEE_EXIT_DOCUMENTS',
+    });
+
+    // Save timestamp of email sent
+    remarksObj.documentsSentAt = new Date().toISOString();
+    remarksObj.documentsSentTo = targetEmail;
+    await prisma.exitDetails.update({
+      where: { id },
+      data: { feedbackRemarks: JSON.stringify(remarksObj) },
+    });
+
+    emitToTenant(req.tenantId, 'exit_documents_sent', {
+      exitDetailsId: id,
+      employeeId: employee.id,
+      recipientEmail: targetEmail,
+      documentsCount: generatedDocs.length,
+    });
+
+    res.json({
+      message: `Exit documents successfully sent to ${targetEmail}`,
+      recipientEmail: targetEmail,
+      documents: generatedDocs,
+      clearanceFiles,
     });
   } catch (err) {
     next(err);

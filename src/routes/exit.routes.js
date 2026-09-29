@@ -4,9 +4,11 @@ import {
   saveExitInterview,
   approveClearance,
   getExitStatus,
+  getMyExitStatus,
   listPendingExits,
   completeExit,
   generateCertificate,
+  sendExitDocuments,
 } from '../controllers/exit.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
@@ -19,11 +21,14 @@ const router = Router();
 // List all pending exits for this tenant
 router.get('/exit/pending', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), listPendingExits);
 
+// Employee self-service exit status
+router.get('/exit/my-status', requireAuth, requireTenant, getMyExitStatus);
+
 // Initiate exit process for an employee
 router.post('/exit/:employeeId/initiate', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), initiateExit);
 
 // Get exit status for an employee
-router.get('/exit/:employeeId/status', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'MANAGER', 'FINANCE'), getExitStatus);
+router.get('/exit/:employeeId/status', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'MANAGER', 'FINANCE', 'EMPLOYEE'), getExitStatus);
 
 // Save exit interview
 router.patch('/exit/:id/interview', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), saveExitInterview);
@@ -34,7 +39,10 @@ router.patch('/exit/:id/clearance', requireAuth, requireTenant, authorize('SUPER
 // Complete exit (finalize — mark EXITED, free license, archive)
 router.post('/exit/:id/complete', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), completeExit);
 
-// Generate certificate (relieving / service)
+// Generate certificate (relieving / service / termination)
 router.post('/exit/:id/certificate/:type', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), generateCertificate);
+
+// Send separation & clearance documents to employee via email
+router.post('/exit/:id/send-documents', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), sendExitDocuments);
 
 export default router;

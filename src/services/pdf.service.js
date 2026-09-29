@@ -168,6 +168,157 @@ export async function generateRelievingLetter(data) {
 }
 
 /**
+ * Generate a formal Termination Letter PDF.
+ *
+ * @param {Object} data
+ * @param {string} data.companyName
+ * @param {string} data.employeeName
+ * @param {string} data.employeeId
+ * @param {string} data.designation
+ * @param {string} data.department
+ * @param {string|Date} data.joinDate
+ * @param {string|Date} data.lastWorkingDay
+ * @param {string} [data.exitReason]
+ * @param {string} [data.authorizedSignatory]
+ * @returns {Promise<string>} relative URL path to the generated PDF
+ */
+export async function generateTerminationLetter(data) {
+  return new Promise((resolve, reject) => {
+    const fileName = `termination_${data.employeeId || 'emp'}_${crypto.randomBytes(4).toString('hex')}.pdf`;
+    const filePath = path.join(certDir, fileName);
+    const doc = new PDFDocument({ size: 'A4', margin: 60 });
+    const stream = fs.createWriteStream(filePath);
+
+    doc.pipe(stream);
+
+    // ── Header ──
+    doc
+      .fontSize(18)
+      .font('Helvetica-Bold')
+      .text(data.companyName || 'Company Name', { align: 'center' })
+      .moveDown(0.3);
+
+    doc
+      .fontSize(10)
+      .font('Helvetica')
+      .fillColor('#666666')
+      .text('Human Resources Department — Official Communication', { align: 'center' })
+      .moveDown(1.5);
+
+    // Horizontal rule
+    doc
+      .strokeColor('#dc2626')
+      .lineWidth(1.5)
+      .moveTo(60, doc.y)
+      .lineTo(535, doc.y)
+      .stroke()
+      .moveDown(1);
+
+    // ── Title ──
+    doc
+      .fillColor('#dc2626')
+      .fontSize(16)
+      .font('Helvetica-Bold')
+      .text('LETTER OF TERMINATION', { align: 'center' })
+      .moveDown(0.5);
+
+    // ── Reference & Date ──
+    const refNo = `REF/TL/${new Date().getFullYear()}/${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    doc
+      .fillColor('#000000')
+      .fontSize(10)
+      .font('Helvetica')
+      .text(`Ref No: ${refNo}`, { align: 'left' })
+      .text(`Date of Issue: ${formatDate(new Date())}`, { align: 'left' })
+      .moveDown(1.2);
+
+    // ── Employee Address ──
+    doc
+      .fontSize(10)
+      .font('Helvetica-Bold')
+      .text('To:')
+      .font('Helvetica')
+      .text(`Employee Name: ${data.employeeName}`)
+      .text(`Employee ID: ${data.employeeId || 'N/A'}`)
+      .text(`Designation: ${data.designation || 'Member'}`)
+      .text(`Department: ${data.department || 'General'}`)
+      .moveDown(1.2);
+
+    // ── Subject ──
+    doc
+      .font('Helvetica-Bold')
+      .text(`Subject: Notice of Termination of Employment Contract`)
+      .moveDown(1);
+
+    // ── Body ──
+    doc
+      .font('Helvetica')
+      .fontSize(10.5)
+      .text(`Dear ${data.employeeName},`, { lineGap: 3 })
+      .moveDown(0.8);
+
+    doc.text(
+      `This letter serves as formal notification that your employment with ${data.companyName} is being terminated, effective from your last working day on ${formatDate(data.lastWorkingDay)}.`,
+      { lineGap: 4, align: 'justify' }
+    ).moveDown(0.8);
+
+    if (data.exitReason && data.exitReason !== 'Terminated') {
+      doc.text(
+        `Reason for Separation: ${data.exitReason}.`,
+        { lineGap: 4, align: 'justify' }
+      ).moveDown(0.8);
+    }
+
+    doc.text(
+      `You were appointed to the position of "${data.designation || 'Member'}" on ${formatDate(data.joinDate)}. All contractual and official duties assigned to you shall cease as of the close of business hours on ${formatDate(data.lastWorkingDay)}.`,
+      { lineGap: 4, align: 'justify' }
+    ).moveDown(0.8);
+
+    doc.text(
+      `Department Clearance & Asset Return: You are required to complete all clearance formalities across IT, Finance, HR, and Department Manager. Please return all company-owned assets, including computing hardware, access ID cards, security tokens, confidential documents, and software licenses in your possession.`,
+      { lineGap: 4, align: 'justify' }
+    ).moveDown(0.8);
+
+    doc.text(
+      `Full & Final Settlement: Your full and final settlement (including unpaid salary, accrued leave encashment, and any applicable severance benefits) will be processed through the Finance department upon receipt of completed clearance approvals from all departments.`,
+      { lineGap: 4, align: 'justify' }
+    ).moveDown(0.8);
+
+    doc.text(
+      `Confidentiality & Non-Disclosure: Please be reminded that your non-disclosure and intellectual property agreements remain in full legal effect following your separation from ${data.companyName}.`,
+      { lineGap: 4, align: 'justify' }
+    ).moveDown(1.5);
+
+    // ── Signature Block ──
+    doc
+      .text('For and on behalf of Management,')
+      .moveDown(2);
+
+    doc
+      .font('Helvetica-Bold')
+      .text(data.authorizedSignatory || 'Authorized HR Signatory')
+      .font('Helvetica')
+      .text(data.companyName)
+      .text('Human Resources & Operations Department');
+
+    // ── Footer ──
+    doc.moveDown(2.5);
+    doc
+      .fontSize(8)
+      .fillColor('#999999')
+      .text(
+        'This is an official computer-generated document issued by the enterprise management system.',
+        { align: 'center' }
+      );
+
+    doc.end();
+
+    stream.on('finish', () => resolve(`/uploads/certificates/${fileName}`));
+    stream.on('error', reject);
+  });
+}
+
+/**
  * Generate a Service Certificate / Experience Letter PDF.
  *
  * @param {Object} data
