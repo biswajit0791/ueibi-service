@@ -10,6 +10,7 @@ export const panSchema = z
     "PAN must be in format: 5 letters, 4 digits, 1 letter (e.g. ABCDE1234F)"
   )
   .optional()
+  .nullable()
   .or(z.literal(''));
 
 // Aadhaar validation (UIDAI Section 29 compliance): 12 digits, non-repeating sequence, or valid masked format
@@ -146,17 +147,17 @@ const educationEntrySchema = z.object({
 
 export const onboardEmployeeSchema = z.object({
   newPassword: z.string().min(1, "New password is required to complete onboarding"),
-  phone: z.string().optional(),
+  phone: z.string().optional().nullable().or(z.literal('')),
   pan: panSchema,
   aadhaar: aadhaarSchema,
-  dob: z.string().optional(),
-  joinDate: z.string().optional(),
-  gender: z.string().optional(),
-  bloodGroup: z.string().optional(),
-  personalEmail: z.string().email().optional().or(z.literal('')),
-  emergencyContact: z.string().optional(),
-  uan: z.string().optional(),
-  esic: z.string().optional(),
+  dob: z.string().optional().nullable().or(z.literal('')),
+  joinDate: z.string().optional().nullable().or(z.literal('')),
+  gender: z.string().optional().nullable().or(z.literal('')),
+  bloodGroup: z.string().optional().nullable().or(z.literal('')),
+  personalEmail: z.string().email("A valid personal email address is required").optional().nullable().or(z.literal('')),
+  emergencyContact: z.string().optional().nullable().or(z.literal('')),
+  uan: z.string().optional().nullable().or(z.literal('')),
+  esic: z.string().optional().nullable().or(z.literal('')),
   // Address Details
   presentAddressLine1: z.string().optional().nullable(),
   presentAddressLine2: z.string().optional().nullable(),
@@ -171,21 +172,21 @@ export const onboardEmployeeSchema = z.object({
   sameAsPresentAddress: z.boolean().optional().nullable(),
   // Professional Details
   linkedinUrl: z.string().optional().nullable().or(z.literal('')),
-  primarySkills: z.array(z.string()).optional(),
-  secondarySkills: z.array(z.string()).optional(),
+  primarySkills: z.array(z.string()).optional().nullable(),
+  secondarySkills: z.array(z.string()).optional().nullable(),
   // Profile Photo
   profilePhoto: z.string().optional().nullable(),
   // Education History
-  educationHistory: z.array(educationEntrySchema).optional(),
+  educationHistory: z.array(educationEntrySchema).optional().nullable(),
   // Bank Details
   bankDetails: z.object({
-    bankName: z.string().min(1),
-    accountNumber: z.string().min(1),
-    ifscCode: z.string().min(1),
-    branchName: z.string().min(1),
-  }).partial().optional(),
+    bankName: z.string().min(1, "Bank name is required"),
+    accountNumber: z.string().min(1, "Account number is required"),
+    ifscCode: z.string().min(1, "IFSC code is required"),
+    branchName: z.string().min(1, "Branch name is required"),
+  }).partial().optional().nullable(),
   // Work History
-  workHistory: z.array(workHistoryEntrySchema).optional(),
+  workHistory: z.array(workHistoryEntrySchema).optional().nullable(),
   docs: z.any().optional(),
 }).passthrough();
 

@@ -535,7 +535,14 @@ export async function onboardEmployee(req, res, next) {
   try {
     const parsed = onboardEmployeeSchema.safeParse(req.body || {});
     if (!parsed.success) {
-      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+      const issueMessages = parsed.error.issues.map((iss) => {
+        const field = iss.path && iss.path.length > 0 ? iss.path.join('.') : 'field';
+        return `${field}: ${iss.message}`;
+      });
+      return res.status(400).json({
+        error: `Validation failed: ${issueMessages.join(', ')}`,
+        details: parsed.error.issues,
+      });
     }
     const {
       newPassword,
