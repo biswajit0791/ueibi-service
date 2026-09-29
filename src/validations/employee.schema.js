@@ -1,15 +1,36 @@
 import { z } from 'zod';
 
-// Optional PAN validation: if provided, must match 10-character PAN format.
-const panSchema = z
+// Optional PAN validation: if provided, must match 10-character PAN format or masked format.
+export const panSchema = z
   .string()
   .trim()
   .transform((val) => val.toUpperCase())
   .refine(
-    (val) => !val || /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(val),
+    (val) => !val || /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(val) || /^X{6}[0-9]{3,4}[A-Z]?$/.test(val),
     "PAN must be in format: 5 letters, 4 digits, 1 letter (e.g. ABCDE1234F)"
   )
   .optional()
+  .or(z.literal(''));
+
+// Aadhaar validation (UIDAI Section 29 compliance): 12 digits, non-repeating sequence, or valid masked format
+export const aadhaarSchema = z
+  .string()
+  .trim()
+  .refine(
+    (val) => {
+      if (!val) return true;
+      const clean = val.replace(/[\s-]/g, '');
+      // If 12 digits, ensure not repeating dummy digits like 000000000000 or 111111111111
+      if (/^\d{12}$/.test(clean)) {
+        return !/^(\d)\1{11}$/.test(clean);
+      }
+      // Or valid masked format (e.g. XXXX-XXXX-1234, XXXXXXXX1234, ••••••••1234)
+      return /^(X{4}-X{4}-\d{4}|X{8}\d{4}|[•*]{8}\d{4})$/i.test(val);
+    },
+    "Aadhaar must be a valid 12-digit number (e.g. 1234-5678-9012) or masked format"
+  )
+  .optional()
+  .nullable()
   .or(z.literal(''));
 
 const ratingSchema = z.coerce.number().int().min(1, "Rating must be between 1 and 10").max(10, "Rating must be between 1 and 10");
@@ -39,6 +60,7 @@ export const inviteEmployeeSchema = z.object({
   joinDate: z.string().optional().nullable().or(z.literal('')),
   phone: z.string().optional().nullable().or(z.literal('')),
   pan: panSchema,
+  aadhaar: aadhaarSchema,
   dob: z.string().optional().nullable().or(z.literal('')),
   feedbackRemarks: z.string().optional().nullable().or(z.literal('')),
 }).passthrough();
@@ -82,7 +104,7 @@ export const updateEmployeeSchema = z.object({
   bloodGroup: z.string().optional().nullable(),
   emergencyContact: z.string().optional().nullable(),
   pan: panSchema,
-  aadhaar: z.string().optional().or(z.literal('')),
+  aadhaar: aadhaarSchema,
   uan: z.string().optional().nullable(),
   esic: z.string().optional().nullable(),
   remarks: z.string().optional().nullable(),
@@ -126,7 +148,7 @@ export const onboardEmployeeSchema = z.object({
   newPassword: z.string().min(1, "New password is required to complete onboarding"),
   phone: z.string().optional(),
   pan: panSchema,
-  aadhaar: z.string().optional(),
+  aadhaar: aadhaarSchema,
   dob: z.string().optional(),
   joinDate: z.string().optional(),
   gender: z.string().optional(),
@@ -260,4 +282,10 @@ export const bulkExEmployeeSchema = z.object({
 export const bulkNonJoinerSchema = z.object({
   items: z.array(z.record(z.any())).min(1, 'Items array cannot be empty').max(500, 'Bulk import is limited to 500 rows per request'),
 });
+
+export const addLicenseSchema = z.object({
+  additionalSeats: z.coerce.number().int().min(1, 'Must add at least 1 license seat').max(10000, 'Cannot add more than 10,000 seats at once'),
+  reason: z.string().trim().max(500).optional(),
+});
+
 

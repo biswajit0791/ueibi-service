@@ -20,6 +20,7 @@ import {
   bulkNonJoinerSchema,
   employeeIdOnlyParamSchema,
   listEmployeesQuerySchema,
+  addLicenseSchema,
 } from '../validations/employee.schema.js';
 import { env } from '../config/env.js';
 import { canCreateRole, getAllowedRoles } from '../lib/roleHierarchy.js';
@@ -30,6 +31,7 @@ import {
   assertBulkLicenseAvailable,
   listEligibleManagers,
 } from '../services/license.service.js';
+import { generateReferenceCheckProfile } from '../services/pdf.service.js';
 
 /**
  * Issues a one-time password setup token (PasswordResetToken model) for employee invitation.
@@ -111,14 +113,23 @@ export async function inviteEmployee(req, res, next) {
 
     let resolvedManagerId = null;
     if (managerId) {
+      const trimmed = String(managerId).trim();
       const mgr = await prisma.tenantUser.findFirst({
-        where: { id: managerId, tenantId, isDeleted: false },
+        where: {
+          tenantId,
+          isDeleted: false,
+          OR: [
+            { id: trimmed },
+            { name: { equals: trimmed, mode: 'insensitive' } },
+            { email: { equals: trimmed.toLowerCase(), mode: 'insensitive' } },
+          ],
+        },
         select: { id: true },
       });
-      if (!mgr) {
-        return res.status(400).json({ error: 'Selected reporting manager was not found in this organization' });
+      if (mgr) {
+        resolvedManagerId = mgr.id;
       }
-      resolvedManagerId = mgr.id;
+      // If manager name is not found, resolvedManagerId remains null (can be edited later)
     }
 
     const initialPlaceholder = 'INVITED_NO_PASS_' + crypto.randomBytes(16).toString('hex');
@@ -327,7 +338,33 @@ export async function bulkInviteEmployees(req, res, next) {
         where: { id: tenantId },
         select: { companyName: true },
       });
-      const companyName = tenant?.companyName || 'your organization';
+      // Resolve reporting managers by name, email, or id across the organization
+      const existingTenantUsers = await tx.tenantUser.findMany({
+        where: { tenantId, isDeleted: false },
+        select: { id: true, name: true, email: true, employeeId: true },
+      });
+
+      const managerByName = new Map();
+      const managerByEmail = new Map();
+      const managerById = new Map();
+
+      const registerUserForLookup = (u) => {
+        if (!u || !u.id) return;
+        managerById.set(String(u.id).toLowerCase(), u.id);
+        if (u.name) {
+          const lower = u.name.trim().toLowerCase();
+          managerByName.set(lower, u.id);
+          managerByName.set(lower.replace(/\s+/g, ' '), u.id);
+        }
+        if (u.email) {
+          managerByEmail.set(u.email.trim().toLowerCase(), u.id);
+        }
+        if (u.employeeId) {
+          managerById.set(String(u.employeeId).trim().toLowerCase(), u.id);
+        }
+      };
+
+      existingTenantUsers.forEach(registerUserForLookup);
 
       const results = [];
       for (const emp of items) {
@@ -344,6 +381,26 @@ export async function bulkInviteEmployees(req, res, next) {
 
         const parsedJoinDate = emp.joinDate ? new Date(emp.joinDate) : new Date();
 
+        // Resolve reporting manager: from name, find out the id.
+        // If name not found, keep reporting manager empty (null) in db so it can be edited later.
+        const rawManager = String(emp.managerId || emp.reportingManager || emp.manager || '').trim();
+        let resolvedManagerId = null;
+
+        if (rawManager) {
+          const lower = rawManager.toLowerCase();
+          const lowerSingleSpaced = lower.replace(/\s+/g, ' ');
+          if (managerById.has(lower)) {
+            resolvedManagerId = managerById.get(lower);
+          } else if (managerByName.has(lower)) {
+            resolvedManagerId = managerByName.get(lower);
+          } else if (managerByName.has(lowerSingleSpaced)) {
+            resolvedManagerId = managerByName.get(lowerSingleSpaced);
+          } else if (managerByEmail.has(lower)) {
+            resolvedManagerId = managerByEmail.get(lower);
+          }
+          // If name is not found, resolvedManagerId stays null
+        }
+
         const u = await tx.tenantUser.create({
           data: {
             tenantId,
@@ -357,11 +414,15 @@ export async function bulkInviteEmployees(req, res, next) {
             empType: normalizeEmploymentType(emp.empType),
             designation: emp.designation ? emp.designation.trim() : 'Member',
             department: emp.department ? emp.department.trim() : 'General',
-            managerId: emp.managerId || null,
+            managerId: resolvedManagerId,
             joinDate: isNaN(parsedJoinDate.getTime()) ? new Date() : parsedJoinDate,
             phone: emp.phone ? emp.phone.trim() : null,
           },
         });
+
+        // Register newly created user so subsequent employees in the same upload batch
+        // can reference a manager defined earlier in the file.
+        registerUserForLookup(u);
 
         const tokenData = await issueInvitePasswordToken(tx, u.id);
         results.push({ user: u, companyName, ...tokenData });
@@ -569,6 +630,8 @@ export async function onboardEmployee(req, res, next) {
           docs: docs || undefined,
           status: 'ACTIVE',
           mustChangePassword: false,
+          verificationStatus: user.isVerified ? 'VERIFIED' : 'PENDING_UEIBI',
+          isVerified: user.isVerified || false,
         },
       });
 
@@ -611,28 +674,35 @@ export async function onboardEmployee(req, res, next) {
         );
       }
 
-      // 4. Create work history entries if provided (refresh list to avoid duplicates)
+      // 4. Create/append work history entries if provided
+      // Compliance rule: Existing submitted work history cannot be changed or deleted; only new records can be added
       if (workHistory && Array.isArray(workHistory) && workHistory.length > 0) {
-        await tx.workHistory.deleteMany({ where: { userId } });
-        await Promise.all(
-          workHistory.map((history) => {
-            const start = new Date(history.startDate);
-            // A "current" job (isCurrent, or no end date given) is stored with a
-            // null endDate rather than crashing on `new Date(undefined)`.
-            const end = (history.isCurrent || !history.endDate) ? null : new Date(history.endDate);
-            return tx.workHistory.create({
+        const existingHistories = await tx.workHistory.findMany({ where: { userId } });
+
+        for (const history of workHistory) {
+          const start = new Date(history.startDate);
+          const end = (history.isCurrent || !history.endDate) ? null : new Date(history.endDate);
+
+          // Check if this experience record already exists on file
+          const alreadyExists = existingHistories.some(
+            (eh) => eh.companyName.toLowerCase().trim() === history.companyName.toLowerCase().trim() &&
+                    new Date(eh.startDate).getTime() === start.getTime()
+          );
+
+          if (!alreadyExists) {
+            await tx.workHistory.create({
               data: {
                 userId,
-                companyName: history.companyName,
-                designation: history.designation,
+                companyName: history.companyName.trim(),
+                designation: history.designation.trim(),
                 startDate: start,
                 endDate: end,
-                reasonForExit: history.reasonForExit || null,
-                remarks: history.remarks || null,
+                reasonForExit: history.reasonForExit ? history.reasonForExit.trim() : null,
+                remarks: history.remarks ? history.remarks.trim() : null,
               },
             });
-          })
-        );
+          }
+        }
       }
 
       return u;
@@ -757,6 +827,14 @@ export async function listEmployees(req, res, next) {
           uan: true,
           esic: true,
           docs: true,
+          verificationStatus: true,
+          isVerified: true,
+          verifiedAt: true,
+          verifiedBy: true,
+          ueibiNotes: true,
+          ueibiSubmittedAt: true,
+          ueibiSubmittedBy: true,
+          annualEvaluation: true,
           bankDetails: {
             select: {
               bankName: true,
@@ -839,6 +917,14 @@ export async function getEmployee(req, res, next) {
           uan: true,
           esic: true,
           docs: true,
+          verificationStatus: true,
+          isVerified: true,
+          verifiedAt: true,
+          verifiedBy: true,
+          ueibiNotes: true,
+          ueibiSubmittedAt: true,
+          ueibiSubmittedBy: true,
+          annualEvaluation: true,
           bankDetails: {
             select: {
               bankName: true,
@@ -905,6 +991,57 @@ export async function getEmployeeStats(req, res, next) {
     next(err);
   }
 }
+
+/**
+ * POST /api/employees/add-license
+ * Allows HR / Admin / Super Admin to immediately add license seats to the tenant
+ * to unblock onboarding of new employees.
+ */
+export async function addTenantLicenses(req, res, next) {
+  try {
+    const tenantId = req.tenantId;
+    const parsed = addLicenseSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid license quantity' });
+    }
+
+    const { additionalSeats, reason } = parsed.data;
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { id: true, companyName: true, licenseLimit: true },
+    });
+
+    if (!tenant) {
+      return res.status(404).json({ error: 'Tenant not found' });
+    }
+
+    const newLimit = (tenant.licenseLimit || 0) + additionalSeats;
+
+    await prisma.tenant.update({
+      where: { id: tenantId },
+      data: { licenseLimit: newLimit },
+    });
+
+    const stats = await getLicenseStats(tenantId);
+
+    // Broadcast license capacity update via WebSocket
+    emitToTenant(tenantId, 'LICENSE_CAPACITY_UPDATED', {
+      licenseStats: stats,
+      message: `Tenant license capacity increased by ${additionalSeats} seat(s).`,
+    });
+
+    res.json({
+      message: `Successfully added ${additionalSeats} employee license seat(s). New capacity is ${newLimit}.`,
+      newCapacity: newLimit,
+      addedSeats: additionalSeats,
+      licenseStats: stats,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 
 export async function listExEmployees(req, res, next) {
   try {
@@ -1440,6 +1577,55 @@ export async function updateEmployee(req, res, next) {
       if (isNaN(updates.dob.getTime())) delete updates.dob; // Drop if still invalid
     } else {
       delete updates.dob; // Don't send null/empty to Prisma
+    }
+
+    // ── Statutory PII & Verification Compliance Guardrails ──────────────────
+    // 1. PAN compliance: prevent overwriting real PAN with masked string, and lock verified PAN
+    if (updates.pan !== undefined) {
+      if (!updates.pan || updates.pan === '') {
+        if (existing.isVerified) {
+          return res.status(400).json({ error: 'Cannot remove PAN from a verified employee profile.' });
+        }
+        updates.pan = null;
+      } else {
+        const cleanPan = updates.pan.trim().toUpperCase();
+        // If client sent masked PAN (starts with XXXXXX or has *), do not overwrite DB with masked placeholder
+        if (cleanPan.startsWith('XXXXXX') || cleanPan.includes('*') || cleanPan.includes('•')) {
+          delete updates.pan; // retain existing.pan
+        } else if (cleanPan !== (existing.pan || '')) {
+          // If PAN is actually being modified on an already verified profile:
+          if (existing.isVerified) {
+            if (req.user?.role !== 'SUPER_ADMIN') {
+              return res.status(403).json({
+                error: 'Cannot modify PAN on a verified employee profile. Identity document is locked. Only SUPER_ADMIN may reset verification status.',
+                code: 'VERIFIED_PAN_LOCKED',
+              });
+            }
+            // SUPER_ADMIN override: invalidate verification so it must be re-verified
+            updates.isVerified = false;
+            updates.verificationStatus = 'PENDING_UEIBI';
+            updates.verifiedAt = null;
+            updates.verifiedBy = null;
+          }
+          updates.pan = cleanPan;
+        } else {
+          updates.pan = cleanPan;
+        }
+      }
+    }
+
+    // 2. Aadhaar compliance (UIDAI Section 29): prevent overwriting real Aadhaar with masked string
+    if (updates.aadhaar !== undefined) {
+      if (!updates.aadhaar || updates.aadhaar === '') {
+        updates.aadhaar = null;
+      } else {
+        const cleanAadhaar = updates.aadhaar.trim();
+        if (cleanAadhaar.startsWith('X') || cleanAadhaar.includes('*') || cleanAadhaar.includes('•')) {
+          delete updates.aadhaar; // retain existing.aadhaar
+        } else {
+          updates.aadhaar = cleanAadhaar;
+        }
+      }
     }
 
     // Clean up empty optional strings so Prisma gets null instead of ''
@@ -2193,6 +2379,119 @@ export async function getEmployeeHandoverStatus(req, res, next) {
         handoverType: g.handoverType,
         targetDepartment: g.targetDepartment,
       })),
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * PATCH / POST /employees/:id/verify
+ * HR marks an employee profile as verified.
+ * Transitions verificationStatus to 'VERIFIED', sets isVerified to true,
+ * stamps verifiedAt and verifiedBy.
+ */
+export async function verifyEmployee(req, res, next) {
+  try {
+    const { id } = req.params;
+    const employee = await prisma.tenantUser.findFirst({
+      where: { id, tenantId: req.tenantId, isDeleted: false },
+    });
+    if (!employee) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+
+    if (employee.status === 'EXITED') {
+      return res.status(400).json({ error: 'Cannot verify an employee who has already exited the company' });
+    }
+
+    const verified = await prisma.tenantUser.update({
+      where: { id },
+      data: {
+        verificationStatus: 'VERIFIED',
+        isVerified: true,
+        verifiedAt: new Date(),
+        verifiedBy: req.user.name || req.user.email,
+        status: 'ACTIVE',
+      },
+    });
+
+    // Notify via Socket.io
+    try {
+      emitToTenant(req.tenantId, 'employee_status_updated', {
+        id: verified.id,
+        status: verified.status,
+        verificationStatus: 'VERIFIED',
+        isVerified: true,
+        // Mask first 6 characters of PAN in broadcast to avoid PII network leakage
+        pan: verified.pan && verified.pan.length === 10 ? `XXXXXX${verified.pan.slice(6)}` : verified.pan,
+        name: verified.name,
+      });
+    } catch (e) {
+      console.warn('Socket emit error in verifyEmployee:', e.message);
+    }
+
+    res.json({
+      message: 'Employee record verified successfully',
+      employee: verified,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /api/employees/ex/:id/refcheck-pdf
+ * Generates an official Reference Check & Verified Profile Dossier PDF for an ex-employee.
+ */
+export async function generateExEmployeeRefCheckPdf(req, res, next) {
+  try {
+    const { id } = req.params;
+    const tenantId = req.tenantId;
+
+    const [exRecord, tenant] = await Promise.all([
+      prisma.exEmployeeRecord.findFirst({
+        where: { id, tenantId, isDeleted: false },
+      }),
+      prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { companyName: true },
+      }),
+    ]);
+
+    if (!exRecord) {
+      return res.status(404).json({ error: 'Ex-employee record not found' });
+    }
+
+    // Find any attached work history from TenantUser matching email
+    const originalUser = await prisma.tenantUser.findFirst({
+      where: { email: exRecord.email, tenantId },
+      include: { workHistory: true },
+    });
+
+    const pdfData = {
+      companyName: tenant?.companyName || 'UEIBI Organization',
+      employeeName: `${exRecord.firstName} ${exRecord.lastName}`,
+      employeeId: originalUser?.employeeId || exRecord.id,
+      designation: exRecord.designation,
+      department: exRecord.department,
+      joinDate: exRecord.serviceStart,
+      lastWorkingDay: exRecord.serviceEnd,
+      exitReason: exRecord.exitReason || 'Relieved',
+      pan: exRecord.pan || originalUser?.pan || null,
+      conductValue: exRecord.conductValue || 'Good',
+      techRating: exRecord.techRating || 8,
+      attitudeRating: exRecord.attitudeRating || 8,
+      feedback: exRecord.feedback || '',
+      workHistory: originalUser?.workHistory || [],
+      authorizedSignatory: req.user.name || 'HR Department',
+    };
+
+    const pdfUrl = await generateReferenceCheckProfile(pdfData);
+
+    res.json({
+      message: 'Reference check & verified profile dossier generated successfully',
+      pdfUrl,
     });
   } catch (err) {
     next(err);

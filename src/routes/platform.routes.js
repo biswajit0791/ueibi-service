@@ -19,6 +19,10 @@ import {
   resendOnboardingLink,
   verifyRegistration,
   getRegistrationVerification,
+  listPlatformEmployeeVerifications,
+  getPlatformEmployeeVerification,
+  updatePlatformEmployeeVerification,
+  submitPlatformEmployeeVerificationToHr,
 } from '../controllers/platform.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requirePlatformOwner } from '../middleware/rbac.js';
@@ -49,6 +53,12 @@ router.get('/platform/users/:id', requireAuth, requirePlatformOwner, getPlatform
 router.post('/platform/users/:id/deactivate', requireAuth, requirePlatformOwner, deactivatePlatformUser);
 router.post('/platform/users/:id/reactivate', requireAuth, requirePlatformOwner, reactivatePlatformUser);
 router.post('/platform/users/:id/force-reset', requireAuth, requirePlatformOwner, forceResetPlatformUser);
+
+// Employee onboarding completion & verification queue (UEIBI Team / Admin Portal)
+router.get('/platform/employee-verifications', requireAuth, requirePlatformOwner, listPlatformEmployeeVerifications);
+router.get('/platform/employee-verifications/:id', requireAuth, requirePlatformOwner, getPlatformEmployeeVerification);
+router.patch('/platform/employee-verifications/:id', requireAuth, requirePlatformOwner, updatePlatformEmployeeVerification);
+router.post('/platform/employee-verifications/:id/submit-to-hr', requireAuth, requirePlatformOwner, submitPlatformEmployeeVerificationToHr);
 
 // Onboarding queue and verification review — both read CompanyRegistration.
 // Neither can advance a registration: approval stays with the emailed action

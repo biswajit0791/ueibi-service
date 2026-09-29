@@ -1584,3 +1584,514 @@ export async function getPlatformAlerts(req, res, next) {
     next(err);
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EMPLOYEE ONBOARDING & VERIFICATION QUEUE (UEIBI TEAM / ADMIN PORTAL)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * GET /platform/employee-verifications
+ * Allows UEIBI operators to list employee records across tenants to inspect,
+ * edit pending annual report / form information, and track verification stages.
+ */
+export async function listPlatformEmployeeVerifications(req, res, next) {
+  try {
+    const { status, tenantId, search, page = 1, limit = 20 } = req.query;
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.max(1, Math.min(100, parseInt(limit, 10) || 20));
+    const skip = (pageNum - 1) * limitNum;
+
+    const baseWhere = {
+      role: { not: 'PLATFORM_OWNER' },
+      isDeleted: false,
+    };
+
+    if (tenantId) {
+      baseWhere.tenantId = tenantId;
+    }
+
+    if (status && status !== 'ALL') {
+      if (status === 'VERIFIED') {
+        baseWhere.OR = [
+          { verificationStatus: 'VERIFIED' },
+          { isVerified: true },
+        ];
+      } else {
+        baseWhere.verificationStatus = status;
+      }
+    }
+
+    if (search && search.trim()) {
+      const q = search.trim();
+      baseWhere.AND = [
+        ...(baseWhere.AND || []),
+        {
+          OR: [
+            { name: { contains: q, mode: 'insensitive' } },
+            { email: { contains: q, mode: 'insensitive' } },
+            { pan: { contains: q, mode: 'insensitive' } },
+            { employeeId: { contains: q, mode: 'insensitive' } },
+            { tenant: { companyName: { contains: q, mode: 'insensitive' } } },
+          ],
+        },
+      ];
+    }
+
+    // Counts for stats summary cards
+    const [totalAll, pendingUeibiCount, pendingHrCount, verifiedCount] = await Promise.all([
+      prisma.tenantUser.count({
+        where: { role: { not: 'PLATFORM_OWNER' }, isDeleted: false, ...(tenantId ? { tenantId } : {}) },
+      }),
+      prisma.tenantUser.count({
+        where: {
+          role: { not: 'PLATFORM_OWNER' },
+          isDeleted: false,
+          verificationStatus: 'PENDING_UEIBI',
+          ...(tenantId ? { tenantId } : {}),
+        },
+      }),
+      prisma.tenantUser.count({
+        where: {
+          role: { not: 'PLATFORM_OWNER' },
+          isDeleted: false,
+          verificationStatus: 'PENDING_HR',
+          ...(tenantId ? { tenantId } : {}),
+        },
+      }),
+      prisma.tenantUser.count({
+        where: {
+          role: { not: 'PLATFORM_OWNER' },
+          isDeleted: false,
+          OR: [{ verificationStatus: 'VERIFIED' }, { isVerified: true }],
+          ...(tenantId ? { tenantId } : {}),
+        },
+      }),
+    ]);
+
+    const [totalMatched, employees] = await Promise.all([
+      prisma.tenantUser.count({ where: baseWhere }),
+      prisma.tenantUser.findMany({
+        where: baseWhere,
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+          pan: true,
+          aadhaar: true,
+          employeeId: true,
+          designation: true,
+          department: true,
+          role: true,
+          status: true,
+          verificationStatus: true,
+          isVerified: true,
+          verifiedAt: true,
+          verifiedBy: true,
+          ueibiNotes: true,
+          ueibiSubmittedAt: true,
+          ueibiSubmittedBy: true,
+          annualEvaluation: true,
+          createdAt: true,
+          updatedAt: true,
+          tenantId: true,
+          tenant: {
+            select: {
+              id: true,
+              companyName: true,
+              tenantCode: true,
+            },
+          },
+        },
+        orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }],
+        skip,
+        take: limitNum,
+      }),
+    ]);
+
+    res.json({
+      employees,
+      counts: {
+        total: totalAll,
+        pendingUeibi: pendingUeibiCount,
+        pendingHr: pendingHrCount,
+        verified: verifiedCount,
+      },
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total: totalMatched,
+        totalPages: Math.ceil(totalMatched / limitNum) || 1,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /platform/employee-verifications/:id
+ * Load single employee with full profile details (all columns as per annual form / report).
+ */
+export async function getPlatformEmployeeVerification(req, res, next) {
+  try {
+    const { id } = req.params;
+    const employee = await prisma.tenantUser.findUnique({
+      where: { id },
+      include: {
+        tenant: {
+          select: { id: true, companyName: true, domainName: true, tenantCode: true },
+        },
+        bankDetails: true,
+        workHistory: true,
+        educations: true,
+        manager: {
+          select: { id: true, name: true, email: true, designation: true },
+        },
+      },
+    });
+
+    if (!employee) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+
+    res.json({ employee });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * PATCH /platform/employee-verifications/:id
+ * UEIBI team fills or edits pending information (all columns as per annual form / report)
+ * and can optionally submit to HR for verification.
+ */
+export async function updatePlatformEmployeeVerification(req, res, next) {
+  try {
+    const { id } = req.params;
+    const {
+      // Personal
+      name,
+      email,
+      personalEmail,
+      phone,
+      dob,
+      gender,
+      bloodGroup,
+      emergencyContact,
+      // Statutory
+      pan,
+      aadhaar,
+      uan,
+      esic,
+      // Employment
+      employeeId,
+      designation,
+      department,
+      band,
+      empType,
+      joinDate,
+      confirmationDate,
+      officeLocation,
+      managerId,
+      // Address
+      presentAddressLine1,
+      presentAddressLine2,
+      presentCity,
+      presentState,
+      presentPincode,
+      permanentAddressLine1,
+      permanentAddressLine2,
+      permanentCity,
+      permanentState,
+      permanentPincode,
+      sameAsPresentAddress,
+      // Professional & Skills
+      linkedinUrl,
+      primarySkills,
+      secondarySkills,
+      // Bank
+      bankDetails,
+      // Annual Report / Evaluation form
+      annualEvaluation,
+      // Internal operator notes & actions
+      ueibiNotes,
+      submitToHr,
+    } = req.body;
+
+    const existing = await prisma.tenantUser.findUnique({
+      where: { id },
+      include: { bankDetails: true },
+    });
+
+    if (!existing) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+
+    if (existing.role === 'PLATFORM_OWNER') {
+      return res.status(403).json({
+        error: 'Platform owners cannot be managed from this endpoint',
+        code: 'PLATFORM_OWNER_PROTECTED',
+      });
+    }
+
+    if (existing.status === 'EXITED') {
+      return res.status(400).json({
+        error: 'Cannot modify or submit verification for an employee who has already exited the company',
+      });
+    }
+
+    // Input validations for security & compliance
+    let cleanPan = null;
+    if (pan) {
+      cleanPan = pan.trim().toUpperCase();
+      if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(cleanPan)) {
+        return res.status(400).json({ error: 'Invalid PAN format. Must be 5 letters, 4 digits, 1 letter (e.g. ABCDE1234F)' });
+      }
+    }
+
+    let cleanAadhaar = null;
+    if (aadhaar) {
+      cleanAadhaar = String(aadhaar).replace(/[^0-9]/g, '');
+      if (cleanAadhaar.length !== 12 || /^(\d)\1{11}$/.test(cleanAadhaar)) {
+        return res.status(400).json({ error: 'Aadhaar number must contain a valid 12-digit number (cannot be repetitive dummy digits)' });
+      }
+    }
+
+    if (bankDetails?.accountNumber) {
+      const cleanAcc = String(bankDetails.accountNumber).trim();
+      if (!/^[A-Za-z0-9\s-]{6,34}$/.test(cleanAcc)) {
+        return res.status(400).json({ error: 'Bank account number must be between 6 and 34 alphanumeric characters' });
+      }
+    }
+
+    if (bankDetails?.ifscCode) {
+      const cleanIfsc = bankDetails.ifscCode.trim().toUpperCase();
+      if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(cleanIfsc)) {
+        return res.status(400).json({ error: 'Invalid IFSC code format (e.g. HDFC0001234)' });
+      }
+    }
+
+    // If an already verified employee's PAN or Aadhaar is changed by UEIBI operator,
+    // compliance requires invalidating verified status so HR must re-verify.
+    const isIdentityModified = (cleanPan && cleanPan !== existing.pan) || (cleanAadhaar && cleanAadhaar !== existing.aadhaar);
+    const mustResetVerification = existing.isVerified && isIdentityModified;
+
+    const isSubmittingToHr = submitToHr === true || mustResetVerification;
+    const newVerificationStatus = isSubmittingToHr ? 'PENDING_HR' : existing.verificationStatus;
+    const operatorName = req.user.name || req.user.email || 'UEIBI Admin';
+
+    const updated = await prisma.$transaction(async (tx) => {
+      // 1. Update TenantUser
+      const u = await tx.tenantUser.update({
+        where: { id },
+        data: {
+          ...(name ? { name: name.trim() } : {}),
+          ...(email ? { email: email.trim().toLowerCase() } : {}),
+          personalEmail: personalEmail !== undefined ? (personalEmail?.trim() || null) : undefined,
+          phone: phone !== undefined ? (phone?.trim() || null) : undefined,
+          dob: dob ? new Date(dob) : dob === null ? null : undefined,
+          gender: gender !== undefined ? gender : undefined,
+          bloodGroup: bloodGroup !== undefined ? bloodGroup : undefined,
+          emergencyContact: emergencyContact !== undefined ? emergencyContact : undefined,
+
+          pan: pan !== undefined ? (pan ? pan.trim().toUpperCase() : null) : undefined,
+          aadhaar: aadhaar !== undefined ? (aadhaar?.trim() || null) : undefined,
+          uan: uan !== undefined ? (uan?.trim() || null) : undefined,
+          esic: esic !== undefined ? (esic?.trim() || null) : undefined,
+
+          employeeId: employeeId !== undefined ? (employeeId?.trim() || null) : undefined,
+          designation: designation !== undefined ? (designation?.trim() || null) : undefined,
+          department: department !== undefined ? (department?.trim() || null) : undefined,
+          band: band !== undefined ? (band?.trim() || null) : undefined,
+          empType: empType || undefined,
+          joinDate: joinDate ? new Date(joinDate) : joinDate === null ? null : undefined,
+          confirmationDate: confirmationDate ? new Date(confirmationDate) : confirmationDate === null ? null : undefined,
+          officeLocation: officeLocation !== undefined ? (officeLocation?.trim() || null) : undefined,
+          managerId: managerId !== undefined ? (managerId || null) : undefined,
+
+          presentAddressLine1: presentAddressLine1 !== undefined ? presentAddressLine1 : undefined,
+          presentAddressLine2: presentAddressLine2 !== undefined ? presentAddressLine2 : undefined,
+          presentCity: presentCity !== undefined ? presentCity : undefined,
+          presentState: presentState !== undefined ? presentState : undefined,
+          presentPincode: presentPincode !== undefined ? presentPincode : undefined,
+          permanentAddressLine1: permanentAddressLine1 !== undefined ? permanentAddressLine1 : undefined,
+          permanentAddressLine2: permanentAddressLine2 !== undefined ? permanentAddressLine2 : undefined,
+          permanentCity: permanentCity !== undefined ? permanentCity : undefined,
+          permanentState: permanentState !== undefined ? permanentState : undefined,
+          permanentPincode: permanentPincode !== undefined ? permanentPincode : undefined,
+          sameAsPresentAddress: typeof sameAsPresentAddress === 'boolean' ? sameAsPresentAddress : undefined,
+
+          linkedinUrl: linkedinUrl !== undefined ? linkedinUrl : undefined,
+          primarySkills: Array.isArray(primarySkills) ? primarySkills : undefined,
+          secondarySkills: Array.isArray(secondarySkills) ? secondarySkills : undefined,
+
+          // Annual Evaluation JSON (conduct, tech rating, attitude, performance grade, feedback, achievements)
+          annualEvaluation: annualEvaluation !== undefined ? annualEvaluation : undefined,
+
+          ueibiNotes: ueibiNotes !== undefined ? ueibiNotes : undefined,
+          ...(isSubmittingToHr
+            ? {
+                verificationStatus: 'PENDING_HR',
+                isVerified: false,
+                verifiedAt: null,
+                verifiedBy: null,
+                ueibiSubmittedAt: new Date(),
+                ueibiSubmittedBy: operatorName,
+              }
+            : {}),
+        },
+      });
+
+      // 2. Upsert bank details if provided
+      if (bankDetails && typeof bankDetails === 'object') {
+        await tx.bankDetails.upsert({
+          where: { userId: id },
+          update: {
+            bankName: bankDetails.bankName || '',
+            accountNumber: bankDetails.accountNumber ? String(bankDetails.accountNumber).trim() : '',
+            ifscCode: bankDetails.ifscCode ? bankDetails.ifscCode.toUpperCase().trim() : '',
+            branchName: bankDetails.branchName || '',
+          },
+          create: {
+            userId: id,
+            bankName: bankDetails.bankName || '',
+            accountNumber: bankDetails.accountNumber ? String(bankDetails.accountNumber).trim() : '',
+            ifscCode: bankDetails.ifscCode ? bankDetails.ifscCode.toUpperCase().trim() : '',
+            branchName: bankDetails.branchName || '',
+          },
+        });
+      }
+
+      // 3. Audit trail
+      await recordPlatformAction({
+        tx,
+        req,
+        action: isSubmittingToHr
+          ? PLATFORM_ACTIONS.EMPLOYEE_SUBMITTED_TO_HR || 'EMPLOYEE_SUBMITTED_TO_HR'
+          : PLATFORM_ACTIONS.EMPLOYEE_UPDATED || 'EMPLOYEE_UPDATED',
+        targetType: 'USER',
+        targetId: id,
+        tenantId: existing.tenantId,
+        beforeValue: { verificationStatus: existing.verificationStatus },
+        afterValue: { verificationStatus: newVerificationStatus },
+        reason: isSubmittingToHr
+          ? `Submitted profile of ${existing.name} to HR for verification`
+          : `Updated employee info by UEIBI operator: ${ueibiNotes || 'Profile edits'}`,
+      });
+
+      return u;
+    });
+
+    // Notify HR via socket if submitted to HR
+    if (isSubmittingToHr) {
+      try {
+        const io = req.app.get('io');
+        if (io) {
+          io.to(`tenant:${existing.tenantId}`).emit('employee_status_updated', {
+            id: updated.id,
+            status: updated.status,
+            verificationStatus: 'PENDING_HR',
+            pan: updated.pan && updated.pan.length === 10 && updated.isVerified ? `XXXXXX${updated.pan.slice(6)}` : updated.pan,
+            name: updated.name,
+            submittedToHr: true,
+          });
+        }
+      } catch (e) {
+        console.warn('Socket notification error in updatePlatformEmployeeVerification:', e.message);
+      }
+    }
+
+    res.json({
+      message: isSubmittingToHr ? 'Employee profile updated and submitted to HR for verification' : 'Employee details updated successfully',
+      employee: updated,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /platform/employee-verifications/:id/submit-to-hr
+ * Direct submission action from UEIBI team to HR.
+ */
+export async function submitPlatformEmployeeVerificationToHr(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { notes } = req.body || {};
+
+    const existing = await prisma.tenantUser.findUnique({
+      where: { id },
+    });
+
+    if (!existing) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+
+    if (existing.role === 'PLATFORM_OWNER') {
+      return res.status(403).json({
+        error: 'Platform owners cannot be submitted for verification',
+        code: 'PLATFORM_OWNER_PROTECTED',
+      });
+    }
+
+    if (existing.status === 'EXITED') {
+      return res.status(400).json({
+        error: 'Cannot submit an employee who has already exited the company',
+      });
+    }
+
+    const operatorName = req.user.name || req.user.email || 'UEIBI Admin';
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const u = await tx.tenantUser.update({
+        where: { id },
+        data: {
+          verificationStatus: 'PENDING_HR',
+          isVerified: false,
+          verifiedAt: null,
+          verifiedBy: null,
+          ueibiSubmittedAt: new Date(),
+          ueibiSubmittedBy: operatorName,
+          ...(notes ? { ueibiNotes: notes } : {}),
+        },
+      });
+
+      await recordPlatformAction({
+        tx,
+        req,
+        action: PLATFORM_ACTIONS.EMPLOYEE_SUBMITTED_TO_HR || 'EMPLOYEE_SUBMITTED_TO_HR',
+        targetType: 'USER',
+        targetId: id,
+        tenantId: existing.tenantId,
+        beforeValue: { verificationStatus: existing.verificationStatus },
+        afterValue: { verificationStatus: 'PENDING_HR' },
+        reason: `UEIBI team submitted ${existing.name}'s profile to HR for verification: ${notes || 'Ready for HR verification'}`,
+      });
+
+      return u;
+    });
+
+    try {
+      const io = req.app.get('io');
+      if (io) {
+        io.to(`tenant:${existing.tenantId}`).emit('employee_status_updated', {
+          id: updated.id,
+          status: updated.status,
+          verificationStatus: 'PENDING_HR',
+          pan: updated.pan && updated.pan.length === 10 && updated.isVerified ? `XXXXXX${updated.pan.slice(6)}` : updated.pan,
+          name: updated.name,
+        });
+      }
+    } catch (e) {
+      console.warn('Socket emit error in submitPlatformEmployeeVerificationToHr:', e.message);
+    }
+
+    res.json({
+      message: 'Employee record submitted to HR for verification successfully',
+      employee: updated,
+    });
+  } catch (err) {
+    next(err);
+  }
+}

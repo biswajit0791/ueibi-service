@@ -217,6 +217,16 @@ model TenantUser {
   primarySkills   String[] @default([])
   secondarySkills String[] @default([])
 
+  // Onboarding Completion & Verification Lifecycle
+  verificationStatus String    @default("UNVERIFIED") // UNVERIFIED | PENDING_UEIBI | PENDING_HR | VERIFIED
+  isVerified         Boolean   @default(false)
+  verifiedAt         DateTime?
+  verifiedBy         String?
+  ueibiNotes         String?   @db.Text
+  ueibiSubmittedAt   DateTime?
+  ueibiSubmittedBy   String?
+  annualEvaluation   Json?     // Stores conduct, tech rating, attitude rating, grade, feedback, achievements
+
   // Smart HR Relations
   capabilities               UserCapability[]         @relation("UserCapabilities")
   cxoMessagesRaised          CxoMessage[]             @relation("CxoRaisedBy")

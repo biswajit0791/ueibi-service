@@ -46,8 +46,8 @@ export const completeExitSchema = z.object({
 
 // ── Certificate Generation ──────────────────────────────────────────────────
 export const certificateTypeSchema = z.object({
-  type: z.enum(['relieving', 'service'], {
-    errorMap: () => ({ message: 'Certificate type must be "relieving" or "service"' }),
+  type: z.enum(['relieving', 'service', 'refcheck'], {
+    errorMap: () => ({ message: 'Certificate type must be "relieving", "service", or "refcheck"' }),
   }),
 });
 

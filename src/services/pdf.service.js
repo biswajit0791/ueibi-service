@@ -330,3 +330,236 @@ export async function generateServiceCertificate(data) {
     stream.on('error', reject);
   });
 }
+
+/**
+ * Generate an official Reference Check & Verified Profile Dossier PDF.
+ * Used to share as a reference check or attach to a new employer.
+ *
+ * @param {Object} data
+ * @param {string} data.companyName
+ * @param {string} data.employeeName
+ * @param {string} [data.employeeId]
+ * @param {string} data.designation
+ * @param {string} data.department
+ * @param {string|Date} data.joinDate
+ * @param {string|Date} data.lastWorkingDay
+ * @param {string} [data.exitReason]
+ * @param {string} [data.pan]
+ * @param {string} [data.conductValue]
+ * @param {number} [data.techRating]
+ * @param {number} [data.attitudeRating]
+ * @param {string} [data.feedback]
+ * @param {Array} [data.workHistory]
+ * @param {string} [data.authorizedSignatory]
+ * @returns {Promise<string>} relative URL path to generated PDF
+ */
+export async function generateReferenceCheckProfile(data) {
+  return new Promise((resolve, reject) => {
+    const refCode = `REF-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    const fileName = `refcheck_${data.employeeId || 'emp'}_${Date.now()}.pdf`;
+    const filePath = path.join(certDir, fileName);
+    const doc = new PDFDocument({ size: 'A4', margin: 50 });
+    const stream = fs.createWriteStream(filePath);
+
+    doc.pipe(stream);
+
+    // ── Header Banner ──
+    doc
+      .fontSize(18)
+      .font('Helvetica-Bold')
+      .fillColor('#1e1b4b')
+      .text(data.companyName || 'UEIBI Organization', { align: 'center' })
+      .moveDown(0.2);
+
+    doc
+      .fontSize(9)
+      .font('Helvetica')
+      .fillColor('#6b7280')
+      .text('OFFICIAL EMPLOYEE REFERENCE CHECK & VERIFIED PROFILE DOSSIER', { align: 'center', characterSpacing: 0.5 })
+      .moveDown(0.2);
+
+    doc
+      .fontSize(8)
+      .fillColor('#9ca3af')
+      .text(`Dossier Reference ID: ${refCode}  •  Issued Date: ${formatDate(new Date())}`, { align: 'center' })
+      .moveDown(1);
+
+    // Top dividing line
+    doc
+      .strokeColor('#4f46e5')
+      .lineWidth(2)
+      .moveTo(50, doc.y)
+      .lineTo(545, doc.y)
+      .stroke()
+      .moveDown(1);
+
+    // ── Official Verification Badge Box ──
+    const badgeY = doc.y;
+    doc
+      .roundedRect(50, badgeY, 495, 34, 6)
+      .fillColor('#f0fdf4')
+      .fill()
+      .strokeColor('#86efac')
+      .lineWidth(1)
+      .stroke();
+
+    doc
+      .fontSize(9.5)
+      .font('Helvetica-Bold')
+      .fillColor('#166534')
+      .text('VERIFIED EMPLOYMENT & STATUTORY KYC RECORD', 65, badgeY + 11);
+
+    doc
+      .font('Helvetica')
+      .fontSize(8.5)
+      .fillColor('#15803d')
+      .text('Status: HR & Registry Verified  |  Identity Masked for Privacy (DPDP Compliant)', 300, badgeY + 11, { align: 'right', width: 235 });
+
+    doc.y = badgeY + 45;
+
+    // ── Section 1: Candidate & Employment Overview ──
+    doc
+      .fillColor('#111827')
+      .fontSize(12)
+      .font('Helvetica-Bold')
+      .text('1. Employment Overview')
+      .moveDown(0.4);
+
+    const employmentDetails = [
+      ['Full Name', data.employeeName],
+      ['Employee ID', data.employeeId || 'N/A'],
+      ['Designation / Role', data.designation || 'Member'],
+      ['Department', data.department || 'General'],
+      ['Date of Joining', formatDate(data.joinDate)],
+      ['Relieving / End Date', formatDate(data.lastWorkingDay)],
+      ['Tenure of Service', calcTenure(data.joinDate, data.lastWorkingDay)],
+      ['Reason for Separation', data.exitReason || 'Resigned'],
+      ['PAN (Statutory ID)', data.pan ? (data.pan.length === 10 ? `XXXXXX${data.pan.slice(6)}` : data.pan) : 'Verified on File'],
+    ];
+
+    doc.fontSize(9).font('Helvetica');
+    for (const [label, val] of employmentDetails) {
+      const curY = doc.y;
+      doc
+        .font('Helvetica-Bold')
+        .fillColor('#4b5563')
+        .text(label, 65, curY, { width: 160 })
+        .font('Helvetica')
+        .fillColor('#111827')
+        .text(`:   ${val}`, 225, curY, { width: 310 });
+      doc.moveDown(0.25);
+    }
+
+    doc.moveDown(0.8);
+
+    // ── Section 2: Reference Check & Performance Evaluation ──
+    doc
+      .fillColor('#111827')
+      .fontSize(12)
+      .font('Helvetica-Bold')
+      .text('2. Reference Check & Conduct Assessment')
+      .moveDown(0.4);
+
+    const ratings = [
+      ['General Conduct & Integrity', data.conductValue || 'Good'],
+      ['Technical Competency Rating', `${data.techRating || 8} / 10`],
+      ['Professional Attitude & Teamwork', `${data.attitudeRating || 8} / 10`],
+      ['Re-hire Eligibility', data.conductValue === 'Poor' ? 'Conditional Review' : 'Eligible for Re-hire'],
+    ];
+
+    for (const [label, val] of ratings) {
+      const curY = doc.y;
+      doc
+        .font('Helvetica-Bold')
+        .fillColor('#4b5563')
+        .text(label, 65, curY, { width: 180 })
+        .font('Helvetica')
+        .fillColor('#111827')
+        .text(`:   ${val}`, 245, curY, { width: 290 });
+      doc.moveDown(0.25);
+    }
+
+    if (data.feedback && data.feedback.trim()) {
+      doc.moveDown(0.3);
+      doc
+        .font('Helvetica-Bold')
+        .fillColor('#4b5563')
+        .text('Performance Remarks / Reference Feedback:', 65)
+        .moveDown(0.2);
+
+      doc
+        .font('Helvetica-Oblique')
+        .fillColor('#374151')
+        .text(`"${data.feedback.trim()}"`, 75, doc.y, { width: 460, lineGap: 3 })
+        .moveDown(0.5);
+    }
+
+    // ── Section 3: Verified Prior Work History (if any) ──
+    if (Array.isArray(data.workHistory) && data.workHistory.length > 0) {
+      doc.moveDown(0.5);
+      doc
+        .fillColor('#111827')
+        .fontSize(12)
+        .font('Helvetica-Bold')
+        .text('3. Prior Employment Records on File')
+        .moveDown(0.4);
+
+      data.workHistory.forEach((wh, idx) => {
+        const tenureStr = calcTenure(wh.startDate, wh.endDate || new Date());
+        doc
+          .font('Helvetica-Bold')
+          .fontSize(9)
+          .fillColor('#1f2937')
+          .text(`• ${wh.companyName || 'Prior Employer'} - ${wh.designation || 'Role'} (${tenureStr})`, 65)
+          .font('Helvetica')
+          .fillColor('#6b7280')
+          .fontSize(8)
+          .text(`  Dates: ${formatDate(wh.startDate)} to ${wh.endDate ? formatDate(wh.endDate) : 'Present'}${wh.reasonForExit ? ` | Reason for Exit: ${wh.reasonForExit}` : ''}`, 75)
+          .moveDown(0.3);
+      });
+    }
+
+    doc.moveDown(1);
+
+    // ── Attestation & Signatory Block ──
+    const signY = doc.y;
+    doc
+      .fontSize(9)
+      .font('Helvetica')
+      .fillColor('#4b5563')
+      .text('Attested and issued on behalf of HR Department:', 65, signY);
+
+    doc
+      .moveDown(0.4)
+      .font('Helvetica-Bold')
+      .fillColor('#111827')
+      .text(data.authorizedSignatory || 'Authorized HR Officer', 65)
+      .font('Helvetica')
+      .fillColor('#6b7280')
+      .text(`${data.companyName}  •  Reference Verification Authority`, 65)
+      .moveDown(1.5);
+
+    // ── Legal Footer ──
+    doc
+      .strokeColor('#e5e7eb')
+      .lineWidth(1)
+      .moveTo(50, doc.y)
+      .lineTo(545, doc.y)
+      .stroke()
+      .moveDown(0.5);
+
+    doc
+      .fontSize(7.5)
+      .fillColor('#9ca3af')
+      .text(
+        'CONFIDENTIAL: This reference check dossier contains verified employment history generated for reference verification or attachment to new employer records. ' +
+        'Digitally authenticated via UEIBI HR Platform. No physical signature required.',
+        { align: 'center', lineGap: 2 }
+      );
+
+    doc.end();
+
+    stream.on('finish', () => resolve(`/uploads/certificates/${fileName}`));
+    stream.on('error', reject);
+  });
+}

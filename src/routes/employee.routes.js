@@ -24,6 +24,9 @@ import {
   reactivateEmployee,
   restoreExEmployee,
   getEmployeeHandoverStatus,
+  verifyEmployee,
+  generateExEmployeeRefCheckPdf,
+  addTenantLicenses,
 } from '../controllers/employee.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
@@ -38,9 +41,16 @@ router.get('/employees/managers', requireAuth, requireTenant, getEligibleManager
 router.patch('/employees/onboard', requireAuth, requireTenant, onboardEmployee);
 router.get('/employees', requireAuth, requireTenant, listEmployees);
 
+// License capacity management
+router.post('/employees/add-license', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), addTenantLicenses);
+
 // Stats & Handover Status — must be registered BEFORE /:id to avoid route collision
 router.get('/employees/stats', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'MANAGER'), getEmployeeStats);
 router.get('/employees/:id/handover-status', requireAuth, requireTenant, getEmployeeHandoverStatus);
+
+// Verification workflow for HR / Admins
+router.post('/employees/:id/verify', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), verifyEmployee);
+router.patch('/employees/:id/verify', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), verifyEmployee);
 
 router.patch('/employees/:id', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), updateEmployee);
 router.delete('/employees/:id', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), deleteEmployee);
@@ -56,6 +66,7 @@ router.get('/employees/ex', requireAuth, requireTenant, authorizeRoleOrCapabilit
 router.post('/employees/ex', requireAuth, requireTenant, authorizeRoleOrCapability(['SUPER_ADMIN', 'ADMIN', 'HR'], ['REGISTRY_WRITE']), addExEmployee);
 router.post('/employees/ex/bulk', requireAuth, requireTenant, authorizeRoleOrCapability(['SUPER_ADMIN', 'ADMIN', 'HR'], ['REGISTRY_WRITE']), bulkAddExEmployees);
 router.patch('/employees/ex/:id', requireAuth, requireTenant, authorizeRoleOrCapability(['SUPER_ADMIN', 'ADMIN', 'HR'], ['REGISTRY_WRITE']), updateExEmployee);
+router.get('/employees/ex/:id/refcheck-pdf', requireAuth, requireTenant, authorizeRoleOrCapability(['SUPER_ADMIN', 'ADMIN', 'HR'], ['REGISTRY_SEARCH', 'REGISTRY_WRITE']), generateExEmployeeRefCheckPdf);
 router.post('/employees/ex/:id/restore', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), restoreExEmployee);
 console.log('[ROUTES] POST /employees/ex/:id/restore → restoreExEmployee registered');
 router.delete('/employees/ex/:id', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), deleteExEmployee);

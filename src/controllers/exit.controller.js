@@ -14,7 +14,7 @@
 import { prisma } from '../lib/prisma.js';
 import { emitToTenant } from '../lib/socket.js';
 import { getLicenseStats } from '../services/license.service.js';
-import { generateRelievingLetter, generateServiceCertificate } from '../services/pdf.service.js';
+import { generateRelievingLetter, generateServiceCertificate, generateReferenceCheckProfile } from '../services/pdf.service.js';
 import {
   initiateExitSchema,
   exitInterviewSchema,
@@ -382,6 +382,53 @@ export async function completeExit(req, res, next) {
       return res.status(404).json({ error: 'Employee record not found or already deleted' });
     }
 
+    // ── Handover / Exit Tasks Guardrail Check ────────────────────────────────
+    const overrideHandover = req.body?.overrideHandover === true || req.body?.skipHandover === true;
+    const isLeadership = ['SUPER_ADMIN', 'ADMIN', 'HR', 'CMD'].includes(req.user?.role);
+
+    const pendingHandoverGoals = await prisma.goal.findMany({
+      where: {
+        tenantId,
+        status: { not: 'COMPLETED' },
+        OR: [
+          { employeeId: employee.id },
+          { assignments: { some: { employeeId: employee.id } } },
+        ],
+        AND: [
+          {
+            OR: [
+              { isHandoverGoal: true },
+              { category: { contains: 'Handover', mode: 'insensitive' } },
+              { category: { contains: 'Exit', mode: 'insensitive' } },
+            ],
+          },
+        ],
+      },
+      select: { id: true, title: true, progress: true, dueDate: true, category: true, status: true },
+    });
+
+    if (pendingHandoverGoals.length > 0 && !overrideHandover) {
+      return res.status(409).json({
+        error: `Employee has ${pendingHandoverGoals.length} pending handover goal(s) that must be completed before completing exit.`,
+        code: 'PENDING_HANDOVER_GOALS',
+        canOverride: isLeadership,
+        pendingGoals: pendingHandoverGoals.map((g) => ({
+          id: g.id,
+          title: g.title,
+          progress: g.progress,
+          dueDate: g.dueDate ? g.dueDate.toISOString().split('T')[0] : null,
+          category: g.category,
+          status: g.status,
+        })),
+      });
+    }
+
+    if (pendingHandoverGoals.length > 0 && overrideHandover && !isLeadership) {
+      return res.status(403).json({
+        error: 'Only Leadership (SUPER_ADMIN, ADMIN, HR, CMD) is authorized to bypass pending handover goals.',
+      });
+    }
+
     const nameParts = (employee.name || '').trim().split(/\s+/);
     const firstName = nameParts[0] || 'Unknown';
     const lastName = nameParts.slice(1).join(' ') || firstName;
@@ -393,6 +440,14 @@ export async function completeExit(req, res, next) {
 
     // Atomic transaction: deactivate + re-assign subordinates + create exit record + update exit details
     const exitRecord = await prisma.$transaction(async (tx) => {
+      // Mark handover goals as overridden if leadership chose to bypass
+      if (pendingHandoverGoals.length > 0 && overrideHandover && isLeadership) {
+        await tx.goal.updateMany({
+          where: { id: { in: pendingHandoverGoals.map((g) => g.id) } },
+          data: { handoverOverridden: true, handoverOverriddenBy: req.user.id },
+        });
+      }
+
       // 1. Soft-delete the TenantUser
       await tx.tenantUser.update({
         where: { id: employee.id },
@@ -526,7 +581,7 @@ export async function generateCertificate(req, res, next) {
         where: { id },
         data: { relievingLetterUrl: pdfUrl },
       });
-    } else {
+    } else if (type === 'service') {
       // Fetch ex-employee record for ratings if available
       const exRecord = await prisma.exEmployeeRecord.findFirst({
         where: { email: employee.email, tenantId: req.tenantId },
@@ -542,10 +597,37 @@ export async function generateCertificate(req, res, next) {
         where: { id },
         data: { serviceCertificateUrl: pdfUrl },
       });
+    } else if (type === 'refcheck') {
+      // Reference Check & Verified Profile Dossier for new employer
+      const [exRecord, userWithWorkHistory] = await Promise.all([
+        prisma.exEmployeeRecord.findFirst({
+          where: { email: employee.email, tenantId: req.tenantId },
+          orderBy: { createdAt: 'desc' },
+        }),
+        prisma.tenantUser.findUnique({
+          where: { id: employee.id },
+          include: { workHistory: true },
+        }),
+      ]);
+
+      pdfData.pan = employee.pan || exRecord?.pan || null;
+      pdfData.conductValue = exRecord?.conductValue || 'Good';
+      pdfData.techRating = exRecord?.techRating || 8;
+      pdfData.attitudeRating = exRecord?.attitudeRating || 8;
+      pdfData.feedback = exRecord?.feedback || exitDetails.feedbackRemarks || '';
+      pdfData.workHistory = userWithWorkHistory?.workHistory || [];
+
+      pdfUrl = await generateReferenceCheckProfile(pdfData);
     }
 
+    const typeLabels = {
+      relieving: 'Relieving letter',
+      service: 'Service certificate',
+      refcheck: 'Reference check & verified profile dossier',
+    };
+
     res.json({
-      message: `${type === 'relieving' ? 'Relieving letter' : 'Service certificate'} generated successfully`,
+      message: `${typeLabels[type] || 'Document'} generated successfully`,
       pdfUrl,
     });
   } catch (err) {
