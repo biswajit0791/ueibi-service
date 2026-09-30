@@ -39,6 +39,7 @@ import billingRoutes from './routes/billing.routes.js';
 import legalRoutes from './routes/legal.routes.js';
 import dashboardSummaryRoutes from './routes/dashboardSummary.routes.js';
 import exitRoutes from './routes/exit.routes.js';
+import companySettingsRoutes from './routes/companySettings.routes.js';
 import { notFound } from './middleware/notFound.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
@@ -126,6 +127,7 @@ apiRouter.use(billingRoutes);
 apiRouter.use(legalRoutes);
 apiRouter.use(dashboardSummaryRoutes);
 apiRouter.use(exitRoutes);
+apiRouter.use(companySettingsRoutes);
 if (env.nodeEnv !== 'production') {
   apiRouter.use(devRoutes);
 }

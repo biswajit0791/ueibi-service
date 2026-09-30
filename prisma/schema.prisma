@@ -93,6 +93,7 @@ model Tenant {
   leaveTypes           LeaveType[]
   leaveBalances        LeaveBalance[]
   wfhPolicy            WfhPolicy?
+  settings             TenantSettings?
   wfhBalances          WfhBalance[]
   leaveRequests        LeaveRequest[]
   leaveAuditLogs       LeaveAuditLog[]
@@ -1001,6 +1002,9 @@ model TaskMilestone {
   @@index([tenantId])
   @@index([taskId])
   @@index([dueDate])
+  // Covers the daily escalation sweep's WHERE (status != DONE AND dueDate <
+  // now) without a full-table scan as task_milestones grows.
+  @@index([status, dueDate])
   @@map("task_milestones")
 }
 
@@ -1189,6 +1193,31 @@ model LeaveBalance {
   @@unique([tenantId, employeeId, leaveTypeId, year])
   @@index([tenantId, employeeId, year])
   @@map("leave_balances")
+}
+
+/// Tenant-wide dynamic settings — one row per tenant, created on first read
+/// (see companySettings.service.js), same lazy-default pattern as goal
+/// appraisal cycles. The "Company Settings" page in the UI reads/writes this.
+model TenantSettings {
+  id       String @id @default(cuid())
+  tenantId String @unique
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// Extra domains/subdomains (beyond the tenant's own registered
+  /// Tenant.domainName, which is always implicitly allowed) that a milestone
+  /// watcher email may belong to. Stored lowercase, no leading '@'.
+  milestoneWatcherDomains String[] @default([])
+
+  /// Whether a milestone must be manager-approved before its assignee can
+  /// mark it complete. Default true (the original, stricter behaviour);
+  /// a tenant may relax this to let the assignee complete on their own
+  /// timeline, still subject to the usual overdue escalation.
+  milestoneRequireApproval Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("tenant_settings")
 }
 
 model WfhPolicy {
