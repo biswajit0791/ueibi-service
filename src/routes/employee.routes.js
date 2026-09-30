@@ -53,7 +53,7 @@ router.post('/employees/reject-license-request', requireAuth, requireTenant, aut
 router.post('/employees/add-license', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'FINANCE', 'CMD'), addTenantLicenses);
 
 // Stats & Handover Status — must be registered BEFORE /:id to avoid route collision
-router.get('/employees/stats', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'MANAGER'), getEmployeeStats);
+router.get('/employees/stats', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'MANAGER', 'FINANCE'), getEmployeeStats);
 router.get('/employees/:id/handover-status', requireAuth, requireTenant, getEmployeeHandoverStatus);
 
 // Verification workflow for HR / Admins
@@ -70,17 +70,17 @@ router.post('/employees/:id/reactivate', requireAuth, requireTenant, authorize('
 router.post('/employees/:id/restore', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), restoreExEmployee);
 
 // ── Ex-Employees ─────────────────────────────────────────────────────────────
-router.get('/employees/ex', requireAuth, requireTenant, authorizeRoleOrCapability(['SUPER_ADMIN', 'ADMIN', 'HR'], ['REGISTRY_SEARCH', 'REGISTRY_WRITE']), listExEmployees);
+router.get('/employees/ex', requireAuth, requireTenant, authorizeRoleOrCapability(['SUPER_ADMIN', 'ADMIN', 'HR', 'FINANCE'], ['REGISTRY_SEARCH', 'REGISTRY_WRITE']), listExEmployees);
 router.post('/employees/ex', requireAuth, requireTenant, authorizeRoleOrCapability(['SUPER_ADMIN', 'ADMIN', 'HR'], ['REGISTRY_WRITE']), addExEmployee);
 router.post('/employees/ex/bulk', requireAuth, requireTenant, authorizeRoleOrCapability(['SUPER_ADMIN', 'ADMIN', 'HR'], ['REGISTRY_WRITE']), bulkAddExEmployees);
 router.patch('/employees/ex/:id', requireAuth, requireTenant, authorizeRoleOrCapability(['SUPER_ADMIN', 'ADMIN', 'HR'], ['REGISTRY_WRITE']), updateExEmployee);
-router.get('/employees/ex/:id/refcheck-pdf', requireAuth, requireTenant, authorizeRoleOrCapability(['SUPER_ADMIN', 'ADMIN', 'HR'], ['REGISTRY_SEARCH', 'REGISTRY_WRITE']), generateExEmployeeRefCheckPdf);
+router.get('/employees/ex/:id/refcheck-pdf', requireAuth, requireTenant, authorizeRoleOrCapability(['SUPER_ADMIN', 'ADMIN', 'HR', 'FINANCE'], ['REGISTRY_SEARCH', 'REGISTRY_WRITE']), generateExEmployeeRefCheckPdf);
 router.post('/employees/ex/:id/restore', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), restoreExEmployee);
 console.log('[ROUTES] POST /employees/ex/:id/restore → restoreExEmployee registered');
 router.delete('/employees/ex/:id', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), deleteExEmployee);
 
 // ── Non-Joiners / Offers ─────────────────────────────────────────────────────
-router.get('/employees/offers', requireAuth, requireTenant, authorizeRoleOrCapability(['SUPER_ADMIN', 'ADMIN', 'HR'], ['REGISTRY_SEARCH', 'REGISTRY_WRITE']), listNonJoiners);
+router.get('/employees/offers', requireAuth, requireTenant, authorizeRoleOrCapability(['SUPER_ADMIN', 'ADMIN', 'HR', 'FINANCE'], ['REGISTRY_SEARCH', 'REGISTRY_WRITE']), listNonJoiners);
 router.post('/employees/offers', requireAuth, requireTenant, authorizeRoleOrCapability(['SUPER_ADMIN', 'ADMIN', 'HR'], ['REGISTRY_WRITE']), addNonJoiner);
 router.post('/employees/offers/bulk', requireAuth, requireTenant, authorizeRoleOrCapability(['SUPER_ADMIN', 'ADMIN', 'HR'], ['REGISTRY_WRITE']), bulkAddNonJoiners);
 router.patch('/employees/offers/:id', requireAuth, requireTenant, authorizeRoleOrCapability(['SUPER_ADMIN', 'ADMIN', 'HR'], ['REGISTRY_WRITE']), updateNonJoiner);

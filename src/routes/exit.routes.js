@@ -19,7 +19,7 @@ const router = Router();
 // ── Exit Workflow ────────────────────────────────────────────────────────────
 
 // List all pending exits for this tenant
-router.get('/exit/pending', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), listPendingExits);
+router.get('/exit/pending', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'FINANCE'), listPendingExits);
 
 // Employee self-service exit status
 router.get('/exit/my-status', requireAuth, requireTenant, getMyExitStatus);
@@ -37,12 +37,12 @@ router.patch('/exit/:id/interview', requireAuth, requireTenant, authorize('SUPER
 router.patch('/exit/:id/clearance', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'MANAGER', 'FINANCE'), approveClearance);
 
 // Complete exit (finalize — mark EXITED, free license, archive)
-router.post('/exit/:id/complete', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), completeExit);
+router.post('/exit/:id/complete', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'FINANCE'), completeExit);
 
 // Generate certificate (relieving / service / termination)
-router.post('/exit/:id/certificate/:type', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), generateCertificate);
+router.post('/exit/:id/certificate/:type', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'FINANCE'), generateCertificate);
 
 // Send separation & clearance documents to employee via email
-router.post('/exit/:id/send-documents', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), sendExitDocuments);
+router.post('/exit/:id/send-documents', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'FINANCE'), sendExitDocuments);
 
 export default router;
