@@ -73,6 +73,11 @@ const serveUploads = (req, res, next) => {
   if (req.method === 'OPTIONS') {
     return res.sendStatus(204);
   }
+  if (req.query.download === '1' || req.query.download === 'true') {
+    const rawName = req.query.filename || path.basename(req.path);
+    const safeName = String(rawName).replace(/["\r\n]/g, '');
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(safeName)}"`);
+  }
   next();
 };
 
