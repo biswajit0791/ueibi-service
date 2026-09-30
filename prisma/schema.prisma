@@ -81,7 +81,7 @@ model Tenant {
   goals                Goal[]
   goalAssignments      GoalAssignment[]
   tasks                Task[]
-  subTasks             SubTask[]
+  taskMilestones       TaskMilestone[]
   policies             Policy[]
   policyAssignments    PolicyAssignment[]
   policyAcceptances    PolicyAcceptance[]
@@ -287,9 +287,10 @@ model TenantUser {
 
   // Activity & Notifications
   taskComments        TaskComment[]        @relation("TaskCommentAuthor")
-  subTasksAssigned    SubTask[]            @relation("SubTaskAssignee")
-  subTasksCompleted   SubTask[]            @relation("SubTaskCompletedBy")
-  subTasksCreated     SubTask[]            @relation("SubTaskCreatedBy")
+  milestonesProposed  TaskMilestone[]      @relation("MilestoneProposedBy")
+  milestonesApproved  TaskMilestone[]      @relation("MilestoneApprovedBy")
+  milestonesCompleted TaskMilestone[]      @relation("MilestoneCompletedBy")
+  milestonesCreated   TaskMilestone[]      @relation("MilestoneCreatedBy")
   taskWeightsAdjusted Task[]               @relation("TaskWeightAdjustedBy")
   taskAuditLogs       TaskAuditLog[]       @relation("TaskAuditPerformer")
   goalComments        GoalComment[]        @relation("GoalCommentAuthor")
@@ -932,8 +933,12 @@ model Task {
   description    String?        @db.Text
   dependency     Json? // serialised dep object: { assigneeId, depTitle, status, escalated, depTaskId }
   isDependencyOf String? // parent task ID this task is a companion dep of
+  /// Opt-in milestone tracking for critical work. Only settable at creation,
+  /// only when priority = 'critical', only by a MANAGER or above (see
+  /// taskMilestone.controller.js). Replaces the old SubTask checklist.
+  isMilestoneTracked Boolean        @default(false)
+  milestones         TaskMilestone[]
   comments       TaskComment[]
-  subTasks       SubTask[]
   auditLogs      TaskAuditLog[]
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
@@ -944,52 +949,59 @@ model Task {
   @@map("tasks")
 }
 
-/// A sub-task under a Task.
+/// A milestone under a critical Task.
 ///
+/// Unlike SubTask (removed), a milestone carries a due date that is bounded by
+/// the parent task's own dueDate, a watcher list for delay escalation, and a
+/// propose/approve workflow: the task's employee may propose a new
+/// completion date, but only the reporting manager (or above) can approve it
+/// — mirrors the goal PENDING_APPROVAL gate in goalWeight.service.js, applied
+/// here at the milestone level instead of the goal's weight total.
 ///
-/// Deliberately its own model rather than a Task with a parent pointer. A
-/// sub-task carries no weight and no progress, and adding `parentTaskId` to
-/// Task would have pulled every checklist item into the goal's 100% weight
-/// total and the execution lock that depends on it.
-///
-/// It carries everything a task does EXCEPT weight: title, description,
-/// assignee, planned dates and actual dates. Weight is deliberately absent —
-/// a sub-task is a record of what is being worked through, and it never
-/// changes the parent task's percentage or the goal's 100% total.
-model SubTask {
+/// Capped at 4 per task (enforced in the controller, not the DB, so the limit
+/// can be adjusted without a migration). Carries no weight of its own — same
+/// principle as the removed SubTask: it never changes the parent task's
+/// percentage or the goal's 100% total.
+model TaskMilestone {
   id            String      @id @default(cuid())
   tenantId      String
   tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   taskId        String
   task          Task        @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  order         Int // 1-4, display / creation order
   title         String
-  description   String?     @db.Text
+  dueDate       DateTime // must be <= task.dueDate
+  /// Plain email addresses, not necessarily platform users — "manager need to
+  /// add email as watchers" in the spec. Escalation emails go to every one of
+  /// these; a dashboard Notification is additionally created for any watcher
+  /// who is also a TenantUser in this tenant.
+  watcherEmails String[]
+  /// PENDING_APPROVAL -> APPROVED -> DONE, with RESCHEDULE_REQUESTED as the
+  /// side-branch when the manager sends a proposed date back for another try.
+  status        String      @default("PENDING_APPROVAL")
+  proposedCompletionDate DateTime?
+  proposedById  String?
+  proposedBy    TenantUser? @relation("MilestoneProposedBy", fields: [proposedById], references: [id], onDelete: SetNull)
+  proposedAt    DateTime?
+  approvedById  String?
+  approvedBy    TenantUser? @relation("MilestoneApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt    DateTime?
   isDone        Boolean     @default(false)
-  /// Who is meant to do this piece. Null means whoever owns the parent task.
-  /// Assignment follows the SAME role hierarchy as task assignment.
-  assigneeId    String?
-  assignee      TenantUser? @relation("SubTaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
-  /// Planned dates.
-  startDate     DateTime?
-  dueDate       DateTime?
-  /// When work on this piece really began and really finished. Same rules as a
-  /// task: they may be back-dated but never set in the future, and completion
-  /// may not precede the start. Ticking the item stamps the completion.
-  actualStartDate      DateTime?
-  actualCompletionDate DateTime?
-  /// Who ticked it.
   completedById String?
-  completedBy   TenantUser? @relation("SubTaskCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
-  position      Int         @default(0)
+  completedBy   TenantUser? @relation("MilestoneCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+  completedAt   DateTime?
   createdById   String?
-  createdBy     TenantUser? @relation("SubTaskCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy     TenantUser? @relation("MilestoneCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  /// Escalation throttle: an overdue milestone is only emailed/notified once
+  /// per calendar day, however often the daily check runs.
+  lastEscalatedAt DateTime?
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
 
   @@index([tenantId])
   @@index([taskId])
-  @@index([assigneeId])
-  @@map("sub_tasks")
+  @@index([dueDate])
+  @@map("task_milestones")
 }
 
 // ── Task Activity ──────────────────────────────────────────────────────────

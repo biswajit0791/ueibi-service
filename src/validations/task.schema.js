@@ -83,6 +83,10 @@ export const createTaskSchema = z.object({
   isDependencyOf: z.string().nullable().optional(),
   status: taskStatusSchema.optional(),
   progress: progressSchema,
+  // Opt-in milestone tracking for critical work. Only honoured at creation —
+  // the controller re-checks priority = 'critical' and MANAGER+ role before
+  // trusting this flag; see createTask in task.controller.js.
+  isMilestoneTracked: z.boolean().optional(),
 }).passthrough();
 
 export const updateTaskSchema = z.object({

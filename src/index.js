@@ -32,6 +32,8 @@ server.listen(env.port, async () => {
       console.log(' 🐘 PostgreSQL: Connected (Healthy)');
       const { ensureAppraisalColumns } = await import('./lib/dbInit.js');
       await ensureAppraisalColumns();
+      const { startMilestoneEscalationSchedule } = await import('./services/milestoneEscalation.service.js');
+      startMilestoneEscalationSchedule();
       return true;
     } catch (err) {
       console.error(' ❌ PostgreSQL: Connection FAILED -', err.message);

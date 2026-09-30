@@ -4,7 +4,7 @@ import { emitToTenant } from '../lib/socket.js';
 import { createTaskSchema, updateTaskSchema, updateTaskStatusSchema, taskIdParamSchema, listTasksQuerySchema } from '../validations/task.schema.js';
 import { goalService } from '../services/goal.service.js';
 import { loadTaskForUser, getCompanionTaskId } from '../services/taskAccess.service.js';
-import { ELEVATED_ROLES, SUPER_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
+import { ELEVATED_ROLES, SUPER_ELEVATED_ROLES, MANAGER_OR_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
 import { TASK_STATUSES } from '../lib/workflowStatus.js';
 import {
   assertGoalUnlocked, assertWeightFits, defaultWeightFor, goalWeightSummary, withWeightGuard,
@@ -265,7 +265,22 @@ export async function createTask(req, res, next) {
       tags, goalId, isPrivate, isStandalone, weight,
       description, employeeId, employeeIds, dependency, isDependencyOf,
       status, progress, actualStartDate, actualCompletionDate,
+      isMilestoneTracked,
     } = parsed.data;
+
+    // 2b. Milestone tracking is an opt-in for critical work only, and only a
+    //     MANAGER or above may turn it on — matches who is allowed to add the
+    //     milestones themselves (taskMilestone.controller.js). Refused
+    //     outright rather than silently downgraded, so the UI's toggle never
+    //     lies about whether it took effect.
+    if (isMilestoneTracked) {
+      if (!hasRole(req.user.role, MANAGER_OR_ELEVATED_ROLES)) {
+        return res.status(403).json({ success: false, message: 'Only a manager (or above) can create a milestone-tracked task' });
+      }
+      if ((priority || 'medium') !== 'critical') {
+        return res.status(400).json({ success: false, message: 'Milestone tracking is only available for critical-priority tasks' });
+      }
+    }
 
     // 3. Date validation: dueDate must not be earlier than startDate
     if (startDate && dueDate) {
@@ -451,6 +466,7 @@ export async function createTask(req, res, next) {
               description: description || null,
               dependency: dependency || null,
               isDependencyOf: isDependencyOf || null,
+              isMilestoneTracked: isMilestoneTracked === true,
               // A task created already in progress has actually started now,
               // unless the caller recorded when it really began.
               ...actualDates.data,

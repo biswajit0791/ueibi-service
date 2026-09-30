@@ -1,9 +1,9 @@
 import { Router } from 'express';
 import { createTask, listTasks, updateTaskStatus, updateTask, deleteTask } from '../controllers/task.controller.js';
-import {
-  listSubTasks, createSubTask, updateSubTask, deleteSubTask, reorderSubTasks, listBoardSubTasks,
-} from '../controllers/subTask.controller.js';
 import { getTeamWeightage, setTaskFinalWeight, getTeamWeightageSummary } from '../controllers/taskWeightage.controller.js';
+import {
+  listMilestones, createMilestone, updateMilestone, deleteMilestone, listOverdueMilestones,
+} from '../controllers/taskMilestone.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
 
@@ -27,18 +27,16 @@ router.get('/team/weightage-summary', requireAuth, requireTenant, getTeamWeighta
 router.get('/team/:id/weightage', requireAuth, requireTenant, getTeamWeightage);
 router.patch('/tasks/:id/final-weight', requireAuth, requireTenant, setTaskFinalWeight);
 
-// ── Sub-tasks ──────────────────────────────────────────────────────────────
-// A checklist under a task: what someone is working through, and when each
-// piece was finished. Records only — a sub-task never changes the task's
-// percentage or the goal's weight total.
-// The sub-task board: every sub-task across the tasks the caller can see.
-// Registered before '/tasks/:id/subtasks' is irrelevant — different path —
-// but it shares that endpoint's visibility rule exactly.
-router.get('/subtasks', requireAuth, requireTenant, listBoardSubTasks);
-router.get('/tasks/:id/subtasks', requireAuth, requireTenant, listSubTasks);
-router.post('/tasks/:id/subtasks', requireAuth, requireTenant, createSubTask);
-router.patch('/tasks/:id/subtasks-order', requireAuth, requireTenant, reorderSubTasks);
-router.patch('/tasks/:id/subtasks/:sid', requireAuth, requireTenant, updateSubTask);
-router.delete('/tasks/:id/subtasks/:sid', requireAuth, requireTenant, deleteSubTask);
+// ── Critical-task Milestones ─────────────────────────────────────────────────
+// Replaces the old sub-task checklist for critical work: up to 4 dated
+// milestones, each with its own watcher list for delay escalation, and an
+// employee-proposes / manager-approves date workflow.
+// Registered before '/tasks/:id/milestones/:mid' is irrelevant — different
+// path — but it shares that endpoint's visibility rule.
+router.get('/milestones/overdue', requireAuth, requireTenant, listOverdueMilestones);
+router.get('/tasks/:id/milestones', requireAuth, requireTenant, listMilestones);
+router.post('/tasks/:id/milestones', requireAuth, requireTenant, createMilestone);
+router.patch('/tasks/:id/milestones/:mid', requireAuth, requireTenant, updateMilestone);
+router.delete('/tasks/:id/milestones/:mid', requireAuth, requireTenant, deleteMilestone);
 
 export default router;
