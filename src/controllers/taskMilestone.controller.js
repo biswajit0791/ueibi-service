@@ -18,6 +18,7 @@ import { loadTaskForUser } from '../services/taskAccess.service.js';
 import { visibleTaskWhere } from '../services/taskVisibility.service.js';
 import { logTaskAudit, pushNotification } from './taskActivity.controller.js';
 import { MANAGER_OR_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
+import { getCompanySettings, findDisallowedWatcherEmails } from '../services/companySettings.service.js';
 import {
   createMilestoneSchema, updateMilestoneSchema, MAX_MILESTONES_PER_TASK,
 } from '../validations/taskMilestone.schema.js';
@@ -35,6 +36,20 @@ async function loadMilestoneOrThrow(taskId, milestoneId) {
   });
   if (!milestone) throw { status: 404, message: 'Milestone not found on this task' };
   return milestone;
+}
+
+/** Throws a 400 naming every watcher email whose domain isn't on the
+ *  tenant's allowlist (its own registered domain, plus Company Settings). */
+async function assertWatcherEmailsAllowed(tenantId, emails) {
+  if (!emails || emails.length === 0) return;
+  const disallowed = await findDisallowedWatcherEmails(tenantId, emails);
+  if (disallowed.length > 0) {
+    throw {
+      status: 400,
+      message: `These watcher emails aren't on an allowed domain for this company: ${disallowed.join(', ')}. `
+        + 'An admin can add more domains under Company Settings.',
+    };
+  }
 }
 
 /** Once every milestone on a task is APPROVED or DONE, the task itself may
@@ -98,6 +113,7 @@ export async function createMilestone(req, res, next) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
     const { title, dueDate, watcherEmails } = parsed.data;
+    await assertWatcherEmailsAllowed(tenantId, watcherEmails);
 
     const due = new Date(dueDate);
     if (Number.isNaN(due.getTime())) {
@@ -182,7 +198,10 @@ export async function updateMilestone(req, res, next) {
         return res.status(409).json({ error: 'This milestone is already complete and cannot be edited' });
       }
       if (title !== undefined) data.title = title.trim();
-      if (watcherEmails !== undefined) data.watcherEmails = watcherEmails;
+      if (watcherEmails !== undefined) {
+        await assertWatcherEmailsAllowed(tenantId, watcherEmails);
+        data.watcherEmails = watcherEmails;
+      }
       if (dueDate !== undefined) {
         const due = new Date(dueDate);
         if (Number.isNaN(due.getTime())) {
@@ -251,8 +270,16 @@ export async function updateMilestone(req, res, next) {
         return res.status(403).json({ error: 'Only the task owner can complete this milestone' });
       }
       if (isDone) {
-        if (milestone.status !== 'APPROVED') {
+        // Whether approval is required at all is a per-company choice (see
+        // Company Settings / TenantSettings.milestoneRequireApproval) — off
+        // by request, lets the assignee complete straight from their own
+        // timeline, still subject to the usual overdue escalation.
+        const settings = await getCompanySettings(tenantId);
+        if (settings.milestoneRequireApproval && milestone.status !== 'APPROVED') {
           return res.status(409).json({ error: 'This milestone must be approved before it can be marked complete' });
+        }
+        if (!settings.milestoneRequireApproval && milestone.status === 'DONE') {
+          return res.status(409).json({ error: 'This milestone is already complete' });
         }
         data.isDone = true;
         data.status = 'DONE';
