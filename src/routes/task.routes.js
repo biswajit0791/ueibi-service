@@ -3,6 +3,7 @@ import { createTask, listTasks, updateTaskStatus, updateTask, deleteTask } from 
 import { getTeamWeightage, setTaskFinalWeight, getTeamWeightageSummary } from '../controllers/taskWeightage.controller.js';
 import {
   listMilestones, createMilestone, updateMilestone, deleteMilestone, listOverdueMilestones,
+  dispatchMilestoneAlertController, getMilestoneLiveStatusSvg,
 } from '../controllers/taskMilestone.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
@@ -38,5 +39,10 @@ router.get('/tasks/:id/milestones', requireAuth, requireTenant, listMilestones);
 router.post('/tasks/:id/milestones', requireAuth, requireTenant, createMilestone);
 router.patch('/tasks/:id/milestones/:mid', requireAuth, requireTenant, updateMilestone);
 router.delete('/tasks/:id/milestones/:mid', requireAuth, requireTenant, deleteMilestone);
+router.post('/tasks/:id/milestones/:mid/dispatch-alert', requireAuth, requireTenant, dispatchMilestoneAlertController);
+router.post('/tasks/:id/milestones/:mid/test-escalation', requireAuth, requireTenant, dispatchMilestoneAlertController);
+
+// Public dynamic SVG live tracking badge (publicly accessible by email clients)
+router.get('/tasks/:id/milestones/:mid/live-status.svg', getMilestoneLiveStatusSvg);
 
 export default router;

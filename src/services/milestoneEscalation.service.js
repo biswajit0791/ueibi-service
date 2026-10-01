@@ -38,6 +38,7 @@
 import { prisma } from '../lib/prisma.js';
 import { sendMail } from '../lib/mailer.js';
 import { emitToUser } from '../lib/socket.js';
+import { env } from '../config/env.js';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const EMAIL_CONCURRENCY = 5;
@@ -52,20 +53,337 @@ function isSameCalendarDay(a, b) {
     && da.getUTCDate() === db.getUTCDate();
 }
 
-function escalationEmail({ milestone, task, daysOverdue }) {
+/**
+ * Builds a state-of-the-art, high-tech HTML email template with live 4-station flight tracking
+ */
+function buildModernMilestoneEmailHtml({ milestone, task, allMilestones = [], daysOverdue = 0 }) {
+  const dueStr = milestone?.dueDate ? new Date(milestone.dueDate).toISOString().slice(0, 10) : '—';
+  const dashboardUrl = `${env.frontendOrigin || 'http://localhost:5173'}/uer/goals`;
+
+  const isOverdue = daysOverdue > 0;
+  const isDone = milestone?.status === 'DONE';
+  const themeColor = isOverdue ? '#ef4444' : isDone ? '#10b981' : '#6366f1';
+  const themeBadge = isOverdue ? `⚠️ ${daysOverdue}D DELAY ALERT` : isDone ? '✓ MILESTONE SECURED' : '● LIVE SENTINEL RADAR';
+  const headline = isOverdue
+    ? `Critical Milestone Breach Detected`
+    : isDone
+    ? `Milestone Completed & Secured`
+    : `Watcher Sentinel Operational Telemetry`;
+  const subheadline = isOverdue
+    ? `Checkpoint Station 0${milestone.order} is currently ${daysOverdue} day(s) past its committed target date.`
+    : isDone
+    ? `Station 0${milestone.order} has been verified and marked complete in Mission Control.`
+    : `Station 0${milestone.order} is active in orbit and monitored by automated daily delay sentinel.`;
+
+  // Synthesize 4 stations from allMilestones
+  const stations = [1, 2, 3, 4].map((stepNum) => {
+    const found = allMilestones.find((m) => m.order === stepNum);
+    if (found) return found;
+    if (milestone.order === stepNum) return milestone;
+    return null;
+  });
+
+  const totalStations = 4;
+  const doneStationsCount = stations.filter((st) => st?.status === 'DONE').length;
+  const progressPercent = Math.round((doneStationsCount / totalStations) * 100);
+
+  const nowUtc = new Date().toUTCString().replace(/.*?, /, '').slice(0, 16) + ' UTC';
+
+  const statusHeadline = isOverdue
+    ? `OVERDUE (${daysOverdue} DAY${daysOverdue > 1 ? 'S' : ''} DELAY)`
+    : isDone
+    ? 'COMPLETED & SECURED (100%)'
+    : 'IN ORBIT // ACTIVE MONITORING';
+  const statusIcon = isOverdue ? '!' : isDone ? '✓' : '⚡';
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${headline}</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #07090e; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #f8fafc;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#07090e" style="background-color: #07090e; padding: 36px 12px;">
+    <tr>
+      <td align="center">
+        <!-- Main Card Container -->
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#111827" style="max-width: 620px; background-color: #111827; border: 1px solid #1f293d; border-radius: 18px; overflow: hidden; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);">
+          
+          <!-- Top Cyber Neon Beam -->
+          <tr>
+            <td style="height: 5px; background: linear-gradient(90deg, #6366f1 0%, #8b5cf6 40%, ${themeColor} 100%);"></td>
+          </tr>
+
+          <!-- Header Brand Bar -->
+          <tr>
+            <td style="padding: 28px 32px 20px 32px; border-bottom: 1px solid #1f293d; background-color: #111827;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                <tr>
+                  <td>
+                    <!-- Sentinel Radar Pill & Platform Identity -->
+                    <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin-bottom: 14px;">
+                      <tr>
+                        <td bgcolor="#1e293b" style="background-color: #1e293b; border: 1px solid #334155; border-radius: 20px; padding: 4px 12px;">
+                          <span style="font-size: 11px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: ${themeColor};">
+                            ${themeBadge}
+                          </span>
+                        </td>
+                        <td style="padding-left: 10px;">
+                          <span style="font-size: 11px; font-weight: 700; color: #64748b; letter-spacing: 0.06em; text-transform: uppercase;">
+                            UEIBI ENTERPRISE MISSION CONTROL
+                          </span>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <h1 style="margin: 0; font-size: 22px; font-weight: 800; color: #ffffff; letter-spacing: -0.02em; line-height: 1.3;">
+                      ${headline}
+                    </h1>
+                    <p style="margin: 8px 0 0 0; font-size: 13.5px; color: #94a3b8; line-height: 1.55;">
+                      ${subheadline}
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- LIVE 4-STATION CHECKPOINT FLIGHT PATH -->
+          <tr>
+            <td bgcolor="#0b0f19" style="padding: 24px 28px; background-color: #0b0f19; border-bottom: 1px solid #1f293d;">
+              <div style="font-size: 10px; font-family: monospace; font-weight: 800; color: #64748b; letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 16px;">
+                LIVE CHECKPOINT FLIGHT PATH // ORBITAL TELEMETRY
+              </div>
+
+              <!-- 4-Station Stepper Table -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="table-layout: fixed;">
+                <tr>
+                  ${stations.map((st, i) => {
+                    const stepNum = i + 1;
+                    const isStationDone = st?.status === 'DONE';
+                    const isCurrentStation = st?.id === milestone.id;
+                    const isStationOverdue = !isStationDone && st?.dueDate && new Date(st.dueDate) < new Date();
+
+                    const nodeBg = isStationDone ? '#10b981' : isStationOverdue ? '#ef4444' : isCurrentStation ? '#6366f1' : '#1e293b';
+                    const nodeBorder = isStationDone ? '#10b981' : isStationOverdue ? '#ef4444' : isCurrentStation ? '#818cf8' : '#334155';
+                    const nodeIcon = isStationDone ? '✓' : `0${stepNum}`;
+                    const labelColor = isStationDone ? '#10b981' : isStationOverdue ? '#ef4444' : isCurrentStation ? '#818cf8' : '#64748b';
+                    const statusText = isStationDone ? 'SECURED' : isStationOverdue ? 'OVERDUE' : isCurrentStation ? 'IN ORBIT' : st ? 'ACTIVE' : 'STANDBY';
+                    const titleText = st ? st.title : `Slot 0${stepNum}`;
+
+                    return `
+                    <td align="center" valign="top" style="width: 25%; padding: 0 4px;">
+                      <!-- Circle Station Node -->
+                      <div style="width: 36px; height: 36px; border-radius: 50%; background-color: ${nodeBg}; color: #ffffff; line-height: 36px; text-align: center; font-weight: 800; font-size: 12px; border: 2px solid ${nodeBorder}; box-shadow: 0 0 12px ${nodeBg}66; margin: 0 auto;">
+                        ${nodeIcon}
+                      </div>
+                      <!-- Station Title -->
+                      <div style="margin-top: 8px; font-size: 11px; font-weight: 700; color: #f8fafc; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 115px;">
+                        ${titleText}
+                      </div>
+                      <!-- Status Badge -->
+                      <div style="margin-top: 3px; font-size: 9.5px; font-weight: 800; color: ${labelColor}; letter-spacing: 0.05em;">
+                        ${statusText}
+                      </div>
+                    </td>
+                    `;
+                  }).join('')}
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- LIVE TELEMETRY COCKPIT (100% Native Inline HTML - Universal Email Compatibility) -->
+          <tr>
+            <td bgcolor="#070a12" style="padding: 18px 28px; background-color: #070a12; border-bottom: 1px solid #1f293d;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#0b1120" style="background-color: #0b1120; border: 1px solid #1e293b; border-radius: 14px; padding: 18px 20px;">
+                <tr>
+                  <td>
+                    <!-- Top Telemetry Row: Status Beacon, Headline & UTC Sync Pill -->
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                      <tr>
+                        <td valign="middle">
+                          <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+                            <tr>
+                              <td style="width: 32px; height: 32px; border-radius: 50%; background-color: ${themeColor}22; border: 1.5px solid ${themeColor}; text-align: center; line-height: 32px; color: ${themeColor}; font-size: 14px; font-weight: 900;">
+                                ${statusIcon}
+                              </td>
+                              <td style="padding-left: 12px;">
+                                <div style="font-size: 10px; font-family: monospace; font-weight: 800; color: #818cf8; letter-spacing: 0.12em; text-transform: uppercase;">
+                                  TELEMETRY RADAR // CHECKPOINT 0${milestone.order} OF 0${stations.length}
+                                </div>
+                                <div style="font-size: 15px; font-weight: 800; color: #f8fafc; margin-top: 2px;">
+                                  ${statusHeadline}
+                                </div>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                        <td align="right" valign="middle">
+                          <table role="presentation" cellspacing="0" cellpadding="0" border="0" bgcolor="#1e293b" style="background-color: #1e293b; border: 1px solid #334155; border-radius: 14px; padding: 5px 12px;">
+                            <tr>
+                              <td style="width: 7px; height: 7px; border-radius: 50%; background-color: ${themeColor};"></td>
+                              <td style="padding-left: 7px; font-size: 10px; font-weight: 800; color: #cbd5e1; font-family: monospace; letter-spacing: 0.05em;">
+                                SYNCED · ${nowUtc}
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <!-- Divider -->
+                    <div style="margin: 14px 0 12px 0; height: 1px; background-color: #1f293d;"></div>
+
+                    <!-- Progress Velocity Metric -->
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                      <tr>
+                        <td style="font-size: 10.5px; font-weight: 700; color: #64748b; font-family: monospace; text-transform: uppercase;">
+                          WORKSTREAM COMPLETION VELOCITY
+                        </td>
+                        <td align="right" style="font-size: 11.5px; font-weight: 800; color: ${themeColor}; font-family: monospace;">
+                          ${progressPercent}% [${doneStationsCount}/${totalStations} SECURED]
+                        </td>
+                      </tr>
+                    </table>
+                    
+                    <!-- Progress Bar Container -->
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top: 8px;">
+                      <tr>
+                        <td bgcolor="#1e293b" style="background-color: #1e293b; height: 7px; border-radius: 4px; overflow: hidden; padding: 0;">
+                          <table role="presentation" width="${Math.max(progressPercent, 4)}%" cellspacing="0" cellpadding="0" border="0" height="7">
+                            <tr>
+                              <td bgcolor="${themeColor}" style="background-color: ${themeColor}; height: 7px; border-radius: 4px;"></td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                    </table>
+
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- TACTICAL HUD TELEMETRY GRID -->
+          <tr>
+            <td style="padding: 26px 32px; background-color: #111827;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                <!-- Top Row: Parent Workstream & Active Station -->
+                <tr>
+                  <td width="50%" valign="top" style="padding-right: 6px; padding-bottom: 12px;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#1e293b" style="background-color: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 14px 16px;">
+                      <tr>
+                        <td>
+                          <div style="font-size: 10px; font-family: monospace; font-weight: 800; color: #818cf8; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px;">
+                            PARENT WORKSTREAM
+                          </div>
+                          <div style="font-size: 13.5px; font-weight: 700; color: #ffffff; line-height: 1.35;">
+                            ${task.title}
+                          </div>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                  <td width="50%" valign="top" style="padding-left: 6px; padding-bottom: 12px;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#1e293b" style="background-color: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 14px 16px;">
+                      <tr>
+                        <td>
+                          <div style="font-size: 10px; font-family: monospace; font-weight: 800; color: #818cf8; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px;">
+                            ACTIVE CHECKPOINT STATION
+                          </div>
+                          <div style="font-size: 13.5px; font-weight: 700; color: #ffffff; line-height: 1.35;">
+                            0${milestone.order} // ${milestone.title}
+                          </div>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+
+                <!-- Bottom Row: Target Commitment & Surveillance -->
+                <tr>
+                  <td width="50%" valign="top" style="padding-right: 6px;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#1e293b" style="background-color: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 14px 16px;">
+                      <tr>
+                        <td>
+                          <div style="font-size: 10px; font-family: monospace; font-weight: 800; color: #818cf8; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px;">
+                            TARGET DEADLINE
+                          </div>
+                          <div style="font-size: 13.5px; font-weight: 700; color: #ffffff;">
+                            ${dueStr}
+                            ${isOverdue ? `<span style="color: #ef4444; font-size: 11px; margin-left: 6px;">(${daysOverdue}d late)</span>` : ''}
+                          </div>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                  <td width="50%" valign="top" style="padding-left: 6px;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#1e293b" style="background-color: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 14px 16px;">
+                      <tr>
+                        <td>
+                          <div style="font-size: 10px; font-family: monospace; font-weight: 800; color: #818cf8; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px;">
+                            SURVEILLANCE FREQUENCY
+                          </div>
+                          <div style="font-size: 13.5px; font-weight: 700; color: #10b981;">
+                            Daily Sweep @ 00:00 UTC
+                          </div>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Interactive Direct Action CTA Button -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top: 26px;">
+                <tr>
+                  <td align="center">
+                    <a href="${dashboardUrl}" target="_blank" style="background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%); color: #ffffff; text-decoration: none; padding: 14px 34px; border-radius: 10px; font-weight: 800; font-size: 13px; display: inline-block; letter-spacing: 0.05em; text-transform: uppercase; box-shadow: 0 4px 18px rgba(99, 102, 241, 0.45);">
+                      Launch Mission Control & Review &rarr;
+                    </a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Sentinel Security Signature Footer -->
+          <tr>
+            <td bgcolor="#090d16" style="padding: 22px 32px; background-color: #090d16; border-top: 1px solid #1f293d; text-align: center;">
+              <p style="margin: 0; font-size: 12px; color: #64748b; line-height: 1.5;">
+                You are receiving this automated alert because your address is authorized as a <strong>Watcher Sentinel</strong> for this critical task.
+              </p>
+              <p style="margin: 6px 0 0 0; font-size: 11px; color: #475569;">
+                UEIBI Enterprise Platform · Automated Watcher Delay Escalation Sentinel · Daily 00:00 UTC
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+}
+
+function escalationEmail({ milestone, task, daysOverdue, allMilestones = [] }) {
   const dueStr = new Date(milestone.dueDate).toISOString().slice(0, 10);
-  const subject = `[Overdue] Milestone "${milestone.title}" on "${task.title}" is ${daysOverdue} day(s) late`;
-  const text = `Milestone "${milestone.title}" (task: "${task.title}") was due ${dueStr} and is not yet `
-    + `complete — ${daysOverdue} day(s) overdue.`;
-  const html = `<div style="font-family: sans-serif; padding: 16px; line-height: 1.6;">
-    <h3 style="color:#b91c1c;">Milestone overdue</h3>
-    <p><strong>Task:</strong> ${task.title}</p>
-    <p><strong>Milestone:</strong> ${milestone.title}</p>
-    <p><strong>Due:</strong> ${dueStr} (${daysOverdue} day(s) ago)</p>
-    <p>This will keep escalating daily until the milestone is completed or rescheduled.</p>
-  </div>`;
+  const subject = `[Overdue Alert] Milestone "${milestone.title}" on "${task.title}" is ${daysOverdue} day(s) late`;
+  const text = `Critical Milestone Overdue: "${milestone.title}" on task "${task.title}" was due ${dueStr} and is ${daysOverdue} day(s) overdue.\n\n`
+    + `Review in Mission Control: ${env.frontendOrigin || 'http://localhost:5173'}/uer/goals`;
+  const html = buildModernMilestoneEmailHtml({
+    milestone,
+    task,
+    allMilestones,
+    daysOverdue,
+  });
   return { subject, text, html };
 }
+
 
 /** Runs `tasks` with at most `limit` in flight at once. Each task's own
  *  failure is swallowed by the caller (see the try/catch at the call site)
@@ -91,7 +409,19 @@ export async function checkOverdueMilestonesAndNotify() {
 
   const overdueAll = await prisma.taskMilestone.findMany({
     where: { dueDate: { lt: now }, status: { not: 'DONE' } },
-    include: { task: { select: { id: true, title: true, tenantId: true } } },
+    include: {
+      task: {
+        select: {
+          id: true,
+          title: true,
+          tenantId: true,
+          milestones: {
+            select: { id: true, title: true, order: true, status: true, dueDate: true },
+            orderBy: { order: 'asc' },
+          },
+        },
+      },
+    },
     orderBy: { dueDate: 'asc' }, // longest overdue first, in case of a cap
     take: MAX_MILESTONES_PER_RUN + 1,
   });
@@ -129,7 +459,12 @@ export async function checkOverdueMilestonesAndNotify() {
   for (const milestone of dueToday) {
     const { task } = milestone;
     const daysOverdue = Math.max(1, Math.floor((now.getTime() - new Date(milestone.dueDate).getTime()) / MS_PER_DAY));
-    const { subject, text, html } = escalationEmail({ milestone, task, daysOverdue });
+    const { subject, text, html } = escalationEmail({
+      milestone,
+      task,
+      daysOverdue,
+      allMilestones: task.milestones || [],
+    });
 
     for (const rawEmail of milestone.watcherEmails) {
       const email = rawEmail.toLowerCase();
@@ -191,3 +526,63 @@ export function startMilestoneEscalationSchedule(intervalMs = 24 * 60 * 60 * 100
 
   return intervalHandle;
 }
+
+/**
+ * Dispatches an immediate sentinel alert email to a milestone's watchers.
+ */
+export async function dispatchMilestoneWatcherAlert(milestoneId) {
+  const milestone = await prisma.taskMilestone.findUnique({
+    where: { id: milestoneId },
+    include: {
+      task: {
+        select: {
+          id: true,
+          title: true,
+          tenantId: true,
+          milestones: {
+            select: { id: true, title: true, order: true, status: true, dueDate: true },
+            orderBy: { order: 'asc' },
+          },
+        },
+      },
+    },
+  });
+  if (!milestone) throw { status: 404, message: 'Milestone not found' };
+  if (!milestone.watcherEmails || milestone.watcherEmails.length === 0) {
+    throw { status: 400, message: 'This milestone has no watcher emails configured' };
+  }
+
+  const { task } = milestone;
+  const dueStr = new Date(milestone.dueDate).toISOString().slice(0, 10);
+  const subject = `[Sentinel Alert] Station 0${milestone.order} "${milestone.title}" on "${task.title}" — Live Checkpoint Telemetry`;
+  const text = `Watcher Sentinel Live Dispatch\n\n`
+    + `Parent Task: "${task.title}"\n`
+    + `Station 0${milestone.order}: "${milestone.title}"\n`
+    + `Target Date: ${dueStr}\n\n`
+    + `Review in Mission Control: ${env.frontendOrigin || 'http://localhost:5173'}/uer/goals`;
+  const html = buildModernMilestoneEmailHtml({
+    milestone,
+    task,
+    allMilestones: task.milestones || [],
+    daysOverdue: 0,
+  });
+
+  const results = [];
+  for (const email of milestone.watcherEmails) {
+    const res = await sendMail({
+      to: email.toLowerCase(),
+      subject,
+      text,
+      html,
+      event: 'MILESTONE_SENTINEL_DISPATCH',
+    });
+    results.push({ email, ...res });
+  }
+
+  return { success: true, results, recipients: milestone.watcherEmails };
+}
+
+// Backwards compatibility alias
+export const sendMilestoneTestEmail = dispatchMilestoneWatcherAlert;
+
+

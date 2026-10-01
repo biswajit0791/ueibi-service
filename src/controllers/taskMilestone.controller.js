@@ -22,6 +22,7 @@ import { getCompanySettings, findDisallowedWatcherEmails } from '../services/com
 import {
   createMilestoneSchema, updateMilestoneSchema, MAX_MILESTONES_PER_TASK,
 } from '../validations/taskMilestone.schema.js';
+import { dispatchMilestoneWatcherAlert, sendMilestoneTestEmail } from '../services/milestoneEscalation.service.js';
 
 const MILESTONE_INCLUDE = {
   proposedBy: { select: { id: true, name: true } },
@@ -417,3 +418,204 @@ export async function listOverdueMilestones(req, res, next) {
     next(err);
   }
 }
+
+// ─── Helper for escaping XML in SVG strings ──────────────────────────────
+function xmlEscape(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+// ─── POST /api/tasks/:id/milestones/:mid/dispatch-alert ────────────────────
+export async function dispatchMilestoneAlertController(req, res, next) {
+  try {
+    const { id: taskId, mid: milestoneId } = req.params;
+    const task = await prisma.task.findUnique({ where: { id: taskId } });
+    if (!task || task.tenantId !== req.tenantId) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+
+    const result = await dispatchMilestoneWatcherAlert(milestoneId);
+    res.json(result);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+}
+
+// Backwards compatibility alias
+export const testMilestoneEscalation = dispatchMilestoneAlertController;
+
+// ─── GET /api/tasks/:id/milestones/:mid/live-status.svg ───────────────────
+// Dynamic live telemetry image stream for email clients. Returns real-time SVG status
+// with zero cache headers so every time the email is opened, it renders live!
+export async function getMilestoneLiveStatusSvg(req, res, next) {
+  try {
+    const { id: taskId, mid: milestoneId } = req.params;
+    const milestone = await prisma.taskMilestone.findUnique({
+      where: { id: milestoneId },
+      include: {
+        task: {
+          select: {
+            id: true,
+            title: true,
+            milestones: {
+              select: { id: true, order: true, title: true, status: true, dueDate: true },
+              orderBy: { order: 'asc' },
+            },
+          },
+        },
+      },
+    });
+
+    res.setHeader('Content-Type', 'image/svg+xml');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0, post-check=0, pre-check=0');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+
+    if (!milestone) {
+      return res.send(`<svg xmlns="http://www.w3.org/2000/svg" width="540" height="124" viewBox="0 0 540 124">
+        <rect width="540" height="124" rx="14" fill="#0f172a" stroke="#334155" stroke-width="1.5"/>
+        <text x="270" y="65" text-anchor="middle" font-family="-apple-system, sans-serif" font-size="13" font-weight="700" fill="#94a3b8">Checkpoint Station Not Found</text>
+      </svg>`);
+    }
+
+    const now = new Date();
+    const isDone = milestone.status === 'DONE';
+    const isOverdue = !isDone && milestone.dueDate && new Date(milestone.dueDate) < now;
+
+    let statusText = 'ACTIVE IN ORBIT (ON TRACK)';
+    let statusColor = '#6366f1';
+    let statusBg = '#1e1b4b';
+    let iconChar = '●';
+
+    if (isDone) {
+      statusText = 'COMPLETED &amp; SECURED (100%)';
+      statusColor = '#10b981';
+      statusBg = '#064e3b';
+      iconChar = '✓';
+    } else if (isOverdue) {
+      const MS_PER_DAY = 24 * 60 * 60 * 1000;
+      const daysOverdue = Math.max(1, Math.floor((now.getTime() - new Date(milestone.dueDate).getTime()) / MS_PER_DAY));
+      statusText = `OVERDUE (${daysOverdue} DAY${daysOverdue > 1 ? 'S' : ''} LATE)`;
+      statusColor = '#ef4444';
+      statusBg = '#450a0a';
+      iconChar = '!';
+    } else if (milestone.status === 'PENDING_APPROVAL' || milestone.status === 'RESCHEDULE_REQUESTED') {
+      statusText = 'AWAITING MANAGER APPROVAL';
+      statusColor = '#f59e0b';
+      statusBg = '#451a03';
+      iconChar = '⏳';
+    }
+
+    const allMilestones = milestone.task?.milestones || [];
+    const totalMilestones = allMilestones.length || 4;
+    const completedCount = allMilestones.filter((m) => m.status === 'DONE').length;
+    const completionPercent = Math.round((completedCount / (allMilestones.length || 1)) * 100);
+
+    const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' });
+
+    // 4 orbital station slots
+    const slotX = [68, 202, 336, 470];
+    const stations = [1, 2, 3, 4].map((stepNum, idx) => {
+      const found = allMilestones.find((m) => m.order === stepNum);
+      const isTarget = found?.id === milestone.id;
+      const stationDone = found?.status === 'DONE';
+      const stationOverdue = !stationDone && found?.dueDate && new Date(found.dueDate) < now;
+
+      let dotFill = '#1e293b';
+      let dotStroke = '#334155';
+      let labelColor = '#64748b';
+      let char = `0${stepNum}`;
+      let stateBadge = found ? 'STANDBY' : 'EMPTY';
+
+      if (stationDone) {
+        dotFill = '#10b981';
+        dotStroke = '#10b981';
+        labelColor = '#10b981';
+        char = '✓';
+        stateBadge = 'SECURED';
+      } else if (stationOverdue) {
+        dotFill = '#ef4444';
+        dotStroke = '#ef4444';
+        labelColor = '#ef4444';
+        char = '!';
+        stateBadge = 'OVERDUE';
+      } else if (isTarget) {
+        dotFill = statusColor;
+        dotStroke = '#a5b4fc';
+        labelColor = '#818cf8';
+        char = `0${stepNum}`;
+        stateBadge = isDone ? 'SECURED' : 'IN ORBIT';
+      }
+
+      const title = found ? found.title : `Station 0${stepNum}`;
+      const shortTitle = title.length > 15 ? title.slice(0, 14) + '…' : title;
+
+      return {
+        x: slotX[idx],
+        dotFill,
+        dotStroke,
+        labelColor,
+        char,
+        stateBadge,
+        title: xmlEscape(shortTitle),
+      };
+    });
+
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="540" height="124" viewBox="0 0 540 124">
+      <defs>
+        <linearGradient id="cyberBorder" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="${statusColor}" stop-opacity="0.9"/>
+          <stop offset="50%" stop-color="#334155" stop-opacity="0.4"/>
+          <stop offset="100%" stop-color="${statusColor}" stop-opacity="0.2"/>
+        </linearGradient>
+        <linearGradient id="pulseGlow" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="#6366f1"/>
+          <stop offset="100%" stop-color="${statusColor}"/>
+        </linearGradient>
+      </defs>
+
+      <!-- Main Tactical Hull Container -->
+      <rect width="540" height="124" rx="14" fill="#0b0f19" stroke="url(#cyberBorder)" stroke-width="1.5"/>
+
+      <!-- Top Row: Radar Beacon, Title, Status & Live UTC Pill -->
+      <circle cx="30" cy="28" r="14" fill="${statusBg}" stroke="${statusColor}" stroke-width="2"/>
+      <text x="30" y="33" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" font-weight="900" fill="${statusColor}">${iconChar}</text>
+
+      <text x="54" y="21" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="9.5" font-weight="800" fill="#818cf8" letter-spacing="1">LIVE TELEMETRY // STATION 0${milestone.order} OF 0${totalMilestones}</text>
+      <text x="54" y="39" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="14" font-weight="900" fill="#f8fafc" letter-spacing="0.3">${statusText}</text>
+
+      <!-- Live Sync Pill -->
+      <rect x="382" y="16" width="138" height="24" rx="12" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+      <circle cx="396" cy="28" r="3.5" fill="${statusColor}"/>
+      <text x="406" y="32" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="9.5" font-weight="800" fill="#cbd5e1" letter-spacing="0.5">LIVE · ${timeStr} UTC</text>
+
+      <!-- Subtle Divider Line -->
+      <line x1="20" y1="52" x2="520" y2="52" stroke="#1f293d" stroke-width="1"/>
+
+      <!-- Connecting Orbit Track Bar -->
+      <line x1="${slotX[0]}" y1="74" x2="${slotX[3]}" y2="74" stroke="#1e293b" stroke-width="3" stroke-linecap="round"/>
+      <line x1="${slotX[0]}" y1="74" x2="${slotX[0] + (slotX[3] - slotX[0]) * (completionPercent / 100)}" y2="74" stroke="url(#pulseGlow)" stroke-width="3" stroke-linecap="round"/>
+
+      <!-- 4 Orbital Station Nodes -->
+      ${stations.map((s) => `
+        <g>
+          <circle cx="${s.x}" cy="74" r="11" fill="${s.dotFill}" stroke="${s.dotStroke}" stroke-width="2"/>
+          <text x="${s.x}" y="78" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="9.5" font-weight="900" fill="#ffffff">${s.char}</text>
+          <text x="${s.x}" y="98" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="9.5" font-weight="700" fill="#e2e8f0">${s.title}</text>
+          <text x="${s.x}" y="111" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="8.5" font-weight="800" fill="${s.labelColor}" letter-spacing="0.5">${s.stateBadge}</text>
+        </g>
+      `).join('')}
+    </svg>`;
+
+    return res.send(svg);
+  } catch (err) {
+    next(err);
+  }
+}
+
