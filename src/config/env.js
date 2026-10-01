@@ -15,7 +15,7 @@ export const env = {
   databaseUrl: process.env.DATABASE_URL,
   corsOrigin: process.env.CORS_ORIGIN || "http://localhost:5173",
   frontendOrigin: process.env.FRONTEND_ORIGIN || "http://localhost:5173",
-  backendUrl: process.env.BACKEND_URL || process.env.API_URL || `http://localhost:${process.env.PORT || 4000}`,
+  backendUrl: (process.env.BACKEND_URL || process.env.API_URL || `http://localhost:${process.env.PORT || 4000}`).replace(/\/+$/, ''),
 
   // Email (Zoho SMTP / SendGrid / Console)
   mailTransport: process.env.MAIL_TRANSPORT || "smtp",
