@@ -440,11 +440,12 @@ export class GoalService {
     // approval step would be one they could click for themselves — which is
     // the same as having no approval step at all.
     //
-    // A manager or elevated role is not caught by this: their own goals are
-    // created as DRAFT and never reach PENDING_APPROVAL.
+    // A regular employee proposing their own goal is prevented from self-approving.
+    // Elevated roles (HR/Admin/Super Admin/CMD) and Managers activating team goals
+    // or goals they created/manage are authorized.
     const isOwnGoal = goal.employeeId === user.id
       || goal.assignments?.some((a) => a.employeeId === user.id);
-    if (isOwnGoal) {
+    if (isOwnGoal && !isElevated && !(isManagerRole && (isCreator || isAssignedBy || (goal.assignments && goal.assignments.length > 1)))) {
       throw {
         status: 403,
         code: 'SELF_APPROVAL_FORBIDDEN',
