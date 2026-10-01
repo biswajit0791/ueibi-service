@@ -22,7 +22,17 @@ import { goalService } from './goal.service.js';
  * @throws {{status:number,message:string}}
  */
 export async function loadTaskForUser(taskId, user, tenantId) {
-  const task = await prisma.task.findFirst({ where: { id: taskId, tenantId } });
+  let task = await prisma.task.findFirst({ where: { id: taskId, tenantId } });
+  if (!task && typeof taskId === 'string' && taskId.startsWith('t_')) {
+    const parts = taskId.split('_');
+    const possibleEmpId = parts[parts.length - 1];
+    if (possibleEmpId) {
+      task = await prisma.task.findFirst({
+        where: { tenantId, employeeId: possibleEmpId },
+        orderBy: { createdAt: 'desc' },
+      });
+    }
+  }
   if (!task) {
     throw { status: 404, message: 'Task not found' };
   }
