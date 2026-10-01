@@ -206,7 +206,7 @@ function buildModernMilestoneEmailHtml({ milestone, task, allMilestones = [], da
                         <td valign="middle">
                           <table role="presentation" cellspacing="0" cellpadding="0" border="0">
                             <tr>
-                              <td style="width: 32px; height: 32px; border-radius: 50%; background-color: ${themeColor}22; border: 1.5px solid ${themeColor}; text-align: center; line-height: 32px; color: ${themeColor}; font-size: 14px; font-weight: 900;">
+                              <td style="width: 32px; height: 32px; border-radius: 50%; background-color: #1e293b; border: 2px solid ${themeColor}; text-align: center; line-height: 32px; color: ${themeColor}; font-size: 14px; font-weight: 900;">
                                 ${statusIcon}
                               </td>
                               <td style="padding-left: 12px;">
