@@ -1412,9 +1412,9 @@ model ReviewScore {
   review       PerformanceReview  @relation(fields: [reviewId], references: [id], onDelete: Cascade)
   parameterId  String
   parameter    AppraisalParameter @relation(fields: [parameterId], references: [id], onDelete: Cascade)
-  selfScore    Int?
-  managerScore Int?
-  hrScore      Int?
+  selfScore    Float?
+  managerScore Float?
+  hrScore      Float?
   createdAt    DateTime           @default(now())
   updatedAt    DateTime           @updatedAt
 

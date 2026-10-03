@@ -925,7 +925,7 @@ export async function updateSelfAssessment(req, res, next) {
     if (Array.isArray(scores)) {
       for (const item of scores) {
         if (item.parameterId && item.selfScore !== undefined) {
-          const scoreVal = parseInt(item.selfScore, 10);
+          const scoreVal = parseFloat(item.selfScore);
           totalScore += scoreVal;
           scoreCount++;
 
@@ -1434,7 +1434,7 @@ export async function updateManagerReview(req, res, next) {
     if (Array.isArray(scores)) {
       for (const item of scores) {
         if (item.parameterId && (item.managerScore !== undefined || item.score !== undefined)) {
-          const scoreVal = parseInt(item.managerScore ?? item.score, 10);
+          const scoreVal = parseFloat(item.managerScore ?? item.score);
           totalScore += scoreVal;
           scoreCount++;
 
@@ -2041,7 +2041,7 @@ export async function updateHrAuditReview(req, res, next) {
     if (Array.isArray(scores)) {
       for (const item of scores) {
         if (item.parameterId && item.hrScore !== undefined) {
-          const scoreVal = parseInt(item.hrScore, 10);
+          const scoreVal = parseFloat(item.hrScore);
           await prisma.reviewScore.upsert({
             where: {
               reviewId_parameterId: {
@@ -2384,7 +2384,7 @@ export async function submitSelfRating(req, res, next) {
     if (Array.isArray(scores)) {
       for (const item of scores) {
         if (item.parameterId && (item.selfScore !== undefined || item.score !== undefined)) {
-          const scoreVal = parseInt(item.selfScore ?? item.score, 10);
+          const scoreVal = parseFloat(item.selfScore ?? item.score);
           totalScore += scoreVal;
           scoreCount++;
 

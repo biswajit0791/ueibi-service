@@ -63,7 +63,7 @@ export const selfAssessmentSchema = z.object({
     .array(
       z.object({
         parameterId: z.string().min(1, 'Parameter ID is required'),
-        selfScore:   z.number().int().min(1).max(5),
+        selfScore:   z.number().min(1).max(5),
       })
     )
     .optional(),
@@ -85,8 +85,8 @@ export const submitSelfRatingSchema = z.object({
     .array(
       z.object({
         parameterId: z.string().min(1, 'Parameter ID is required'),
-        selfScore:   z.number().int().min(1).max(5).optional(),
-        score:       z.number().int().min(1).max(5).optional(),
+        selfScore:   z.number().min(1).max(5).optional(),
+        score:       z.number().min(1).max(5).optional(),
       })
     )
     .optional(),
@@ -113,8 +113,8 @@ export const managerReviewSchema = z.object({
     .array(
       z.object({
         parameterId:  z.string().min(1, 'Parameter ID is required'),
-        managerScore: z.number().int().min(1).max(5).optional(),
-        score:        z.number().int().min(1).max(5).optional(),
+        managerScore: z.number().min(1).max(5).optional(),
+        score:        z.number().min(1).max(5).optional(),
       })
     )
     .optional(),
@@ -143,7 +143,7 @@ export const hrAuditSchema = z.object({
     .array(
       z.object({
         parameterId: z.string().min(1, 'Parameter ID is required'),
-        hrScore:     z.number().int().min(1).max(5),
+        hrScore:     z.number().min(1).max(5),
       })
     )
     .optional(),
