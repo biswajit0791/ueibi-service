@@ -315,4 +315,5 @@ export const hrAuditQuerySchema = z.object({
   cycleId: z.string().max(100).optional(),
   year: z.coerce.number().int().min(2000).max(2100).optional(),
   month: z.string().max(50).optional(),
+  frequency: z.enum(['ANNUAL', 'QUARTERLY', 'MONTHLY']).optional(),
 });

@@ -7,15 +7,25 @@ import { ELEVATED_ROLES, HR_ROLES, MANAGER_OR_ELEVATED_ROLES, hasRole } from '..
 
 /**
  * True when `user` may act as the reviewing manager for `employee`:
- * an elevated role, or a manager anywhere up the employee's reporting chain.
- * (The old code also treated "employee has no manager" as "any MANAGER may
- * review" — that fallback is deliberately gone.)
+ * - Elevated roles (HR, SUPER_ADMIN, CMD, ADMIN) can review any employee in their tenant.
+ * - Cannot review self.
+ * - Direct manager (employee.managerId === user.id) can review.
+ * - Downline reporting hierarchy manager (goalService.isSubordinate) can review.
+ * - Unassigned managerId fallback: If employee has no explicit managerId assigned,
+ *   any tenant MANAGER can review (consistent with buildTeamScopeWhere).
+ * - Departmental manager fallback: Manager of the same department can review.
  */
 export async function canManagerReview(user, employee, tenantId) {
   if (hasRole(user.role, ELEVATED_ROLES)) return true;
   if (!employee || employee.id === user.id) return false;
+  if (employee.tenantId && employee.tenantId !== tenantId) return false;
   if (employee.managerId === user.id) return true;
-  return goalService.isSubordinate(user.id, employee.id, tenantId);
+  if (await goalService.isSubordinate(user.id, employee.id, tenantId)) return true;
+  if (!employee.managerId && hasRole(user.role, MANAGER_OR_ELEVATED_ROLES)) return true;
+  if (user.department && employee.department &&
+      user.department.toLowerCase() === employee.department.toLowerCase() &&
+      hasRole(user.role, MANAGER_OR_ELEVATED_ROLES)) return true;
+  return false;
 }
 
 // Self-assessment can no longer be edited once the manager (or HR) has acted.
@@ -1975,8 +1985,13 @@ export async function getHrAuditReview(req, res, next) {
     if (!parsedQuery.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
     }
-    const { cycleId: cycleIdQuery, year: yearQuery, month: monthQuery } = parsedQuery.data;
-    const activeCycle = await ensureActiveCycle(req.tenantId, { cycleId: cycleIdQuery, year: yearQuery, month: monthQuery });
+    const { cycleId: cycleIdQuery, year: yearQuery, month: monthQuery, frequency: freqQuery } = parsedQuery.data;
+    const activeCycle = await ensureActiveCycle(req.tenantId, {
+      cycleId: cycleIdQuery,
+      frequency: freqQuery || 'ANNUAL',
+      year: yearQuery,
+      month: monthQuery,
+    });
     const cycleId = cycleIdQuery || activeCycle.id;
 
     const employee = await prisma.tenantUser.findFirst({
