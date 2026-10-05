@@ -89,7 +89,7 @@ export class LeaveService {
   /**
    * Checks whether the employee has an active overlapping request.
    */
-  async checkOverlap({ tenantId, employeeId, startDate, endDate, excludeId = null }) {
+  async checkOverlap({ tenantId, employeeId, startDate, endDate, excludeId = null, dayType = 'FULL' }) {
     const start = new Date(startDate);
     const end = new Date(endDate);
 
@@ -104,16 +104,42 @@ export class LeaveService {
       },
     });
 
+    const toDateKey = (val) => {
+      if (!val) return '';
+      if (typeof val === 'string') return val.split('T')[0];
+      const y = val.getUTCFullYear();
+      const m = String(val.getUTCMonth() + 1).padStart(2, '0');
+      const d = String(val.getUTCDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    };
+
+    const targetStartStr = toDateKey(start);
+    const targetEndStr = toDateKey(end);
+
     for (const req of existing) {
       const reqStart = new Date(req.startDate);
       const reqEnd = new Date(req.endDate);
+      const reqStartStr = toDateKey(reqStart);
+      const reqEndStr = toDateKey(reqEnd);
+
       if (start <= reqEnd && end >= reqStart) {
-        const formattedStart = reqStart.toISOString().split('T')[0];
-        const formattedEnd = reqEnd.toISOString().split('T')[0];
+        // If it's a single day overlap, check if both are complementary half-days (e.g. FIRST_HALF + SECOND_HALF)
+        if (targetStartStr === targetEndStr && reqStartStr === reqEndStr && targetStartStr === reqStartStr) {
+          const reqDayType = req.dayType || 'FULL';
+          const newDayType = dayType || 'FULL';
+          if (
+            (reqDayType === 'FIRST_HALF' && newDayType === 'SECOND_HALF') ||
+            (reqDayType === 'SECOND_HALF' && newDayType === 'FIRST_HALF')
+          ) {
+            continue; // Complementary half days do not collide
+          }
+        }
+
         const typeName = req.requestType === 'WFH' ? 'Work From Home' : (req.leaveType?.name || req.type || 'Leave');
+        const halfInfo = req.dayType && req.dayType !== 'FULL' ? ` (${req.dayType === 'FIRST_HALF' ? '1st Half' : '2nd Half'})` : '';
         throw {
           status: 400,
-          message: `You already have an active ${typeName} request from ${formattedStart} to ${formattedEnd} overlapping with this period.`,
+          message: `You already have an active ${typeName}${halfInfo} request from ${reqStartStr} to ${reqEndStr} overlapping with this period. Please choose different dates or cancel the conflicting request.`,
         };
       }
     }
@@ -674,7 +700,7 @@ export class LeaveService {
     }
 
     // 1. Overlapping check
-    await this.checkOverlap({ tenantId, employeeId, startDate, endDate });
+    await this.checkOverlap({ tenantId, employeeId, startDate, endDate, dayType });
 
     const currentYear = new Date(startDate).getFullYear();
     const balances = await this.getBalances({ tenantId, employeeId, year: currentYear });
@@ -780,7 +806,7 @@ export class LeaveService {
       }
     }
 
-    // Two-level approval setup
+    // Two-level approval setup: every request starts with both Manager and HR pending
     const initialManagerStatus = 'Pending';
     const initialHrStatus = 'Pending';
 
@@ -923,11 +949,15 @@ export class LeaveService {
     }
 
     const isDirectManager = raw.employee.managerId === managerUser.id;
-    const isElevated = ['SUPER_ADMIN', 'HR', 'ADMIN', 'LEADERSHIP', 'OWNER', 'CMD', 'DIRECTOR'].includes(managerUser.role);
-    const isFallbackManager = !raw.employee.managerId && managerUser.role === 'MANAGER';
+    const isElevated = ['SUPER_ADMIN', 'HR', 'ADMIN', 'LEADERSHIP', 'OWNER', 'CMD', 'DIRECTOR'].includes(String(managerUser.role || '').toUpperCase());
+    const isFallbackManager = !raw.employee.managerId && String(managerUser.role || '').toUpperCase() === 'MANAGER';
 
     if (!isDirectManager && !isElevated && !isFallbackManager) {
       throw { status: 403, message: 'Access forbidden: you are not the assigned manager for this employee' };
+    }
+
+    if (isElevated && raw.hrStatus === 'Pending' && (raw.managerStatus === 'Approved' || !isDirectManager)) {
+      return this.hrAction({ tenantId, requestId, hrUser: managerUser, action, comment, req });
     }
 
     if (raw.status !== 'PENDING' || raw.managerStatus === 'Approved') {
@@ -937,7 +967,7 @@ export class LeaveService {
     const isApprove = action === 'APPROVE';
     const newManagerStatus = isApprove ? 'Approved' : 'Rejected';
     const newOverallStatus = isApprove ? 'PENDING' : 'REJECTED';
-    const newHrStatus = isApprove ? 'Pending' : 'Not Required';
+    const newHrStatus = isApprove ? 'Pending' : 'Rejected';
     const currentYear = new Date(raw.startDate).getFullYear();
 
     const updated = await prisma.$transaction(async (tx) => {
@@ -1045,7 +1075,7 @@ export class LeaveService {
       throw { status: 404, message: 'Leave request not found' };
     }
 
-    const isHRElevated = ['HR', 'SUPER_ADMIN', 'ADMIN', 'LEADERSHIP', 'OWNER', 'CMD', 'DIRECTOR'].includes(hrUser.role);
+    const isHRElevated = ['HR', 'SUPER_ADMIN', 'ADMIN', 'LEADERSHIP', 'OWNER', 'CMD', 'DIRECTOR'].includes(String(hrUser?.role || '').toUpperCase());
     if (!isHRElevated) {
       throw { status: 403, message: 'Access forbidden: only HR or Administrators can perform final approval' };
     }

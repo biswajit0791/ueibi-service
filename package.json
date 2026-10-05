@@ -21,7 +21,10 @@
     "seed:usifdn": "node seed-usifdn.js",
     "clean-usifdn": "node clean-usifdn.js",
     "clear-db": "node clear-db.js",
-    "seed-appraisal": "node prisma/seed-appraisal.js",
+    "seed:tasks-goals": "node seeddata/seedTasksAndGoals.js",
+    "seed:tasks-goals:all": "node seeddata/seedTasksAndGoals.js --all",
+    "seed:appraisals": "node seeddata/seedAppraisalCycles.js",
+    "seed:appraisals:all": "node seeddata/seedAppraisalCycles.js --all",
     "check-users": "node check-users.js",
     "test:appraisal": "node test-appraisal.js"
   },
