@@ -8,7 +8,7 @@ import { DISALLOWED_EXTENSIONS } from '../services/storage/storage.service.js';
 const router = Router();
 
 // Ensure uploads folder exists
-const uploadDir = './uploads';
+const uploadDir = path.resolve(process.env.UPLOAD_DIR || './uploads');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
@@ -33,7 +33,7 @@ const storage = multer.diskStorage({
 // previously never applied here at all.
 const upload = multer({
   storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB limit
   fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
     if (DISALLOWED_EXTENSIONS.has(ext)) {
@@ -47,7 +47,7 @@ router.post('/upload', requireAuth, (req, res) => {
   upload.single('file')(req, res, (err) => {
     if (err) {
       if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(400).json({ error: 'File size exceeds 5MB limit' });
+        return res.status(400).json({ error: 'File size exceeds 25MB limit' });
       }
       return res.status(400).json({ error: err.message || 'Invalid file upload' });
     }
@@ -60,7 +60,10 @@ router.post('/upload', requireAuth, (req, res) => {
       message: 'File uploaded successfully',
       fileName: req.file.filename,
       originalName: req.file.originalname,
-      path: `/uploads/${req.file.filename}`
+      path: `/uploads/${req.file.filename}`,
+      fileUrl: `/uploads/${req.file.filename}`,
+      size: req.file.size,
+      mimeType: req.file.mimetype,
     });
   });
 });

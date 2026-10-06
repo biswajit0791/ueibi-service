@@ -52,7 +52,12 @@ app.set('trust proxy', true);
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
-const allowedOrigins = [env.corsOrigin, 'http://localhost:5174'].filter(Boolean);
+const defaultOrigins = ['http://localhost:5173', 'http://localhost:5174', 'https://ueibi.defigo.in'];
+const allowedOrigins = Array.from(new Set([
+  ...defaultOrigins,
+  env.corsOrigin,
+  env.frontendOrigin,
+].filter(Boolean)));
 app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(express.json());
 app.use(morgan(env.nodeEnv === 'development' ? 'dev' : 'combined'));
