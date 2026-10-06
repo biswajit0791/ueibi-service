@@ -956,46 +956,82 @@ export class LeaveService {
       throw { status: 403, message: 'Access forbidden: you are not the assigned manager for this employee' };
     }
 
-    if (isElevated && raw.hrStatus === 'Pending' && (raw.managerStatus === 'Approved' || !isDirectManager)) {
+    if (isElevated && (raw.hrStatus === 'Pending' || raw.status === 'APPROVED') && (raw.managerStatus === 'Approved' || !isDirectManager)) {
       return this.hrAction({ tenantId, requestId, hrUser: managerUser, action, comment, req });
     }
 
-    if (raw.status !== 'PENDING' || raw.managerStatus === 'Approved') {
-      throw { status: 400, message: `Manager approval cannot be updated: request is already ${raw.status}` };
+    const isApprove = action === 'APPROVE';
+    if (isApprove) {
+      if (raw.status !== 'PENDING' || raw.managerStatus === 'Approved') {
+        throw { status: 400, message: `Manager approval cannot be updated: request is already ${raw.status}` };
+      }
+    } else {
+      if (raw.status !== 'PENDING' && raw.status !== 'APPROVED') {
+        throw { status: 400, message: `Manager rejection cannot be processed: request is already ${raw.status}` };
+      }
     }
 
-    const isApprove = action === 'APPROVE';
+    const wasApproved = raw.status === 'APPROVED';
     const newManagerStatus = isApprove ? 'Approved' : 'Rejected';
     const newOverallStatus = isApprove ? 'PENDING' : 'REJECTED';
-    const newHrStatus = isApprove ? 'Pending' : 'Rejected';
+    const newHrStatus = isApprove ? 'Pending' : (wasApproved ? 'Revoked' : 'Rejected');
     const currentYear = new Date(raw.startDate).getFullYear();
 
     const updated = await prisma.$transaction(async (tx) => {
-      // If rejecting, restore the reserved pending days
+      // If rejecting
       if (!isApprove) {
-        if (raw.requestType === 'LEAVE' && raw.leaveTypeId) {
-          await tx.leaveBalance.updateMany({
-            where: {
-              tenantId,
-              employeeId: raw.employeeId,
-              leaveTypeId: raw.leaveTypeId,
-              year: currentYear,
-            },
-            data: {
-              pending: { decrement: raw.totalDays },
-            },
-          });
-        } else if (raw.requestType === 'WFH') {
-          await tx.wfhBalance.updateMany({
-            where: {
-              tenantId,
-              employeeId: raw.employeeId,
-              year: currentYear,
-            },
-            data: {
-              pending: { decrement: raw.totalDays },
-            },
-          });
+        if (wasApproved) {
+          // If already approved, deduct from 'used' so days are refunded to available balance
+          if (raw.requestType === 'LEAVE' && raw.leaveTypeId) {
+            await tx.leaveBalance.updateMany({
+              where: {
+                tenantId,
+                employeeId: raw.employeeId,
+                leaveTypeId: raw.leaveTypeId,
+                year: currentYear,
+              },
+              data: {
+                used: { decrement: raw.totalDays },
+              },
+            });
+          } else if (raw.requestType === 'WFH') {
+            await tx.wfhBalance.updateMany({
+              where: {
+                tenantId,
+                employeeId: raw.employeeId,
+                year: currentYear,
+              },
+              data: {
+                used: { decrement: raw.totalDays },
+              },
+            });
+          }
+        } else {
+          // Was pending: restore reserved pending days
+          if (raw.requestType === 'LEAVE' && raw.leaveTypeId) {
+            await tx.leaveBalance.updateMany({
+              where: {
+                tenantId,
+                employeeId: raw.employeeId,
+                leaveTypeId: raw.leaveTypeId,
+                year: currentYear,
+              },
+              data: {
+                pending: { decrement: raw.totalDays },
+              },
+            });
+          } else if (raw.requestType === 'WFH') {
+            await tx.wfhBalance.updateMany({
+              where: {
+                tenantId,
+                employeeId: raw.employeeId,
+                year: currentYear,
+              },
+              data: {
+                pending: { decrement: raw.totalDays },
+              },
+            });
+          }
         }
       }
 
@@ -1005,12 +1041,12 @@ export class LeaveService {
           status: newOverallStatus,
           managerStatus: newManagerStatus,
           managerId: managerUser.id,
-          managerComment: comment || (isApprove ? 'Approved by Manager' : 'Rejected by Manager'),
+          managerComment: comment || (isApprove ? 'Approved by Manager' : (wasApproved ? `Approval revoked by Manager (${managerUser.name})` : 'Rejected by Manager')),
           managerActedAt: new Date(),
           hrStatus: newHrStatus,
           rejectedById: isApprove ? null : managerUser.id,
           rejectedAt: isApprove ? null : new Date(),
-          rejectionReason: isApprove ? null : comment,
+          rejectionReason: isApprove ? null : (comment || (wasApproved ? 'Approval revoked by manager' : 'Rejected by manager')),
         },
         include: { employee: true, leaveType: true },
       });
@@ -1023,8 +1059,10 @@ export class LeaveService {
       actorUserId: managerUser.id,
       action: isApprove
         ? (raw.requestType === 'WFH' ? 'WFH_REQUEST_APPROVED' : 'LEAVE_REQUEST_APPROVED')
-        : (raw.requestType === 'WFH' ? 'WFH_REQUEST_REJECTED' : 'LEAVE_REQUEST_REJECTED'),
-      details: `Manager ${managerUser.name} ${newManagerStatus.toLowerCase()} ${raw.requestType} request of ${raw.employee.name}. Remarks: "${comment || 'None'}"`,
+        : (wasApproved ? (raw.requestType === 'WFH' ? 'WFH_APPROVAL_REVOKED' : 'LEAVE_APPROVAL_REVOKED') : (raw.requestType === 'WFH' ? 'WFH_REQUEST_REJECTED' : 'LEAVE_REQUEST_REJECTED')),
+      details: wasApproved
+        ? `Manager ${managerUser.name} revoked approved ${raw.requestType} request of ${raw.employee.name}. ${raw.totalDays} day(s) refunded to balance. Remarks: "${comment || 'None'}"`
+        : `Manager ${managerUser.name} ${newManagerStatus.toLowerCase()} ${raw.requestType} request of ${raw.employee.name}. Remarks: "${comment || 'None'}"`,
       req,
     });
 
@@ -1033,10 +1071,14 @@ export class LeaveService {
       tenantId,
       recipientId: raw.employeeId,
       type: 'leave',
-      title: `Manager ${newManagerStatus} your ${raw.leaveType?.name || raw.type} request`,
+      title: wasApproved
+        ? `Approval Revoked: Manager rejected your ${raw.leaveType?.name || raw.type} request`
+        : `Manager ${newManagerStatus} your ${raw.leaveType?.name || raw.type} request`,
       body: isApprove
         ? `Your manager ${managerUser.name} approved your request. It has now been forwarded for final HR sign-off.`
-        : `Your manager ${managerUser.name} rejected your request. Reason: "${comment || 'No comment provided'}"`,
+        : (wasApproved
+          ? `Your manager ${managerUser.name} revoked approval and rejected your request. ${raw.totalDays} day(s) have been refunded back to your balance. Reason: "${comment || 'No comment provided'}"`
+          : `Your manager ${managerUser.name} rejected your request. Reason: "${comment || 'No comment provided'}"`),
       entityType: 'leave_request',
       entityId: requestId,
     });
@@ -1080,11 +1122,18 @@ export class LeaveService {
       throw { status: 403, message: 'Access forbidden: only HR or Administrators can perform final approval' };
     }
 
-    if (raw.status !== 'PENDING' || raw.hrStatus !== 'Pending') {
-      throw { status: 400, message: `HR decision cannot be updated: request is already ${raw.status}` };
+    const isApprove = action === 'APPROVE';
+    if (isApprove) {
+      if (raw.status !== 'PENDING' || raw.hrStatus !== 'Pending') {
+        throw { status: 400, message: `HR decision cannot be updated: request is already ${raw.status}` };
+      }
+    } else {
+      if (raw.status !== 'PENDING' && raw.status !== 'APPROVED') {
+        throw { status: 400, message: `HR rejection cannot be processed: request is already ${raw.status}` };
+      }
     }
 
-    const isApprove = action === 'APPROVE';
+    const wasApproved = raw.status === 'APPROVED';
     const newHrStatus = isApprove ? 'Approved' : 'Rejected';
     const newOverallStatus = isApprove ? 'APPROVED' : 'REJECTED';
     const currentYear = new Date(raw.startDate).getFullYear();
@@ -1119,30 +1168,59 @@ export class LeaveService {
           });
         }
       } else {
-        // Rejecting: restore pending
-        if (raw.requestType === 'LEAVE' && raw.leaveTypeId) {
-          await tx.leaveBalance.updateMany({
-            where: {
-              tenantId,
-              employeeId: raw.employeeId,
-              leaveTypeId: raw.leaveTypeId,
-              year: currentYear,
-            },
-            data: {
-              pending: { decrement: raw.totalDays },
-            },
-          });
-        } else if (raw.requestType === 'WFH') {
-          await tx.wfhBalance.updateMany({
-            where: {
-              tenantId,
-              employeeId: raw.employeeId,
-              year: currentYear,
-            },
-            data: {
-              pending: { decrement: raw.totalDays },
-            },
-          });
+        // Rejecting:
+        if (wasApproved) {
+          // If already approved, deduct from 'used' so days are refunded to available balance
+          if (raw.requestType === 'LEAVE' && raw.leaveTypeId) {
+            await tx.leaveBalance.updateMany({
+              where: {
+                tenantId,
+                employeeId: raw.employeeId,
+                leaveTypeId: raw.leaveTypeId,
+                year: currentYear,
+              },
+              data: {
+                used: { decrement: raw.totalDays },
+              },
+            });
+          } else if (raw.requestType === 'WFH') {
+            await tx.wfhBalance.updateMany({
+              where: {
+                tenantId,
+                employeeId: raw.employeeId,
+                year: currentYear,
+              },
+              data: {
+                used: { decrement: raw.totalDays },
+              },
+            });
+          }
+        } else {
+          // Restore reserved pending days
+          if (raw.requestType === 'LEAVE' && raw.leaveTypeId) {
+            await tx.leaveBalance.updateMany({
+              where: {
+                tenantId,
+                employeeId: raw.employeeId,
+                leaveTypeId: raw.leaveTypeId,
+                year: currentYear,
+              },
+              data: {
+                pending: { decrement: raw.totalDays },
+              },
+            });
+          } else if (raw.requestType === 'WFH') {
+            await tx.wfhBalance.updateMany({
+              where: {
+                tenantId,
+                employeeId: raw.employeeId,
+                year: currentYear,
+              },
+              data: {
+                pending: { decrement: raw.totalDays },
+              },
+            });
+          }
         }
       }
 
@@ -1150,17 +1228,17 @@ export class LeaveService {
         where: { id: requestId },
         data: {
           status: newOverallStatus,
-          managerStatus: isApprove ? 'Approved' : (raw.managerStatus === 'Approved' ? 'Approved' : 'Rejected'),
+          managerStatus: isApprove ? 'Approved' : (wasApproved ? 'Revoked' : (raw.managerStatus === 'Approved' ? 'Approved' : 'Rejected')),
           managerComment: isApprove && raw.managerStatus !== 'Approved' ? (comment || `Approved by ${hrUser.name} (${hrUser.role})`) : raw.managerComment,
           managerActedAt: isApprove && raw.managerStatus !== 'Approved' ? new Date() : raw.managerActedAt,
           hrStatus: newHrStatus,
           hrId: hrUser.id,
-          hrComment: comment || (isApprove ? `Approved by ${hrUser.name} (${hrUser.role})` : `Rejected by ${hrUser.name} (${hrUser.role})`),
+          hrComment: comment || (isApprove ? `Approved by ${hrUser.name} (${hrUser.role})` : (wasApproved ? `Approval revoked by ${hrUser.name} (${hrUser.role})` : `Rejected by ${hrUser.name} (${hrUser.role})`)),
           hrActedAt: new Date(),
           approvedById: isApprove ? hrUser.id : null,
           rejectedById: isApprove ? null : hrUser.id,
           rejectedAt: isApprove ? null : new Date(),
-          rejectionReason: isApprove ? null : comment,
+          rejectionReason: isApprove ? null : (comment || (wasApproved ? 'Approval revoked by HR' : 'Rejected by HR')),
         },
         include: { employee: true, leaveType: true },
       });
@@ -1173,8 +1251,10 @@ export class LeaveService {
       actorUserId: hrUser.id,
       action: isApprove
         ? (raw.requestType === 'WFH' ? 'WFH_REQUEST_APPROVED' : 'LEAVE_REQUEST_APPROVED')
-        : (raw.requestType === 'WFH' ? 'WFH_REQUEST_REJECTED' : 'LEAVE_REQUEST_REJECTED'),
-      details: `${hrUser.name} (${hrUser.role}) signed off ${newHrStatus.toLowerCase()} for ${raw.employee.name}'s ${raw.requestType} request. Remarks: "${comment || 'None'}"`,
+        : (wasApproved ? (raw.requestType === 'WFH' ? 'WFH_APPROVAL_REVOKED' : 'LEAVE_APPROVAL_REVOKED') : (raw.requestType === 'WFH' ? 'WFH_REQUEST_REJECTED' : 'LEAVE_REQUEST_REJECTED')),
+      details: wasApproved
+        ? `${hrUser.name} (${hrUser.role}) revoked approval and rejected ${raw.requestType} for ${raw.employee.name}. ${raw.totalDays} day(s) refunded to balance. Remarks: "${comment || 'None'}"`
+        : `${hrUser.name} (${hrUser.role}) signed off ${newHrStatus.toLowerCase()} for ${raw.employee.name}'s ${raw.requestType} request. Remarks: "${comment || 'None'}"`,
       req,
     });
 
@@ -1183,10 +1263,14 @@ export class LeaveService {
       tenantId,
       recipientId: raw.employeeId,
       type: 'leave',
-      title: `Final Decision: Your ${raw.leaveType?.name || raw.type} is ${newOverallStatus}`,
+      title: wasApproved
+        ? `Approval Revoked: Your ${raw.leaveType?.name || raw.type} request was Rejected`
+        : `Final Decision: Your ${raw.leaveType?.name || raw.type} is ${newOverallStatus}`,
       body: isApprove
         ? `${hrUser.name} approved your ${raw.leaveType?.name || raw.type} request. Your balance has been updated.`
-        : `${hrUser.name} rejected your request. Remarks: "${comment || 'No comment provided'}"`,
+        : (wasApproved
+          ? `${hrUser.name} (${hrUser.role}) revoked the approval for your ${raw.leaveType?.name || raw.type} request (${raw.totalDays} day(s) refunded to balance). Reason: "${comment || 'No comment provided'}"`
+          : `${hrUser.name} rejected your request. Remarks: "${comment || 'No comment provided'}"`),
       entityType: 'leave_request',
       entityId: requestId,
     });
@@ -1211,11 +1295,18 @@ export class LeaveService {
       throw { status: 403, message: 'Access forbidden: only Administrators or HR can perform supreme approval' };
     }
 
-    if (raw.status !== 'PENDING') {
-      throw { status: 400, message: `Request cannot be updated: status is already ${raw.status}` };
+    const isApprove = action === 'APPROVE';
+    if (isApprove) {
+      if (raw.status !== 'PENDING') {
+        throw { status: 400, message: `Request cannot be updated: status is already ${raw.status}` };
+      }
+    } else {
+      if (raw.status !== 'PENDING' && raw.status !== 'APPROVED') {
+        throw { status: 400, message: `Administrator rejection cannot be processed: status is already ${raw.status}` };
+      }
     }
 
-    const isApprove = action === 'APPROVE';
+    const wasApproved = raw.status === 'APPROVED';
     const newStatus = isApprove ? 'APPROVED' : 'REJECTED';
     const newStageStatus = isApprove ? 'Approved' : 'Rejected';
     const currentYear = new Date(raw.startDate).getFullYear();
@@ -1250,30 +1341,59 @@ export class LeaveService {
           });
         }
       } else {
-        // Rejecting: restore pending
-        if (raw.requestType === 'LEAVE' && raw.leaveTypeId) {
-          await tx.leaveBalance.updateMany({
-            where: {
-              tenantId,
-              employeeId: raw.employeeId,
-              leaveTypeId: raw.leaveTypeId,
-              year: currentYear,
-            },
-            data: {
-              pending: { decrement: raw.totalDays },
-            },
-          });
-        } else if (raw.requestType === 'WFH') {
-          await tx.wfhBalance.updateMany({
-            where: {
-              tenantId,
-              employeeId: raw.employeeId,
-              year: currentYear,
-            },
-            data: {
-              pending: { decrement: raw.totalDays },
-            },
-          });
+        // Rejecting:
+        if (wasApproved) {
+          // If already approved, deduct from 'used' so days are refunded to available balance
+          if (raw.requestType === 'LEAVE' && raw.leaveTypeId) {
+            await tx.leaveBalance.updateMany({
+              where: {
+                tenantId,
+                employeeId: raw.employeeId,
+                leaveTypeId: raw.leaveTypeId,
+                year: currentYear,
+              },
+              data: {
+                used: { decrement: raw.totalDays },
+              },
+            });
+          } else if (raw.requestType === 'WFH') {
+            await tx.wfhBalance.updateMany({
+              where: {
+                tenantId,
+                employeeId: raw.employeeId,
+                year: currentYear,
+              },
+              data: {
+                used: { decrement: raw.totalDays },
+              },
+            });
+          }
+        } else {
+          // Restore reserved pending days
+          if (raw.requestType === 'LEAVE' && raw.leaveTypeId) {
+            await tx.leaveBalance.updateMany({
+              where: {
+                tenantId,
+                employeeId: raw.employeeId,
+                leaveTypeId: raw.leaveTypeId,
+                year: currentYear,
+              },
+              data: {
+                pending: { decrement: raw.totalDays },
+              },
+            });
+          } else if (raw.requestType === 'WFH') {
+            await tx.wfhBalance.updateMany({
+              where: {
+                tenantId,
+                employeeId: raw.employeeId,
+                year: currentYear,
+              },
+              data: {
+                pending: { decrement: raw.totalDays },
+              },
+            });
+          }
         }
       }
 
@@ -1281,18 +1401,18 @@ export class LeaveService {
         where: { id: requestId },
         data: {
           status: newStatus,
-          managerStatus: newStageStatus,
+          managerStatus: isApprove ? newStageStatus : (wasApproved ? 'Revoked' : newStageStatus),
           managerId: adminUser.id,
-          managerComment: comment || (isApprove ? `Approved by Administrator (${adminUser.name})` : `Rejected by Administrator (${adminUser.name})`),
+          managerComment: comment || (isApprove ? `Approved by Administrator (${adminUser.name})` : (wasApproved ? `Approval revoked by Administrator (${adminUser.name})` : `Rejected by Administrator (${adminUser.name})`)),
           managerActedAt: new Date(),
-          hrStatus: newStageStatus,
+          hrStatus: isApprove ? newStageStatus : (wasApproved ? 'Revoked' : newStageStatus),
           hrId: adminUser.id,
-          hrComment: comment || (isApprove ? `Approved by Administrator (${adminUser.name})` : `Rejected by Administrator (${adminUser.name})`),
+          hrComment: comment || (isApprove ? `Approved by Administrator (${adminUser.name})` : (wasApproved ? `Approval revoked by Administrator (${adminUser.name})` : `Rejected by Administrator (${adminUser.name})`)),
           hrActedAt: new Date(),
           approvedById: isApprove ? adminUser.id : null,
           rejectedById: isApprove ? null : adminUser.id,
           rejectedAt: isApprove ? null : new Date(),
-          rejectionReason: isApprove ? null : (comment || 'Rejected by Administrator'),
+          rejectionReason: isApprove ? null : (comment || (wasApproved ? 'Approval revoked by Administrator' : 'Rejected by Administrator')),
         },
         include: { employee: true, leaveType: true },
       });
@@ -1305,8 +1425,10 @@ export class LeaveService {
       actorUserId: adminUser.id,
       action: isApprove
         ? (raw.requestType === 'WFH' ? 'WFH_REQUEST_APPROVED' : 'LEAVE_REQUEST_APPROVED')
-        : (raw.requestType === 'WFH' ? 'WFH_REQUEST_REJECTED' : 'LEAVE_REQUEST_REJECTED'),
-      details: `Administrator ${adminUser.name} (${adminUser.role}) ${newStatus.toLowerCase()} ${raw.requestType} request for ${raw.employee.name}. Remarks: "${comment || 'None'}"`,
+        : (wasApproved ? (raw.requestType === 'WFH' ? 'WFH_APPROVAL_REVOKED' : 'LEAVE_APPROVAL_REVOKED') : (raw.requestType === 'WFH' ? 'WFH_REQUEST_REJECTED' : 'LEAVE_REQUEST_REJECTED')),
+      details: wasApproved
+        ? `Administrator ${adminUser.name} (${adminUser.role}) revoked approved ${raw.requestType} request for ${raw.employee.name}. ${raw.totalDays} day(s) refunded to balance. Remarks: "${comment || 'None'}"`
+        : `Administrator ${adminUser.name} (${adminUser.role}) ${newStatus.toLowerCase()} ${raw.requestType} request for ${raw.employee.name}. Remarks: "${comment || 'None'}"`,
       req,
     });
 
@@ -1314,10 +1436,14 @@ export class LeaveService {
       tenantId,
       recipientId: raw.employeeId,
       type: 'leave',
-      title: `Administrator Decision: Your ${raw.leaveType?.name || raw.type} is ${newStatus}`,
+      title: wasApproved
+        ? `Approval Revoked: Administrator rejected your ${raw.leaveType?.name || raw.type}`
+        : `Administrator Decision: Your ${raw.leaveType?.name || raw.type} is ${newStatus}`,
       body: isApprove
         ? `Administrator ${adminUser.name} approved your ${raw.leaveType?.name || raw.type} request. Your balance has been updated.`
-        : `Administrator ${adminUser.name} rejected your request. Remarks: "${comment || 'No comment provided'}"`,
+        : (wasApproved
+          ? `Administrator ${adminUser.name} revoked approval for your ${raw.leaveType?.name || raw.type} request (${raw.totalDays} day(s) refunded to balance). Remarks: "${comment || 'No comment provided'}"`
+          : `Administrator ${adminUser.name} rejected your request. Remarks: "${comment || 'No comment provided'}"`),
       entityType: 'leave_request',
       entityId: requestId,
     });

@@ -1835,7 +1835,17 @@ const options = {
         ApprovalActionRequest: {
           type: 'object',
           properties: {
-            comment: { type: 'string', example: 'Approved, take rest.' },
+            comment: { type: 'string', description: 'Action remarks / rejection reason', example: 'Approved for coverage' },
+            reason: { type: 'string', description: 'Alias for comment', example: 'Approved for coverage' },
+            action: { type: 'string', enum: ['APPROVE', 'REJECT'], example: 'APPROVE' },
+          },
+        },
+        RejectionActionRequest: {
+          type: 'object',
+          required: ['comment'],
+          properties: {
+            comment: { type: 'string', description: 'Mandatory reason for rejecting request or revoking approval', example: 'Critical project deliverable conflict' },
+            reason: { type: 'string', description: 'Alias for comment', example: 'Critical project deliverable conflict' },
           },
         },
         WfhPolicy: {
@@ -3576,7 +3586,8 @@ const options = {
       '/leaves/{id}/manager/reject': {
         patch: {
           tags: ['Leaves & WFH'],
-          summary: 'Manager rejects leave request',
+          summary: 'Manager rejects pending request or revokes approved leave',
+          description: 'Allows assigned manager to reject a pending leave request or revoke an already approved leave request. If revoking an approved request, deducted days are automatically refunded back to the employee available balance.',
           operationId: 'managerRejectLeave',
           security: [{ userCookie: [] }],
           parameters: [
@@ -3589,18 +3600,21 @@ const options = {
                 schema: {
                   type: 'object',
                   required: ['comment'],
-                  properties: { comment: { type: 'string', example: 'Project deadline conflict.' } },
+                  properties: {
+                    comment: { type: 'string', example: 'Project deadline conflict.' },
+                    reason: { type: 'string', example: 'Project deadline conflict.' },
+                  },
                 },
               },
             },
           },
           responses: {
             200: {
-              description: 'Manager rejection registered',
+              description: 'Manager rejection or revocation registered (balance refunded if approved)',
               content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveRequest' } } },
             },
-            400: { description: 'Missing rejection reason or invalid state' },
-            403: { description: 'Access forbidden: not reporting manager' },
+            400: { description: 'Missing rejection reason or request is already cancelled/rejected' },
+            403: { description: 'Access forbidden: not assigned manager' },
             404: { description: 'Request not found' },
           },
         },
@@ -3638,7 +3652,8 @@ const options = {
       '/leaves/{id}/hr/reject': {
         patch: {
           tags: ['Leaves & WFH'],
-          summary: 'HR rejects leave request',
+          summary: 'HR rejects pending request or revokes approved leave',
+          description: 'Allows HR or Administrators to reject a pending leave request or revoke an already approved leave request. If revoking an approved request, deducted days are automatically refunded back to the employee available balance.',
           operationId: 'hrRejectLeave',
           security: [{ userCookie: [] }],
           parameters: [
@@ -3651,17 +3666,20 @@ const options = {
                 schema: {
                   type: 'object',
                   required: ['comment'],
-                  properties: { comment: { type: 'string', example: 'Policy violation.' } },
+                  properties: {
+                    comment: { type: 'string', example: 'Policy violation or schedule conflict.' },
+                    reason: { type: 'string', example: 'Policy violation or schedule conflict.' },
+                  },
                 },
               },
             },
           },
           responses: {
             200: {
-              description: 'HR rejection registered',
+              description: 'HR rejection or revocation registered (balance refunded if approved)',
               content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveRequest' } } },
             },
-            400: { description: 'Missing rejection reason' },
+            400: { description: 'Missing rejection reason or request is already cancelled/rejected' },
             403: { description: 'Access forbidden: HR authorization required' },
             404: { description: 'Request not found' },
           },
@@ -6571,18 +6589,20 @@ const options = {
       '/leaves/{id}/admin/reject': {
         patch: {
           tags: ['Leaves & WFH'],
-          summary: 'Administrator Supreme Rejection (Rejects leave and releases pending balance)',
+          summary: 'Administrator Supreme Rejection / Revocation (Rejects pending or revokes approved leave, refunding balance)',
+          description: 'Allows Administrators or HR to reject a pending leave request or revoke an already approved leave request. Automatically refunds deducted days back to the employee available balance.',
           operationId: 'adminRejectLeave',
           security: [{ userCookie: [] }],
           parameters: [
-            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Leave Request ID' },
           ],
           requestBody: {
             required: true,
-            content: { 'application/json': { schema: { $ref: '#/components/schemas/ApprovalActionRequest' } } },
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/RejectionActionRequest' } } },
           },
           responses: {
             200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveRequestItem' } } } },
+            400: { description: 'Rejection reason is required or request is already cancelled/rejected' },
             403: { description: 'Forbidden — requires Administrator or HR role' },
           },
         },
@@ -6607,18 +6627,21 @@ const options = {
       '/leaves/{id}/manager/reject': {
         patch: {
           tags: ['Leaves & WFH'],
-          summary: 'Level 1: Manager rejection of employee leave/WFH (releases pending balance)',
+          summary: 'Level 1: Manager rejection or revocation of employee leave/WFH (refunds balance if approved)',
+          description: 'Allows assigned manager to reject a pending leave request or revoke an already approved leave. Restores pending quota (if pending) or refunds used quota (if approved).',
           operationId: 'managerRejectLeave',
           security: [{ userCookie: [] }],
           parameters: [
-            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Leave Request ID' },
           ],
           requestBody: {
             required: true,
-            content: { 'application/json': { schema: { $ref: '#/components/schemas/ApprovalActionRequest' } } },
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/RejectionActionRequest' } } },
           },
           responses: {
             200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveRequestItem' } } } },
+            400: { description: 'Rejection reason is required or request is already cancelled/rejected' },
+            403: { description: 'Forbidden — not assigned manager' },
           },
         },
       },
@@ -6642,18 +6665,21 @@ const options = {
       '/leaves/{id}/hr/reject': {
         patch: {
           tags: ['Leaves & WFH'],
-          summary: 'Level 2: Final HR rejection of employee leave/WFH (releases pending balance)',
+          summary: 'Level 2: Final HR rejection or revocation of employee leave/WFH (refunds balance if approved)',
+          description: 'Allows HR or Administrators to reject a pending leave request or revoke an already approved leave. Restores pending quota (if pending) or refunds used quota (if approved).',
           operationId: 'hrRejectLeave',
           security: [{ userCookie: [] }],
           parameters: [
-            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Leave Request ID' },
           ],
           requestBody: {
             required: true,
-            content: { 'application/json': { schema: { $ref: '#/components/schemas/ApprovalActionRequest' } } },
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/RejectionActionRequest' } } },
           },
           responses: {
             200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/LeaveRequestItem' } } } },
+            400: { description: 'Rejection reason is required or request is already cancelled/rejected' },
+            403: { description: 'Forbidden — requires HR or Administrator role' },
           },
         },
       },
