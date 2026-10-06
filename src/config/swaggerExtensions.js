@@ -2767,13 +2767,31 @@ export const swaggerExtensions = {
     '/leaves/{id}/reject': {
       patch: {
         tags: ['Leaves & WFH'],
-        summary: 'Direct manager/lead rejection of leave request',
+        summary: 'Reject pending request or revoke approved leave (Manager / HR / Admin)',
+        description: 'Rejects a pending leave request or revokes an already approved request. If revoking an approved request, deducted days are automatically refunded back to the employee available balance. A non-empty comment or reason is required.',
         operationId: 'rejectLeaveRequestLegacy',
         security: [{ userCookie: [] }, { bearerAuth: [] }],
-        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
-        requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { reason: { type: 'string', example: 'Critical sprint delivery window' } } } } } },
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Leave Request ID' }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['comment'],
+                properties: {
+                  comment: { type: 'string', example: 'Rescheduled due to critical delivery deadline' },
+                  reason: { type: 'string', example: 'Rescheduled due to critical delivery deadline' },
+                },
+              },
+            },
+          },
+        },
         responses: {
-          200: { description: 'Leave rejected' },
+          200: { description: 'Leave rejected or revoked successfully with balance refunded' },
+          400: { description: 'Validation failed: comment is required or request is already rejected/cancelled' },
+          403: { description: 'Access forbidden: unauthorized role or not assigned manager' },
+          404: { description: 'Leave request not found' },
         },
       },
     },

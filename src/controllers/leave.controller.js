@@ -322,17 +322,19 @@ export async function managerApproveLeave(req, res, next) {
       return res.status(400).json({ error: 'Invalid ID parameter', details: parsedParams.error.issues });
     }
     const { id } = parsedParams.data;
-    const validated = approvalActionSchema.safeParse({ action: 'APPROVE', comment: req.body?.comment });
+    const rawRemark = req.body?.comment ?? req.body?.reason;
+    const validated = approvalActionSchema.safeParse({ action: 'APPROVE', comment: rawRemark, reason: rawRemark });
     if (!validated.success) {
       return res.status(400).json({ error: validated.error.errors[0]?.message || 'Validation failed' });
     }
 
+    const comment = (validated.data.comment || validated.data.reason || '').trim();
     const updated = await leaveService.managerAction({
       tenantId: req.tenantId,
       requestId: id,
       managerUser: req.user,
       action: 'APPROVE',
-      comment: validated.data.comment,
+      comment: comment || undefined,
       req,
     });
 
@@ -350,17 +352,19 @@ export async function managerRejectLeave(req, res, next) {
       return res.status(400).json({ error: 'Invalid ID parameter', details: parsedParams.error.issues });
     }
     const { id } = parsedParams.data;
-    const validated = approvalActionSchema.safeParse({ action: 'REJECT', comment: req.body?.comment });
+    const rawRemark = req.body?.comment ?? req.body?.reason;
+    const validated = approvalActionSchema.safeParse({ action: 'REJECT', comment: rawRemark, reason: rawRemark });
     if (!validated.success) {
       return res.status(400).json({ error: validated.error.errors[0]?.message || 'Rejection reason is required' });
     }
 
+    const comment = (validated.data.comment || validated.data.reason || '').trim();
     const updated = await leaveService.managerAction({
       tenantId: req.tenantId,
       requestId: id,
       managerUser: req.user,
       action: 'REJECT',
-      comment: validated.data.comment,
+      comment,
       req,
     });
 
@@ -378,17 +382,19 @@ export async function hrApproveLeave(req, res, next) {
       return res.status(400).json({ error: 'Invalid ID parameter', details: parsedParams.error.issues });
     }
     const { id } = parsedParams.data;
-    const validated = approvalActionSchema.safeParse({ action: 'APPROVE', comment: req.body?.comment });
+    const rawRemark = req.body?.comment ?? req.body?.reason;
+    const validated = approvalActionSchema.safeParse({ action: 'APPROVE', comment: rawRemark, reason: rawRemark });
     if (!validated.success) {
       return res.status(400).json({ error: validated.error.errors[0]?.message || 'Validation failed' });
     }
 
+    const comment = (validated.data.comment || validated.data.reason || '').trim();
     const updated = await leaveService.hrAction({
       tenantId: req.tenantId,
       requestId: id,
       hrUser: req.user,
       action: 'APPROVE',
-      comment: validated.data.comment,
+      comment: comment || undefined,
       req,
     });
 
@@ -406,17 +412,19 @@ export async function hrRejectLeave(req, res, next) {
       return res.status(400).json({ error: 'Invalid ID parameter', details: parsedParams.error.issues });
     }
     const { id } = parsedParams.data;
-    const validated = approvalActionSchema.safeParse({ action: 'REJECT', comment: req.body?.comment });
+    const rawRemark = req.body?.comment ?? req.body?.reason;
+    const validated = approvalActionSchema.safeParse({ action: 'REJECT', comment: rawRemark, reason: rawRemark });
     if (!validated.success) {
       return res.status(400).json({ error: validated.error.errors[0]?.message || 'Rejection reason is required' });
     }
 
+    const comment = (validated.data.comment || validated.data.reason || '').trim();
     const updated = await leaveService.hrAction({
       tenantId: req.tenantId,
       requestId: id,
       hrUser: req.user,
       action: 'REJECT',
-      comment: validated.data.comment,
+      comment,
       req,
     });
 
@@ -434,17 +442,19 @@ export async function adminApproveLeave(req, res, next) {
       return res.status(400).json({ error: 'Invalid ID parameter', details: parsedParams.error.issues });
     }
     const { id } = parsedParams.data;
-    const validated = approvalActionSchema.safeParse({ action: 'APPROVE', comment: req.body?.comment });
+    const rawRemark = req.body?.comment ?? req.body?.reason;
+    const validated = approvalActionSchema.safeParse({ action: 'APPROVE', comment: rawRemark, reason: rawRemark });
     if (!validated.success) {
       return res.status(400).json({ error: validated.error.errors[0]?.message || 'Validation failed' });
     }
 
+    const comment = (validated.data.comment || validated.data.reason || '').trim();
     const updated = await leaveService.adminAction({
       tenantId: req.tenantId,
       requestId: id,
       adminUser: req.user,
       action: 'APPROVE',
-      comment: validated.data.comment,
+      comment: comment || undefined,
       req,
     });
 
@@ -462,17 +472,19 @@ export async function adminRejectLeave(req, res, next) {
       return res.status(400).json({ error: 'Invalid ID parameter', details: parsedParams.error.issues });
     }
     const { id } = parsedParams.data;
-    const validated = approvalActionSchema.safeParse({ action: 'REJECT', comment: req.body?.comment });
+    const rawRemark = req.body?.comment ?? req.body?.reason;
+    const validated = approvalActionSchema.safeParse({ action: 'REJECT', comment: rawRemark, reason: rawRemark });
     if (!validated.success) {
       return res.status(400).json({ error: validated.error.errors[0]?.message || 'Rejection reason is required' });
     }
 
+    const comment = (validated.data.comment || validated.data.reason || '').trim();
     const updated = await leaveService.adminAction({
       tenantId: req.tenantId,
       requestId: id,
       adminUser: req.user,
       action: 'REJECT',
-      comment: validated.data.comment,
+      comment,
       req,
     });
 
