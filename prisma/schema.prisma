@@ -2472,6 +2472,29 @@ model InvoiceSetting {
   @@map("invoice_settings")
 }
 
+/// Platform-wide branding configuration. Exactly one row.
+/// Managed by PLATFORM_OWNER via /platform/branding.
+model PlatformBranding {
+  id            String   @id @default("singleton")
+  platformName  String   @default("UEIBI")
+  tagline       String   @default("Enterprise Operations & Governance")
+  badgeText     String   @default("ENTERPRISE HUB")
+  logoUrl       String?
+  logoDarkUrl   String?
+  iconUrl       String?
+  faviconUrl    String?
+  primaryColor  String   @default("#4f46e5")
+  gradientStart String   @default("#4f46e5")
+  gradientEnd   String   @default("#3b82f6")
+  copyrightText String   @default("UEIBI Platform Inc. All rights reserved.")
+  updatedById   String?
+  updatedAt     DateTime @updatedAt
+  createdAt     DateTime @default(now())
+
+  @@map("platform_branding")
+}
+
+
 model LicenseRequest {
   id              String         @id @default(cuid())
   tenantId        String
