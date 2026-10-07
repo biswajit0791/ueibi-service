@@ -24,10 +24,20 @@ import {
   updatePlatformEmployeeVerification,
   submitPlatformEmployeeVerificationToHr,
 } from '../controllers/platform.controller.js';
+import {
+  getBranding,
+  updateBranding,
+  resetBranding,
+} from '../controllers/platformBranding.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requirePlatformOwner } from '../middleware/rbac.js';
 
 const router = Router();
+
+// Platform Branding: GET is public so Login & Auth pages load the brand before login
+router.get('/platform/branding', getBranding);
+router.put('/platform/branding', requireAuth, requirePlatformOwner, updateBranding);
+router.post('/platform/branding/reset', requireAuth, requirePlatformOwner, resetBranding);
 
 // Note the absence of requireTenant: these handlers read ACROSS tenants by
 // design, and requireTenant would pin them to the platform's own tenant row.
