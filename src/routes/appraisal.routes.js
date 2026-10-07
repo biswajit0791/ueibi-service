@@ -84,8 +84,8 @@ router.get('/peer-feedback/received-by-me', requireAuth, requireTenant, getRecei
 router.get('/cmd/peer-feedback/:employeeId', requireAuth, requireTenant, authorize('CMD', 'SUPER_ADMIN'), getCmdPeerFeedbackForEmployee);
 
 // ── Phase 7: HR Audit & Hike ─────────────────────────────────────────────────
-router.get('/performance-reviews/:employeeId/hr-audit', requireAuth, requireTenant, authorize('HR', 'SUPER_ADMIN', 'CMD'), getHrAuditReview);
-router.patch('/performance-reviews/:id/hr-audit', requireAuth, requireTenant, authorize('HR', 'SUPER_ADMIN'), updateHrAuditReview);
+router.get('/performance-reviews/:employeeId/hr-audit', requireAuth, requireTenant, authorize('HR', 'SUPER_ADMIN', 'CMD', 'ADMIN'), getHrAuditReview);
+router.patch('/performance-reviews/:id/hr-audit', requireAuth, requireTenant, authorize('HR', 'SUPER_ADMIN', 'CMD', 'ADMIN'), updateHrAuditReview);
 
 // ── Phase 9: Reviews Dashboard (/uer/reviews) ────────────────────────────────
 router.get('/performance-reviews/mine/all', requireAuth, requireTenant, getMyAllReviews);

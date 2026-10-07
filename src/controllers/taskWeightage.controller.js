@@ -18,7 +18,7 @@ import {
 } from '../services/taskWeightage.service.js';
 import { logTaskAudit } from './taskActivity.controller.js';
 import { emitToTenant } from '../lib/socket.js';
-import { ELEVATED_ROLES, hasRole } from '../lib/roles.js';
+import { ELEVATED_ROLES, SUPER_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
 import { finalWeightSchema, teamWeightageQuerySchema, taskIdParamSchema } from '../validations/task.schema.js';
 
 // ─── GET /api/team/:id/weightage ────────────────────────────────────────────
@@ -96,8 +96,21 @@ export async function setTaskFinalWeight(req, res, next) {
     if (!isElevated && !isManager) {
       return res.status(403).json({ error: 'Only a manager, HR or Admin can set the final weightage' });
     }
-    if (task.employeeId === req.user.id && !isElevated) {
+    if (task.employeeId === req.user.id) {
       return res.status(403).json({ error: 'You cannot set the final weightage on your own task' });
+    }
+
+    // HR and Finance personnel report to Executive Leadership: their final weightage
+    // is governed strictly by Admin, Super Admin, or CMD.
+    const targetUser = await prisma.tenantUser.findUnique({
+      where: { id: task.employeeId },
+      select: { role: true },
+    });
+    const targetRole = String(targetUser?.role || '').toUpperCase();
+    if ((targetRole === 'HR' || targetRole === 'FINANCE') && !hasRole(req.user.role, SUPER_ELEVATED_ROLES)) {
+      return res.status(403).json({
+        error: `Final weightage for ${targetRole} personnel can only be managed and approved by Admin or Super Admin.`,
+      });
     }
 
     // The award cannot exceed what the task was planned to be worth. Awarding
