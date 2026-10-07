@@ -3,7 +3,7 @@ import { AppraisalNotificationService } from '../services/appraisalNotification.
 import { goalService } from '../services/goal.service.js';
 import { buildTeamScopeWhere, buildExplicitReportsWhere } from '../services/teamScope.service.js';
 import { computeCycleRollup } from '../services/reportAggregation.service.js';
-import { ELEVATED_ROLES, HR_ROLES, MANAGER_OR_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
+import { ELEVATED_ROLES, HR_ROLES, MANAGER_OR_ELEVATED_ROLES, SUPER_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
 
 /**
  * True when `user` may act as the reviewing manager for `employee`:
@@ -2046,6 +2046,21 @@ export async function updateHrAuditReview(req, res, next) {
 
     if (!review || review.employee.tenantId !== req.tenantId) {
       return res.status(404).json({ error: 'Performance review not found' });
+    }
+
+    // A user cannot perform an audit and final sign-off on their own appraisal
+    if (review.employeeId === req.user.id) {
+      return res.status(403).json({
+        error: 'You cannot audit or sign off on your own performance review. For HR and Finance personnel, this must be conducted by an Admin or Super Admin.',
+      });
+    }
+
+    // For HR and Finance personnel, only Admin, Super Admin, or CMD can execute the audit sign-off
+    const empRole = String(review.employee?.role || '').toUpperCase();
+    if ((empRole === 'HR' || empRole === 'FINANCE') && !hasRole(req.user.role, SUPER_ELEVATED_ROLES)) {
+      return res.status(403).json({
+        error: `Appraisal audit and hike sign-off for ${empRole} personnel can only be conducted by Admin or Super Admin.`,
+      });
     }
 
     // Irreversible once RELEASED

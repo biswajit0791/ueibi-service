@@ -64,20 +64,30 @@ export async function getTeamDirectory(req, res, next) {
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
-    const { search, department, band, financialYear, includeSelf, page, limit } = parsed.data;
+    const { search, department, role, band, financialYear, includeSelf, page, limit } = parsed.data;
 
-    const { where } = buildTeamScopeWhere(req.user, req.tenantId, { search, department, includeSelf });
+    const { where } = buildTeamScopeWhere(req.user, req.tenantId, { search, department, role, includeSelf });
 
     if (band) {
       where.band = { equals: band, mode: 'insensitive' };
     }
 
     // Exclude employees who joined after the selected financial year's end —
-    // mirrors the previous mock behavior ("joinYear > filterYear" exclusion).
+    // Users with no recorded join date (such as leadership, HR, or finance accounts created at tenant setup)
+    // must always remain visible.
     const yearMatch = financialYear && financialYear.match(/(\d{4})/);
-    if (yearMatch) {
+    if (yearMatch && financialYear !== 'all') {
       const fyStartYear = parseInt(yearMatch[1], 10);
-      where.joinDate = { lte: new Date(Date.UTC(fyStartYear + 1, 2, 31, 23, 59, 59)) };
+      const maxDate = new Date(Date.UTC(fyStartYear + 1, 2, 31, 23, 59, 59));
+      where.AND = [
+        ...(where.AND || []),
+        {
+          OR: [
+            { joinDate: { lte: maxDate } },
+            { joinDate: null },
+          ],
+        },
+      ];
     }
 
     const skip = (page - 1) * limit;

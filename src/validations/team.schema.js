@@ -3,6 +3,7 @@ import { z } from 'zod';
 export const teamDirectoryQuerySchema = z.object({
   search: z.string().max(200).optional(),
   department: z.string().max(200).optional(),
+  role: z.string().max(50).optional(),
   band: z.string().max(50).optional(),
   financialYear: z.string().max(100).optional(),
   includeSelf: z.coerce.boolean().optional().default(false),

@@ -18,7 +18,7 @@ import { ELEVATED_ROLES, hasRole } from '../lib/roles.js';
 // so the guarantee does not depend on that placement staying true.
 const NOT_PLATFORM_USER = { role: { not: 'PLATFORM_OWNER' } };
 
-export function buildTeamScopeWhere(user, tenantId, { search, department, includeSelf = false } = {}) {
+export function buildTeamScopeWhere(user, tenantId, { search, department, role, includeSelf = false } = {}) {
   const userRole = (user.role || '').toUpperCase();
   const isHrOrAdmin = hasRole(userRole, ELEVATED_ROLES);
 
@@ -47,7 +47,11 @@ export function buildTeamScopeWhere(user, tenantId, { search, department, includ
     };
   }
 
-  if (department) {
+  if (role && role !== 'all') {
+    where.role = { equals: role.toUpperCase() };
+  }
+
+  if (department && department !== 'all') {
     where.department = { equals: department, mode: 'insensitive' };
   }
   if (search && search.trim()) {
