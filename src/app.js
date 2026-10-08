@@ -40,6 +40,7 @@ import legalRoutes from './routes/legal.routes.js';
 import dashboardSummaryRoutes from './routes/dashboardSummary.routes.js';
 import exitRoutes from './routes/exit.routes.js';
 import companySettingsRoutes from './routes/companySettings.routes.js';
+import documentTemplateRoutes from './routes/documentTemplate.routes.js';
 import { notFound } from './middleware/notFound.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
@@ -138,6 +139,7 @@ apiRouter.use(legalRoutes);
 apiRouter.use(dashboardSummaryRoutes);
 apiRouter.use(exitRoutes);
 apiRouter.use(companySettingsRoutes);
+apiRouter.use(documentTemplateRoutes);
 if (env.nodeEnv !== 'production') {
   apiRouter.use(devRoutes);
 }
