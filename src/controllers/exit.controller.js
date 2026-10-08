@@ -21,6 +21,9 @@ import {
   generateReferenceCheckProfile,
   generateTerminationLetter,
 } from '../services/pdf.service.js';
+import { getDefaultTemplate } from '../services/documentTemplate.service.js';
+import { resolveTokensForEmployee } from '../services/documentToken.service.js';
+import { renderDocumentPdf } from '../services/documentRenderer.service.js';
 import {
   initiateExitSchema,
   exitInterviewSchema,
@@ -801,15 +804,118 @@ export async function generateCertificate(req, res, next) {
       authorizedSignatory: req.user.name || 'HR Department',
     };
 
+    const typeToDocType = {
+      relieving: 'RELIEVING_LETTER',
+      termination: 'TERMINATION_LETTER',
+      service: 'SERVICE_CERTIFICATE',
+      refcheck: 'REFERENCE_CHECK',
+    };
+
+    const targetDocType = typeToDocType[type];
+    const manualOverrides = req.body?.manualOverrides;
     let pdfUrl;
+    let usedTemplate = null;
+
+    // Check if dynamic template engine should be used
+    try {
+      if (targetDocType) {
+        const dynamicTpl = await getDefaultTemplate({
+          tenantId: req.tenantId,
+          documentType: targetDocType,
+        });
+
+        if (dynamicTpl) {
+          const resolvedTokens = await resolveTokensForEmployee({
+            tenantId: req.tenantId,
+            employeeId: employee.id,
+            exitDetailsId: id,
+            currentUser: req.user,
+            documentType: targetDocType,
+          });
+
+          const rendered = await renderDocumentPdf({
+            template: dynamicTpl,
+            tokenValues: resolvedTokens,
+            manualOverrides: manualOverrides || {},
+            fileNamePrefix: type,
+          });
+
+          pdfUrl = rendered.fileUrl;
+          usedTemplate = dynamicTpl;
+
+          // Record generated document for audit
+          await prisma.generatedDocument.create({
+            data: {
+              tenantId: req.tenantId,
+              templateId: String(dynamicTpl.id).startsWith('blueprint-') ? null : dynamicTpl.id,
+              documentType: targetDocType,
+              fileName: rendered.fileName,
+              fileUrl: rendered.fileUrl,
+              fileSize: rendered.fileSize,
+              targetUserId: employee.id,
+              targetUserName: employee.name,
+              exitDetailsId: id,
+              resolvedData: rendered.view,
+              manualEdits: manualOverrides || null,
+              generatedBy: req.user.name || req.user.email || 'HR Department',
+              templateVersion: dynamicTpl.version || 1,
+            },
+          }).catch((err) => {
+            console.warn('[ExitController] Failed to record GeneratedDocument audit log:', err.message);
+          });
+        }
+      }
+    } catch (dynamicErr) {
+      console.warn('[ExitController] Dynamic template generation failed, falling back to legacy PDFKit:', dynamicErr.message);
+    }
+
+    // Fallback to legacy generator if dynamic engine didn't produce a PDF
+    if (!pdfUrl) {
+      if (type === 'relieving') {
+        pdfUrl = await generateRelievingLetter(pdfData);
+      } else if (type === 'termination') {
+        pdfUrl = await generateTerminationLetter(pdfData);
+      } else if (type === 'service') {
+        const exRecord = await prisma.exEmployeeRecord.findFirst({
+          where: { email: employee.email, tenantId: req.tenantId },
+          orderBy: { createdAt: 'desc' },
+        });
+
+        pdfData.conductValue = exRecord?.conductValue || 'Good';
+        pdfData.techRating = exRecord?.techRating || 8;
+        pdfData.attitudeRating = exRecord?.attitudeRating || 8;
+
+        pdfUrl = await generateServiceCertificate(pdfData);
+      } else if (type === 'refcheck') {
+        const [exRecord, userWithWorkHistory] = await Promise.all([
+          prisma.exEmployeeRecord.findFirst({
+            where: { email: employee.email, tenantId: req.tenantId },
+            orderBy: { createdAt: 'desc' },
+          }),
+          prisma.tenantUser.findUnique({
+            where: { id: employee.id },
+            include: { workHistory: true },
+          }),
+        ]);
+
+        pdfData.pan = employee.pan || exRecord?.pan || null;
+        pdfData.conductValue = exRecord?.conductValue || 'Good';
+        pdfData.techRating = exRecord?.techRating || 8;
+        pdfData.attitudeRating = exRecord?.attitudeRating || 8;
+        pdfData.feedback = exRecord?.feedback || exitDetails.feedbackRemarks || '';
+        pdfData.workHistory = userWithWorkHistory?.workHistory || [];
+
+        pdfUrl = await generateReferenceCheckProfile(pdfData);
+      }
+    }
+
+    // Persist URLs onto ExitDetails model
     if (type === 'relieving') {
-      pdfUrl = await generateRelievingLetter(pdfData);
       await prisma.exitDetails.update({
         where: { id },
         data: { relievingLetterUrl: pdfUrl },
       });
     } else if (type === 'termination') {
-      pdfUrl = await generateTerminationLetter(pdfData);
       const remarksObj = parseExitRemarks(exitDetails.feedbackRemarks);
       remarksObj.terminationLetterUrl = pdfUrl;
       await prisma.exitDetails.update({
@@ -817,42 +923,10 @@ export async function generateCertificate(req, res, next) {
         data: { feedbackRemarks: JSON.stringify(remarksObj) },
       });
     } else if (type === 'service') {
-      // Fetch ex-employee record for ratings if available
-      const exRecord = await prisma.exEmployeeRecord.findFirst({
-        where: { email: employee.email, tenantId: req.tenantId },
-        orderBy: { createdAt: 'desc' },
-      });
-
-      pdfData.conductValue = exRecord?.conductValue || 'Good';
-      pdfData.techRating = exRecord?.techRating || 8;
-      pdfData.attitudeRating = exRecord?.attitudeRating || 8;
-
-      pdfUrl = await generateServiceCertificate(pdfData);
       await prisma.exitDetails.update({
         where: { id },
         data: { serviceCertificateUrl: pdfUrl },
       });
-    } else if (type === 'refcheck') {
-      // Reference Check & Verified Profile Dossier for new employer
-      const [exRecord, userWithWorkHistory] = await Promise.all([
-        prisma.exEmployeeRecord.findFirst({
-          where: { email: employee.email, tenantId: req.tenantId },
-          orderBy: { createdAt: 'desc' },
-        }),
-        prisma.tenantUser.findUnique({
-          where: { id: employee.id },
-          include: { workHistory: true },
-        }),
-      ]);
-
-      pdfData.pan = employee.pan || exRecord?.pan || null;
-      pdfData.conductValue = exRecord?.conductValue || 'Good';
-      pdfData.techRating = exRecord?.techRating || 8;
-      pdfData.attitudeRating = exRecord?.attitudeRating || 8;
-      pdfData.feedback = exRecord?.feedback || exitDetails.feedbackRemarks || '';
-      pdfData.workHistory = userWithWorkHistory?.workHistory || [];
-
-      pdfUrl = await generateReferenceCheckProfile(pdfData);
     }
 
     const typeLabels = {
@@ -866,6 +940,7 @@ export async function generateCertificate(req, res, next) {
       message: `${typeLabels[type] || 'Document'} generated successfully`,
       pdfUrl,
       type,
+      isDynamic: Boolean(usedTemplate),
     });
   } catch (err) {
     next(err);

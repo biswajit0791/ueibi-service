@@ -119,6 +119,8 @@ model Tenant {
   subscriptions        Subscription[]
   invoices             Invoice[]
   licenseRequests      LicenseRequest[]
+  documentTemplates    DocumentTemplate[]
+  generatedDocuments   GeneratedDocument[]
 
   @@index([isPlatform])
   @@index([status])
@@ -168,8 +170,11 @@ model TenantUser {
   role               UserRole   @default(EMPLOYEE)
   status             UserStatus @default(INVITED)
   /// Stamped on each successful login. Null means never recorded.
-  lastLoginAt        DateTime?
-  mustChangePassword Boolean    @default(true)
+  lastLoginAt         DateTime?
+  activeSessionAt     DateTime?
+  activeSessionDevice String?
+  activeSessionIp     String?
+  mustChangePassword  Boolean    @default(true)
 
   // Employment Details
   employeeId       String?
@@ -2587,4 +2592,162 @@ model ExitClearanceEvent {
 
   @@index([clearanceId, createdAt])
   @@map("exit_clearance_events")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Document Template Engine
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum DocumentType {
+  TERMINATION_LETTER
+  RELIEVING_LETTER
+  SERVICE_CERTIFICATE
+  REFERENCE_CHECK
+  OFFER_LETTER
+  EXPERIENCE_LETTER
+  APPOINTMENT_LETTER
+  SALARY_REVISION
+  WARNING_LETTER
+  APPRECIATION_LETTER
+  INTERNSHIP_CERTIFICATE
+  CUSTOM
+}
+
+/// A document template that SuperAdmin/HR designs via the template builder.
+/// Each tenant can have multiple templates per document type.
+model DocumentTemplate {
+  id              String       @id @default(cuid())
+  tenantId        String
+  tenant          Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // ── Identity ──
+  name            String                   // "Termination Letter - Standard"
+  slug            String                   // "termination-standard"
+  documentType    DocumentType
+  description     String?      @db.Text
+
+  // ── Template Content ──
+  htmlTemplate    String       @db.Text    // Mustache HTML template body
+  cssStyles       String?      @db.Text    // Scoped CSS for this template
+  headerHtml      String?      @db.Text    // Reusable header block
+  footerHtml      String?      @db.Text    // Reusable footer block
+
+  // ── Layout Settings (mirrors invoice pattern) ──
+  layoutSettings  Json         @default("{}")
+
+  // ── Logo & Branding ──
+  logoUrl         String?
+  watermarkUrl    String?
+  signatureUrl    String?
+
+  // ── Status & Metadata ──
+  isDefault       Boolean      @default(false)
+  isActive        Boolean      @default(true)
+  /// Platform-provided templates that tenants can clone but not delete.
+  isLocked        Boolean      @default(false)
+
+  // ── Versioning ──
+  version         Int          @default(1)
+  publishedAt     DateTime?
+  publishedBy     String?
+
+  // ── Audit ──
+  createdBy       String
+  updatedBy       String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  // ── Relations ──
+  versions        DocumentTemplateVersion[]
+  generatedDocs   GeneratedDocument[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId, documentType])
+  @@index([tenantId, isDefault, documentType])
+  @@map("document_templates")
+}
+
+/// Immutable snapshot for every published version of a template.
+model DocumentTemplateVersion {
+  id              String           @id @default(cuid())
+  templateId      String
+  template        DocumentTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  version         Int
+  htmlTemplate    String           @db.Text
+  cssStyles       String?          @db.Text
+  headerHtml      String?          @db.Text
+  footerHtml      String?          @db.Text
+  layoutSettings  Json             @default("{}")
+  logoUrl         String?
+
+  changeNote      String?
+  publishedBy     String
+  publishedAt     DateTime         @default(now())
+
+  @@unique([templateId, version])
+  @@index([templateId])
+  @@map("document_template_versions")
+}
+
+/// Every PDF document ever generated — full audit trail.
+model GeneratedDocument {
+  id              String            @id @default(cuid())
+  tenantId        String
+  tenant          Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  templateId      String?
+  template        DocumentTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+
+  documentType    DocumentType
+  fileName        String
+  fileUrl         String
+  fileSize        Int?
+
+  // ── Context: who was this generated for? ──
+  targetUserId    String?
+  targetUserName  String?
+  exitDetailsId   String?
+
+  // ── The resolved data at generation time (for audit/re-gen) ──
+  resolvedData    Json?
+  /// Any manual overrides HR made before generating.
+  manualEdits     Json?
+
+  // ── Metadata ──
+  generatedBy     String
+  generatedAt     DateTime          @default(now())
+  templateVersion Int?
+
+  @@index([tenantId, documentType])
+  @@index([tenantId, targetUserId])
+  @@index([exitDetailsId])
+  @@map("generated_documents")
+}
+
+/// Registry of available dynamic tokens, grouped by document type.
+/// Platform-seeded; tenants can add custom tokens.
+model DocumentToken {
+  id              String        @id @default(cuid())
+  /// null = platform-wide token available to all tenants.
+  tenantId        String?
+  /// null = available in all document types.
+  documentType    DocumentType?
+
+  token           String        // e.g. "employeeName"
+  label           String        // "Employee Full Name"
+  group           String        // "Employee Details", "Company", "Dates"
+  description     String?
+  sampleValue     String?       // "John Doe" (for preview)
+  /// Dot-path into the resolved data object, e.g. "employee.name".
+  dataSource      String
+  /// Optional formatter: "date", "currency", "uppercase", "maskedPan".
+  formatter       String?
+
+  isRequired      Boolean       @default(false)
+  isCustom        Boolean       @default(false)
+  sortOrder       Int           @default(0)
+
+  @@unique([tenantId, token, documentType])
+  @@index([documentType])
+  @@map("document_tokens")
 }
