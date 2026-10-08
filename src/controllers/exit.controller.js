@@ -31,34 +31,40 @@ import {
   certificateTypeSchema,
   sendExitDocumentsSchema,
 } from '../validations/exit.schema.js';
-
-const CLEARANCE_LEADERSHIP_ROLES = ['SUPER_ADMIN', 'ADMIN', 'HR'];
-const CLEARANCE_KEYS = ['it', 'hr', 'finance', 'manager'];
-const CLEARANCE_LABELS = { it: 'IT', hr: 'HR', finance: 'Finance', manager: 'Manager' };
+import {
+  LEGACY_KEYS,
+  createInitialClearances,
+  ensureClearanceRows,
+  loadApproverContext,
+  resolveApprovers,
+  permissionFor,
+  presentClearance,
+  progressOf,
+} from '../services/exitClearance.service.js';
 
 // Exits created from this moment on cannot be completed while a clearance is
 // pending (HR/Admin may override with a reason). Exits already in flight when
 // the rule shipped are exempt rather than blocked retroactively.
 const CLEARANCE_ENFORCED_FROM = new Date('2026-10-09T00:00:00+05:30');
 
+const EXIT_USER_SELECT = {
+  id: true, name: true, email: true, personalEmail: true, designation: true,
+  department: true, employeeId: true, profilePhoto: true, managerId: true,
+};
+
 /**
- * Whether `user` may approve or revoke `department` clearance for an exit.
- * The single source of truth for both the PATCH guard and the `canAct` flag
- * the UI uses to decide which clearance cards are actionable.
- *
- * @param {{ id: string, role: string, department?: string }} user
- * @param {'it'|'hr'|'finance'|'manager'} department
- * @param {string|null|undefined} exitingManagerId - managerId of the exiting employee
+ * Present each exit's clearances for `user` (backfilling rows for exits that
+ * pre-date them), including whether the user may act on each one.
  */
-function canActOnClearance(user, department, exitingManagerId) {
-  const role = String(user?.role || '').toUpperCase();
-  if (CLEARANCE_LEADERSHIP_ROLES.includes(role)) return true;
-  switch (department) {
-    case 'finance': return role === 'FINANCE';
-    case 'manager': return !!exitingManagerId && exitingManagerId === user.id;
-    case 'it': return String(user?.department || '').toLowerCase() === 'it';
-    default: return false;
-  }
+async function presentExits(tenantId, exits, user) {
+  const withRows = await ensureClearanceRows(exits);
+  const ctx = await loadApproverContext(tenantId, withRows);
+  return withRows.map((exit) => {
+    const clearances = [...exit.clearances]
+      .sort((a, b) => a.sortOrder - b.sortOrder)
+      .map((row) => presentClearance(row, exit, user, ctx));
+    return { exit, clearances };
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -87,7 +93,7 @@ export async function initiateExit(req, res, next) {
     // Check the employee exists, is active, and belongs to this tenant
     const employee = await prisma.tenantUser.findFirst({
       where: { id: employeeId, tenantId, isDeleted: false },
-      select: { id: true, name: true, email: true, status: true },
+      select: { id: true, name: true, email: true, status: true, department: true },
     });
 
     if (!employee) {
@@ -115,17 +121,21 @@ export async function initiateExit(req, res, next) {
       await prisma.exitDetails.delete({ where: { userId: employeeId } });
     }
 
-    const exitDetails = await prisma.exitDetails.create({
-      data: {
-        userId: employeeId,
-        tenantId,
-        resignationDate: new Date(parsed.data.resignationDate),
-        lastWorkingDay: new Date(parsed.data.lastWorkingDay),
-        exitReason: parsed.data.exitReason,
-        feedbackRemarks: parsed.data.feedbackRemarks || null,
-        noticePeriodDays: parsed.data.noticePeriodDays ?? null,
-        exitStatus: 'INITIATED',
-      },
+    const exitDetails = await prisma.$transaction(async (tx) => {
+      const created = await tx.exitDetails.create({
+        data: {
+          userId: employeeId,
+          tenantId,
+          resignationDate: new Date(parsed.data.resignationDate),
+          lastWorkingDay: new Date(parsed.data.lastWorkingDay),
+          exitReason: parsed.data.exitReason,
+          feedbackRemarks: parsed.data.feedbackRemarks || null,
+          noticePeriodDays: parsed.data.noticePeriodDays ?? null,
+          exitStatus: 'INITIATED',
+        },
+      });
+      await createInitialClearances(tx, created, employee);
+      return created;
     });
 
     emitToTenant(tenantId, 'exit_initiated', {
@@ -190,8 +200,9 @@ export async function saveExitInterview(req, res, next) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PATCH /api/exit/:id/clearance
-// Department head approves their clearance. Advances to PENDING_CLEARANCE
-// or ALL_CLEARED when every department is done.
+// The designated approver clears (or revokes) one clearance. HR/Admin acting
+// in a department head's place must give a reason. Advances the exit to
+// ALL_CLEARED when every clearance is done, and back when one is revoked.
 // ─────────────────────────────────────────────────────────────────────────────
 export async function approveClearance(req, res, next) {
   try {
@@ -206,106 +217,117 @@ export async function approveClearance(req, res, next) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
 
-    const { department, cleared, remarks, fileUrl, fileName } = parsed.data;
+    const { department, cleared, remarks, fileUrl, fileName, reason } = parsed.data;
 
-    const exitDetails = await prisma.exitDetails.findFirst({
+    const found = await prisma.exitDetails.findFirst({
       where: { id, tenantId: req.tenantId },
+      include: { user: { select: EXIT_USER_SELECT }, clearances: true },
     });
 
-    if (!exitDetails) {
+    if (!found) {
       return res.status(404).json({ error: 'Exit record not found' });
     }
 
-    if (exitDetails.exitStatus === 'COMPLETED') {
+    if (found.exitStatus === 'COMPLETED') {
       return res.status(409).json({ error: 'Exit process is already completed' });
     }
 
-    // ── Department Role Enforcement ──
-    const exitingUser = await prisma.tenantUser.findUnique({
-      where: { id: exitDetails.userId },
-      select: { managerId: true },
-    });
-    if (!canActOnClearance(req.user, department, exitingUser?.managerId)) {
-      const denied = {
-        finance: 'Only Finance department personnel or HR/Admin may approve Finance clearance.',
-        manager: "Only the employee's direct manager or HR/Admin may approve Manager clearance.",
-        it: 'Only IT department personnel or HR/Admin may approve IT clearance.',
-        hr: 'Only HR or Admin personnel may approve HR clearance.',
-      };
-      return res.status(403).json({ error: denied[department] });
+    const [exitDetails] = await ensureClearanceRows([found]);
+    const row = exitDetails.clearances.find((c) => c.key === department);
+    if (!row) {
+      return res.status(404).json({ error: `This exit has no ${department} clearance.` });
     }
 
-    // Build update data for the specific department
+    // ── Approver enforcement ──
+    const ctx = await loadApproverContext(req.tenantId, [exitDetails]);
+    const approvers = resolveApprovers(row, exitDetails.user, ctx);
+    const perm = permissionFor(req.user, row, approvers);
+    if (!perm.allowed) {
+      const who = approvers.names.length ? approvers.names.join(' or ') : 'the designated approver';
+      return res.status(403).json({
+        error: `Only ${who} or HR/Admin may ${cleared ? 'approve' : 'revoke'} ${row.label} clearance.`,
+      });
+    }
+    const onBehalfReason = (reason || '').trim();
+    if (perm.onBehalf && onBehalfReason.length < 5) {
+      return res.status(400).json({
+        error: `You are acting in place of ${approvers.names.join(' / ') || 'the department head'}. Please give a reason (at least 5 characters).`,
+        code: 'ON_BEHALF_REASON_REQUIRED',
+      });
+    }
+
     const now = new Date();
     const actorName = req.user.name || req.user.email;
-    const updateData = {};
 
-    switch (department) {
-      case 'it':
-        updateData.itCleared = cleared;
-        updateData.itClearedAt = cleared ? now : null;
-        updateData.itClearedBy = cleared ? actorName : null;
-        break;
-      case 'hr':
-        updateData.hrCleared = cleared;
-        updateData.hrClearedAt = cleared ? now : null;
-        updateData.hrClearedBy = cleared ? actorName : null;
-        break;
-      case 'finance':
-        updateData.financeCleared = cleared;
-        updateData.financeClearedAt = cleared ? now : null;
-        updateData.financeClearedBy = cleared ? actorName : null;
-        break;
-      case 'manager':
-        updateData.managerCleared = cleared;
-        updateData.managerClearedAt = cleared ? now : null;
-        updateData.managerClearedBy = cleared ? actorName : null;
-        break;
+    // Legacy mirrors: boolean columns + the clearances map in feedbackRemarks.
+    const legacyUpdate = {};
+    const remarksObj = parseExitRemarks(exitDetails.feedbackRemarks);
+    if (LEGACY_KEYS.includes(department)) {
+      legacyUpdate[`${department}Cleared`] = cleared;
+      legacyUpdate[`${department}ClearedAt`] = cleared ? now : null;
+      legacyUpdate[`${department}ClearedBy`] = cleared ? actorName : null;
+      if (!remarksObj.clearances) remarksObj.clearances = {};
+      remarksObj.clearances[department] = {
+        cleared,
+        remarks: remarks || '',
+        fileUrl: fileUrl || null,
+        fileName: fileName || null,
+        clearedBy: actorName,
+        clearedAt: now.toISOString(),
+      };
+      legacyUpdate.feedbackRemarks = JSON.stringify(remarksObj);
     }
 
-    // Store clearance details (remarks, uploaded files such as Finance F&F statement)
-    let remarksObj = {};
-    try {
-      remarksObj = JSON.parse(exitDetails.feedbackRemarks || '{}');
-      if (typeof remarksObj !== 'object' || !remarksObj || Array.isArray(remarksObj)) {
-        remarksObj = { generalRemarks: exitDetails.feedbackRemarks || '' };
-      }
-    } catch (e) {
-      remarksObj = { generalRemarks: exitDetails.feedbackRemarks || '' };
-    }
-
-    if (!remarksObj.clearances) remarksObj.clearances = {};
-    remarksObj.clearances[department] = {
-      cleared,
-      remarks: remarks || '',
-      fileUrl: fileUrl || null,
-      fileName: fileName || null,
-      clearedBy: actorName,
-      clearedAt: now.toISOString(),
-    };
-    updateData.feedbackRemarks = JSON.stringify(remarksObj);
-
-    // Check if all departments are now cleared (merge current state with this update)
-    const mergedState = {
-      itCleared: updateData.itCleared !== undefined ? updateData.itCleared : exitDetails.itCleared,
-      hrCleared: updateData.hrCleared !== undefined ? updateData.hrCleared : exitDetails.hrCleared,
-      financeCleared: updateData.financeCleared !== undefined ? updateData.financeCleared : exitDetails.financeCleared,
-      managerCleared: updateData.managerCleared !== undefined ? updateData.managerCleared : exitDetails.managerCleared,
-    };
-
-    const allCleared = mergedState.itCleared && mergedState.hrCleared &&
-                       mergedState.financeCleared && mergedState.managerCleared;
-
+    const otherPending = exitDetails.clearances.some((c) => c.id !== row.id && c.status !== 'CLEARED');
+    const allCleared = cleared && !otherPending;
+    let exitStatus;
     if (allCleared) {
-      updateData.exitStatus = 'ALL_CLEARED';
-    } else if (exitDetails.exitStatus === 'INITIATED' || exitDetails.exitStatus === 'INTERVIEW_DONE' || exitDetails.exitStatus === 'ALL_CLEARED') {
+      exitStatus = 'ALL_CLEARED';
+    } else if (['INITIATED', 'INTERVIEW_DONE', 'ALL_CLEARED'].includes(exitDetails.exitStatus)) {
       // ALL_CLEARED is included so a revoke after full clearance reopens the exit.
-      updateData.exitStatus = 'PENDING_CLEARANCE';
+      exitStatus = 'PENDING_CLEARANCE';
     }
 
-    const updated = await prisma.exitDetails.update({
-      where: { id },
-      data: updateData,
+    const updated = await prisma.$transaction(async (tx) => {
+      await tx.exitClearance.update({
+        where: { id: row.id },
+        data: cleared
+          ? {
+              status: 'CLEARED',
+              remarks: remarks || null,
+              fileUrl: fileUrl || null,
+              fileName: fileName || null,
+              actedById: req.user.id,
+              actedByName: actorName,
+              actedAt: now,
+              onBehalf: perm.onBehalf,
+              onBehalfReason: perm.onBehalf ? onBehalfReason : null,
+            }
+          : {
+              status: 'PENDING',
+              actedById: null,
+              actedByName: null,
+              actedAt: null,
+              onBehalf: false,
+              onBehalfReason: null,
+            },
+      });
+      await tx.exitClearanceEvent.create({
+        data: {
+          tenantId: req.tenantId,
+          clearanceId: row.id,
+          action: cleared ? 'CLEARED' : 'REVOKED',
+          actorId: req.user.id,
+          actorName,
+          onBehalf: perm.onBehalf,
+          reason: perm.onBehalf ? onBehalfReason : null,
+          remarks: remarks || null,
+        },
+      });
+      return tx.exitDetails.update({
+        where: { id },
+        data: { ...legacyUpdate, ...(exitStatus ? { exitStatus } : {}) },
+      });
     });
 
     emitToTenant(req.tenantId, 'exit_clearance_updated', {
@@ -321,9 +343,9 @@ export async function approveClearance(req, res, next) {
     res.json({
       message: allCleared
         ? 'All departments cleared! Ready for final exit completion.'
-        : `${department.toUpperCase()} clearance ${cleared ? 'approved' : 'revoked'}`,
+        : `${row.label} clearance ${cleared ? 'approved' : 'revoked'}`,
       exitDetails: updated,
-      clearanceDetails: remarksObj.clearances,
+      clearanceDetails: remarksObj.clearances || {},
       allCleared,
     });
   } catch (err) {
@@ -362,35 +384,23 @@ export async function getExitStatus(req, res, next) {
       return res.status(403).json({ error: 'You are only authorized to view your own exit record.' });
     }
 
-    const exitDetails = await prisma.exitDetails.findFirst({
+    const found = await prisma.exitDetails.findFirst({
       where: { userId: employeeId, tenantId: req.tenantId },
       include: {
         user: {
-          select: { id: true, name: true, email: true, personalEmail: true, designation: true, department: true, employeeId: true, joinDate: true, profilePhoto: true, managerId: true },
+          select: { ...EXIT_USER_SELECT, joinDate: true },
         },
+        clearances: true,
       },
     });
 
-    if (!exitDetails) {
+    if (!found) {
       return res.status(404).json({ error: 'No exit process found for this employee' });
     }
 
+    const [{ exit: withRows, clearances }] = await presentExits(req.tenantId, [found], req.user);
+    const { clearances: _rows, ...exitDetails } = withRows;
     const remarksObj = parseExitRemarks(exitDetails.feedbackRemarks);
-    const cd = remarksObj.clearances || {};
-    const exitingManagerId = exitDetails.user?.managerId;
-
-    // Build clearance summary with attachments and remarks
-    const clearances = CLEARANCE_KEYS.map((key) => ({
-      dept: CLEARANCE_LABELS[key],
-      key,
-      cleared: exitDetails[`${key}Cleared`],
-      clearedAt: exitDetails[`${key}ClearedAt`],
-      clearedBy: exitDetails[`${key}ClearedBy`],
-      remarks: cd[key]?.remarks || '',
-      fileUrl: cd[key]?.fileUrl || null,
-      fileName: cd[key]?.fileName || null,
-      canAct: exitDetails.exitStatus !== 'COMPLETED' && canActOnClearance(req.user, key, exitingManagerId),
-    }));
 
     res.json({
       exitDetails,
@@ -402,11 +412,7 @@ export async function getExitStatus(req, res, next) {
         documentsSentAt: remarksObj.documentsSentAt || null,
         documentsSentTo: remarksObj.documentsSentTo || null,
       },
-      progress: {
-        total: 4,
-        completed: clearances.filter(c => c.cleared).length,
-        percentage: Math.round((clearances.filter(c => c.cleared).length / 4) * 100),
-      },
+      progress: progressOf(clearances),
     });
   } catch (err) {
     next(err);
@@ -444,15 +450,12 @@ export async function listPendingExits(req, res, next) {
 
     const exits = await prisma.exitDetails.findMany({
       where,
-      include: {
-        user: {
-          select: { id: true, name: true, email: true, personalEmail: true, designation: true, department: true, employeeId: true, profilePhoto: true, managerId: true },
-        },
-      },
+      include: { user: { select: EXIT_USER_SELECT }, clearances: true },
       orderBy: { createdAt: 'desc' },
     });
 
-    const enriched = exits.map((exit) => enrichExitForList(exit, req.user));
+    const presented = await presentExits(tenantId, exits, req.user);
+    const enriched = presented.map(({ exit, clearances }) => toListItem(exit, clearances));
 
     res.json({ exits: enriched, total: enriched.length });
   } catch (err) {
@@ -460,29 +463,14 @@ export async function listPendingExits(req, res, next) {
   }
 }
 
-// Clearance progress, per-department details/attachments and the caller's
-// `canAct` flag, in the shape the exit tracker cards consume.
-function enrichExitForList(exit, user) {
+// The exit tracker card shape: clearances, progress and documents.
+function toListItem(exit, clearances) {
+  const { clearances: _rows, ...rest } = exit;
   const remarksObj = parseExitRemarks(exit.feedbackRemarks);
-  const cd = remarksObj.clearances || {};
-  const exitingManagerId = exit.user?.managerId;
-  const clearances = CLEARANCE_KEYS.map((key) => ({
-    dept: CLEARANCE_LABELS[key],
-    key,
-    cleared: exit[`${key}Cleared`],
-    by: exit[`${key}ClearedBy`],
-    at: exit[`${key}ClearedAt`],
-    remarks: cd[key]?.remarks || '',
-    fileUrl: cd[key]?.fileUrl || null,
-    fileName: cd[key]?.fileName || null,
-    canAct: exit.exitStatus !== 'COMPLETED' && canActOnClearance(user, key, exitingManagerId),
-  }));
-  const clearedCount = clearances.filter(c => c.cleared).length;
-
   return {
-    ...exit,
+    ...rest,
     clearances,
-    clearanceDetails: cd,
+    clearanceDetails: remarksObj.clearances || {},
     documents: {
       relievingLetterUrl: exit.relievingLetterUrl || null,
       serviceCertificateUrl: exit.serviceCertificateUrl || null,
@@ -490,48 +478,36 @@ function enrichExitForList(exit, user) {
       documentsSentAt: remarksObj.documentsSentAt || null,
       documentsSentTo: remarksObj.documentsSentTo || null,
     },
-    clearanceProgress: { total: 4, completed: clearedCount, percentage: Math.round((clearedCount / 4) * 100) },
+    clearanceProgress: progressOf(clearances),
   };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/exit/clearances/inbox
-// Open exits on which the caller holds at least one clearance — e.g. a
-// reporting manager sees their direct reports' exits. Open to every role:
-// what is returned is decided per record, and only to people who must act.
+// Open exits with at least one clearance assigned to the caller: a reporting
+// manager, a department head (IT or the employee's own), Finance, HR. Open to
+// every role; what is returned is decided per clearance.
 // ─────────────────────────────────────────────────────────────────────────────
 export async function listMyClearanceInbox(req, res, next) {
   try {
-    const role = String(req.user.role || '').toUpperCase();
-    const isLeadership = CLEARANCE_LEADERSHIP_ROLES.includes(role);
-
-    // Narrow at the query where the rule allows; canActOnClearance below is
-    // still the authority on what the caller may do.
-    const where = { tenantId: req.tenantId, exitStatus: { not: 'COMPLETED' } };
-    if (!isLeadership && role !== 'FINANCE') {
-      where.user = { managerId: req.user.id };
-    }
-
     const exits = await prisma.exitDetails.findMany({
-      where,
-      include: {
-        user: {
-          // Deliberately narrower than the HR tracker: no personal email.
-          select: { id: true, name: true, email: true, designation: true, department: true, employeeId: true, profilePhoto: true, managerId: true },
-        },
-      },
+      where: { tenantId: req.tenantId, exitStatus: { not: 'COMPLETED' } },
+      include: { user: { select: EXIT_USER_SELECT }, clearances: true },
       orderBy: { lastWorkingDay: 'asc' },
     });
 
-    const items = exits
-      .map((exit) => {
-        const { feedbackRemarks, ...rest } = enrichExitForList(exit, req.user);
-        return rest;
-      })
-      .filter((exit) => exit.clearances.some((c) => c.canAct));
+    const presented = await presentExits(req.tenantId, exits, req.user);
+    const items = presented
+      .filter(({ clearances }) => clearances.some((c) => c.assignedToMe))
+      .map(({ exit, clearances }) => {
+        // Deliberately narrower than the HR tracker.
+        const { feedbackRemarks, clearanceDetails, documents, user, ...rest } = toListItem(exit, clearances);
+        const { personalEmail, ...safeUser } = user || {};
+        return { ...rest, user: safeUser };
+      });
 
     const pendingForMe = items.reduce(
-      (n, exit) => n + exit.clearances.filter((c) => c.canAct && !c.cleared).length,
+      (n, exit) => n + exit.clearances.filter((c) => c.assignedToMe && !c.cleared).length,
       0,
     );
 
@@ -563,6 +539,7 @@ export async function completeExit(req, res, next) {
     const exitDetails = await prisma.exitDetails.findFirst({
       where: { id, tenantId },
       include: {
+        clearances: true,
         user: {
           select: {
             id: true, name: true, email: true, pan: true,
@@ -634,13 +611,16 @@ export async function completeExit(req, res, next) {
     }
 
     // ── Clearance Guardrail ──────────────────────────────────────────────────
-    const pendingClearances = CLEARANCE_KEYS.filter((key) => !exitDetails[`${key}Cleared`]);
+    const [{ clearances: clearanceRows }] = await ensureClearanceRows([exitDetails]);
+    const pendingClearances = clearanceRows
+      .filter((c) => c.status !== 'CLEARED')
+      .sort((a, b) => a.sortOrder - b.sortOrder);
     const clearanceRuleApplies = exitDetails.createdAt >= CLEARANCE_ENFORCED_FROM;
     const { overrideClearances, overrideReason } = parsed.data;
     let clearanceOverride = null;
 
     if (clearanceRuleApplies && pendingClearances.length > 0) {
-      const pendingLabels = pendingClearances.map((key) => CLEARANCE_LABELS[key]);
+      const pendingLabels = pendingClearances.map((c) => c.label);
       if (!overrideClearances) {
         return res.status(409).json({
           error: `${pendingLabels.join(', ')} clearance${pendingLabels.length > 1 ? 's are' : ' is'} still pending. All department clearances must be approved before the exit can be completed.`,

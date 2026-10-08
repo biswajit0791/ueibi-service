@@ -5,7 +5,7 @@
  * RBAC:
  *   GET  /api/departments            → All authenticated roles (read-only)
  *   POST /api/departments            → SUPER_ADMIN, ADMIN, HR
- *   PATCH /api/departments/:id       → SUPER_ADMIN, ADMIN, HR
+ *   PATCH /api/departments/:id       → SUPER_ADMIN, ADMIN, HR (incl. head / alternate head)
  *   DELETE /api/departments/:id      → SUPER_ADMIN, ADMIN  (soft-delete)
  *
  * Multi-tenant isolation: every query is scoped by req.tenantId.
@@ -103,8 +103,20 @@ export async function listDepartments(req, res, next) {
         isActive: true,
         sortOrder: true,
         createdAt: true,
+        headId: true,
+        alternateHeadId: true,
       },
     });
+
+    // Resolve head names for display; a head who has since left reads as unset.
+    const headIds = [...new Set(departments.flatMap((d) => [d.headId, d.alternateHeadId]).filter(Boolean))];
+    const heads = headIds.length
+      ? await prisma.tenantUser.findMany({
+          where: { tenantId, id: { in: headIds }, isDeleted: false, status: { not: 'EXITED' } },
+          select: { id: true, name: true, designation: true },
+        })
+      : [];
+    const headById = new Map(heads.map((h) => [h.id, h]));
 
     // Attach usage count: how many active employees are in each department
     const usageCounts = await prisma.tenantUser.groupBy({
@@ -119,6 +131,8 @@ export async function listDepartments(req, res, next) {
     const enriched = departments.map((d) => ({
       ...d,
       usageCount: usageMap[d.name] ?? 0,
+      head: headById.get(d.headId) || null,
+      alternateHead: headById.get(d.alternateHeadId) || null,
     }));
 
     // `departments` keeps its original shape/key so the existing dropdown
@@ -224,7 +238,23 @@ export async function updateDepartment(req, res, next) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
 
-    const { name, description, color, sortOrder, isActive } = parsed.data;
+    const { name, description, color, sortOrder, isActive, headId, alternateHeadId } = parsed.data;
+
+    // Heads must be active people in this tenant, and two different people.
+    const nextHead = headId !== undefined ? headId : existing.headId;
+    const nextAlternate = alternateHeadId !== undefined ? alternateHeadId : existing.alternateHeadId;
+    if (nextHead && nextAlternate && nextHead === nextAlternate) {
+      return res.status(400).json({ error: 'Head and alternate head must be different people.' });
+    }
+    for (const userId of [headId, alternateHeadId].filter(Boolean)) {
+      const person = await prisma.tenantUser.findFirst({
+        where: { id: userId, tenantId, isDeleted: false, status: { not: 'EXITED' } },
+        select: { id: true },
+      });
+      if (!person) {
+        return res.status(400).json({ error: 'Selected head is not an active employee of this company.' });
+      }
+    }
 
     // If renaming, check no duplicate
     if (name && name.toLowerCase() !== existing.name.toLowerCase()) {
@@ -244,6 +274,8 @@ export async function updateDepartment(req, res, next) {
         ...(color !== undefined && { color }),
         ...(sortOrder !== undefined && { sortOrder }),
         ...(isActive !== undefined && { isActive }),
+        ...(headId !== undefined && { headId }),
+        ...(alternateHeadId !== undefined && { alternateHeadId }),
       },
     });
 

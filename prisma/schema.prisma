@@ -411,6 +411,10 @@ model ExitDetails {
   relievingLetterUrl    String?
   serviceCertificateUrl String?
 
+  // One row per required clearance. The boolean columns above are still
+  // written for the four original departments so older readers keep working.
+  clearances ExitClearance[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -2072,6 +2076,10 @@ model Department {
   color       String? // optional hex e.g. "#6366f1"
   isActive    Boolean  @default(true) // soft-delete — false = archived
   createdBy   String? // TenantUser.id (nullable for seeded)
+  // Approver for this department's exit clearance. Plain ids (no FK) like
+  // createdBy; resolution checks the user is still active.
+  headId          String? // TenantUser.id
+  alternateHeadId String? // TenantUser.id — acts when the head is unavailable
   sortOrder   Int      @default(0) // for custom ordering in the dropdown
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -2520,4 +2528,57 @@ model LicenseRequest {
 
   @@index([tenantId, status])
   @@map("license_requests")
+}
+
+/// A single department clearance an exit needs. Rows are created when the exit
+/// is initiated (a snapshot), so later rule changes never alter exits already
+/// in flight. Exits that pre-date this table are backfilled with exactly the
+/// four clearances they were started with.
+model ExitClearance {
+  id             String      @id @default(cuid())
+  tenantId       String
+  exitId         String
+  exit           ExitDetails @relation(fields: [exitId], references: [id], onDelete: Cascade)
+  key            String // it | hr | finance | manager | dept_head
+  label          String
+  // Department whose head approves (it / dept_head). Matched by name because
+  // TenantUser.department is free text.
+  departmentName String?
+  status         String      @default("PENDING") // PENDING | CLEARED
+  remarks        String?     @db.Text
+  fileUrl        String?
+  fileName       String?
+  actedById      String?
+  actedByName    String?
+  actedAt        DateTime?
+  // Set when HR/Admin cleared in place of the designated approver.
+  onBehalf       Boolean     @default(false)
+  onBehalfReason String?     @db.Text
+  sortOrder      Int         @default(0)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  events ExitClearanceEvent[]
+
+  @@unique([exitId, key])
+  @@index([tenantId, status])
+  @@map("exit_clearances")
+}
+
+/// Append-only history of every clearance decision.
+model ExitClearanceEvent {
+  id          String        @id @default(cuid())
+  tenantId    String
+  clearanceId String
+  clearance   ExitClearance @relation(fields: [clearanceId], references: [id], onDelete: Cascade)
+  action      String // CLEARED | REVOKED | BACKFILLED
+  actorId     String?
+  actorName   String?
+  onBehalf    Boolean       @default(false)
+  reason      String?       @db.Text
+  remarks     String?       @db.Text
+  createdAt   DateTime      @default(now())
+
+  @@index([clearanceId, createdAt])
+  @@map("exit_clearance_events")
 }
