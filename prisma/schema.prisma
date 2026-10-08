@@ -1218,6 +1218,12 @@ model TenantSettings {
   /// timeline, still subject to the usual overdue escalation.
   milestoneRequireApproval Boolean @default(true)
 
+  /// Company appearance (Company Settings → Appearance): sidebar colours,
+  /// menu typography, accent, text scale, corner radius. Shape and limits are
+  /// defined by themeSchema in validations/companySettings.schema.js.
+  /// null = the default look. Editable by SUPER_ADMIN / ADMIN / HR only.
+  theme Json?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

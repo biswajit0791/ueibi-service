@@ -5,6 +5,7 @@
  * page's backing row. Lazily created on first read, one row per tenant, same
  * pattern as an appraisal cycle (ensureActiveCycle) or a WfhPolicy.
  */
+import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 
 export async function getCompanySettings(tenantId) {
@@ -23,13 +24,15 @@ export async function getCompanySettings(tenantId) {
   }
 }
 
-export async function updateCompanySettings(tenantId, { milestoneWatcherDomains, milestoneRequireApproval }) {
+export async function updateCompanySettings(tenantId, { milestoneWatcherDomains, milestoneRequireApproval, theme }) {
   await getCompanySettings(tenantId); // ensure the row exists before updating it
   return prisma.tenantSettings.update({
     where: { tenantId },
     data: {
       ...(milestoneWatcherDomains !== undefined && { milestoneWatcherDomains }),
       ...(milestoneRequireApproval !== undefined && { milestoneRequireApproval }),
+      // Prisma needs DbNull (not JS null) to store SQL NULL in a Json column.
+      ...(theme !== undefined && { theme: theme === null ? Prisma.DbNull : theme }),
     },
   });
 }
