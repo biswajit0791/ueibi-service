@@ -34,6 +34,9 @@ export const updateDepartmentSchema = z.object({
   color: z.string().regex(HEX_COLOR_RE, 'Color must be a valid hex code e.g. #6366f1').optional(),
   sortOrder: z.coerce.number().int().min(0).optional(),
   isActive: z.boolean().optional(),
+  // Exit clearance approvers. null clears the assignment.
+  headId: z.string().min(1).nullable().optional(),
+  alternateHeadId: z.string().min(1).nullable().optional(),
 });
 
 export const departmentIdParamSchema = z.object({

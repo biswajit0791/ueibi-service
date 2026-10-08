@@ -26,13 +26,15 @@ export const exitInterviewSchema = z.object({
 
 // ── Clearance Approval ──────────────────────────────────────────────────────
 export const clearanceSchema = z.object({
-  department: z.enum(['it', 'hr', 'finance', 'manager'], {
-    errorMap: () => ({ message: 'Department must be one of: it, hr, finance, manager' }),
+  department: z.enum(['it', 'hr', 'finance', 'manager', 'dept_head'], {
+    errorMap: () => ({ message: 'Department must be one of: it, hr, finance, manager, dept_head' }),
   }),
   cleared: z.boolean().default(true),
   remarks: z.string().optional().default(''),
   fileUrl: z.string().optional().nullable(),
   fileName: z.string().optional().nullable(),
+  // Required when HR/Admin act in a department head's place.
+  reason: z.string().max(1000).optional(),
 });
 
 // ── Complete Exit ────────────────────────────────────────────────────────────

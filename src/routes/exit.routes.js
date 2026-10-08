@@ -38,8 +38,10 @@ router.get('/exit/:employeeId/status', requireAuth, requireTenant, authorize('SU
 // Save exit interview
 router.patch('/exit/:id/interview', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), saveExitInterview);
 
-// Approve department clearance
-router.patch('/exit/:id/clearance', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'MANAGER', 'FINANCE'), approveClearance);
+// Approve department clearance. EMPLOYEE is included because a department
+// head or reporting manager may hold that role; the controller allows only
+// the designated approver (or HR/Admin) for each clearance.
+router.patch('/exit/:id/clearance', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'MANAGER', 'FINANCE', 'EMPLOYEE'), approveClearance);
 
 // Complete exit (finalize — mark EXITED, free license, archive)
 router.post('/exit/:id/complete', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'FINANCE'), completeExit);
