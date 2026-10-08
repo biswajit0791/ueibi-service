@@ -44,6 +44,9 @@ export const completeExitSchema = z.object({
   conductValue: z.enum(['Excellent', 'Good', 'Average', 'Poor']).optional().default('Good'),
   feedback: z.string().optional().default(''),
   docs: z.any().optional(),
+  // HR/Admin completing an exit while department clearances are still pending.
+  overrideClearances: z.boolean().optional().default(false),
+  overrideReason: z.string().max(1000).optional(),
 });
 
 // ── Certificate Generation ──────────────────────────────────────────────────

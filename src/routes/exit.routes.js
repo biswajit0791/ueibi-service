@@ -6,6 +6,7 @@ import {
   getExitStatus,
   getMyExitStatus,
   listPendingExits,
+  listMyClearanceInbox,
   completeExit,
   generateCertificate,
   sendExitDocuments,
@@ -20,6 +21,10 @@ const router = Router();
 
 // List all pending exits for this tenant
 router.get('/exit/pending', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'FINANCE'), listPendingExits);
+
+// Exits on which the caller must give a clearance (e.g. a reporting manager).
+// Any role may call it; the controller returns only records the caller can act on.
+router.get('/exit/clearances/inbox', requireAuth, requireTenant, listMyClearanceInbox);
 
 // Employee self-service exit status
 router.get('/exit/my-status', requireAuth, requireTenant, getMyExitStatus);
