@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import nodemailer from 'nodemailer';
 import sgMail from '@sendgrid/mail';
 import { env } from '../config/env.js';
@@ -47,7 +49,11 @@ function sanitizeEmailBody(rawText) {
     .replace(/(<code>)([A-Za-z0-9-_]+)(<\/code>)/gi, '$1[REDACTED]$3');
 }
 
-export async function sendMail({ to, subject, html, text, event, registrationId = null }) {
+/**
+ * @param {object} mail
+ * @param {{ filename: string, path: string }[]} [mail.attachments] - local files
+ */
+export async function sendMail({ to, subject, html, text, event, registrationId = null, attachments = [] }) {
   let status = 'DEV_LOGGED';
   let providerMessageId = null;
   let error = null;
@@ -66,6 +72,7 @@ export async function sendMail({ to, subject, html, text, event, registrationId 
         subject,
         text,
         html,
+        ...(attachments.length ? { attachments } : {}),
       });
       status = 'SENT';
       providerMessageId = info?.messageId || null;
@@ -78,7 +85,16 @@ export async function sendMail({ to, subject, html, text, event, registrationId 
   } else if (transport === 'sendgrid') {
     try {
       ensureSendgrid();
-      const [response] = await sgMail.send({ to, from: env.mailFrom, subject, html, text });
+      const [response] = await sgMail.send({
+        to, from: env.mailFrom, subject, html, text,
+        ...(attachments.length ? {
+          attachments: attachments.map((a) => ({
+            filename: a.filename || path.basename(a.path),
+            content: fs.readFileSync(a.path).toString('base64'),
+            disposition: 'attachment',
+          })),
+        } : {}),
+      });
       status = 'SENT';
       providerMessageId = response?.headers?.['x-message-id'] || null;
     } catch (err) {

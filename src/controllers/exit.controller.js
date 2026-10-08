@@ -41,6 +41,7 @@ import {
   presentClearance,
   progressOf,
 } from '../services/exitClearance.service.js';
+import { publicUploadUrl, buildAttachments } from '../lib/publicFiles.js';
 
 // Exits created from this moment on cannot be completed while a clearance is
 // pending (HR/Admin may override with a reason). Exits already in flight when
@@ -914,6 +915,7 @@ export async function sendExitDocuments(req, res, next) {
             tenant: { select: { companyName: true } },
           },
         },
+        clearances: true,
       },
     });
 
@@ -1005,19 +1007,18 @@ export async function sendExitDocuments(req, res, next) {
       generatedDocs.push({ label: 'Reference Check & Verified Profile Dossier', url: refCheckUrl, type: 'refcheck' });
     }
 
-    // Include any attached clearance settlement files (e.g. from Finance)
-    const clearanceFiles = [];
-    if (remarksObj.clearances) {
-      for (const [deptKey, cData] of Object.entries(remarksObj.clearances)) {
-        if (cData.fileUrl) {
-          clearanceFiles.push({
-            dept: deptKey.toUpperCase(),
-            fileName: cData.fileName || `${deptKey}_clearance_slip.pdf`,
-            url: cData.fileUrl,
-          });
-        }
-      }
-    }
+    // Clearance settlement files (e.g. Finance F&F slip), from the clearance
+    // rows so every clearance an exit has is covered.
+    const [withRows] = await ensureClearanceRows([exitDetails]);
+    const clearanceRows = [...withRows.clearances].sort((a, b) => a.sortOrder - b.sortOrder);
+    const clearanceFiles = clearanceRows
+      .filter((c) => c.fileUrl)
+      .map((c) => ({ dept: c.label, fileName: c.fileName || `${c.key}_clearance_slip.pdf`, url: c.fileUrl }));
+    const pendingClearances = clearanceRows.filter((c) => c.status !== 'CLEARED').map((c) => c.label);
+
+    // Absolute links: an email has no app to resolve "/uploads/..." against.
+    const linkFor = (url, filename) => publicUploadUrl(url, { download: true, filename }) || url;
+    const docFileName = (d) => `${d.label.replace(/[^A-Za-z0-9]+/g, '_')}_${(employee.name || 'Employee').replace(/[^A-Za-z0-9]+/g, '_')}.pdf`;
 
     const formattedLastDay = new Date(exitDetails.lastWorkingDay).toLocaleDateString('en-IN', {
       day: '2-digit', month: 'long', year: 'numeric',
@@ -1030,14 +1031,14 @@ export async function sendExitDocuments(req, res, next) {
 
     const docLinksHtml = generatedDocs.map(d => `
       <li style="margin-bottom: 8px;">
-        <strong>${d.label}:</strong> <a href="${d.url}" style="color: #4f46e5; font-weight: 600; text-decoration: underline;" target="_blank">Download Document</a>
+        <strong>${d.label}:</strong> <a href="${linkFor(d.url, docFileName(d))}" style="color: #4f46e5; font-weight: 600; text-decoration: underline;" target="_blank">Download Document</a>
       </li>
     `).join('');
 
     const clearanceFilesHtml = clearanceFiles.length > 0 ? `
       <h4 style="color: #374151; margin-top: 16px; margin-bottom: 8px;">Department Clearance & Settlement Attachments:</h4>
       <ul>
-        ${clearanceFiles.map(f => `<li style="margin-bottom: 6px;"><strong>${f.dept}:</strong> <a href="${f.url}" style="color: #059669; font-weight: 600;" target="_blank">${f.fileName} (Download)</a></li>`).join('')}
+        ${clearanceFiles.map(f => `<li style="margin-bottom: 6px;"><strong>${f.dept}:</strong> <a href="${linkFor(f.url, f.fileName)}" style="color: #059669; font-weight: 600;" target="_blank">${f.fileName} (Download)</a></li>`).join('')}
       </ul>
     ` : '';
 
@@ -1057,7 +1058,9 @@ export async function sendExitDocuments(req, res, next) {
 
         ${customMessage ? `<div style="background: #f3f4f6; border-left: 4px solid #4f46e5; padding: 12px 16px; margin: 16px 0; border-radius: 4px;"><p style="margin: 0; font-size: 13px; color: #374151;">${customMessage}</p></div>` : ''}
 
-        <p>All mandatory department clearances (IT, Finance, HR, Manager) have been finalized. Below are your official certified separation documents:</p>
+        <p>${pendingClearances.length === 0
+          ? `All department clearances (${clearanceRows.map((c) => c.label).join(', ')}) have been completed.`
+          : 'Your offboarding has been processed.'} Your official separation documents are attached to this email and can also be downloaded below:</p>
 
         <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin: 16px 0;">
           <h4 style="margin-top: 0; color: #111827; margin-bottom: 12px;">Official Separation Documents</h4>
@@ -1083,15 +1086,27 @@ export async function sendExitDocuments(req, res, next) {
       </div>
     `;
 
-    const text = `Dear ${employee.name},\n\nYour separation process with ${companyName} has been completed effective ${formattedLastDay}.\n\nYour official documents:\n${generatedDocs.map(d => `- ${d.label}: ${d.url}`).join('\n')}\n\nSincerely,\nHR Operations Team\n${companyName}`;
+    const text = `Dear ${employee.name},\n\nYour separation process with ${companyName} has been completed effective ${formattedLastDay}.\n\nYour official documents (also attached):\n${generatedDocs.map(d => `- ${d.label}: ${linkFor(d.url, docFileName(d))}`).join('\n')}\n\nSincerely,\nHR Operations Team\n${companyName}`;
 
-    await sendMail({
+    // Attach the documents themselves so they do not depend on the links.
+    const attachments = buildAttachments([
+      ...generatedDocs.map((d) => ({ url: d.url, filename: docFileName(d) })),
+      ...clearanceFiles.map((f) => ({ url: f.url, filename: `${f.dept.replace(/[^A-Za-z0-9]+/g, '_')}_${f.fileName}` })),
+    ]);
+
+    const mail = await sendMail({
       to: targetEmail,
       subject: emailSubject,
       html,
       text,
       event: 'EMPLOYEE_EXIT_DOCUMENTS',
+      attachments,
     });
+
+    // sendMail never throws; report a failed send instead of claiming success.
+    if (mail?.status === 'FAILED') {
+      return res.status(502).json({ error: `The email to ${targetEmail} could not be sent: ${mail.error || 'mail server error'}. Please try again.` });
+    }
 
     // Save timestamp of email sent
     remarksObj.documentsSentAt = new Date().toISOString();
@@ -1113,6 +1128,7 @@ export async function sendExitDocuments(req, res, next) {
       recipientEmail: targetEmail,
       documents: generatedDocs,
       clearanceFiles,
+      attachedCount: attachments.length,
     });
   } catch (err) {
     next(err);
