@@ -37,7 +37,20 @@ export const createGoalSchema = z.object({
    *                     legacy behaviour is preserved).
    */
   approvalMode: z.enum(['MANAGER_APPROVAL', 'AUTO_APPROVE']).nullable().optional(),
-}).passthrough();
+}).passthrough().refine((data) => {
+  const due = data.dueDate || data.targetDate;
+  if (data.startDate && due) {
+    const start = new Date(data.startDate);
+    const end = new Date(due);
+    if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+      return end >= start;
+    }
+  }
+  return true;
+}, {
+  message: 'Target completion date cannot be earlier than start date',
+  path: ['targetDate'],
+});
 
 // NOTE: `status` is deliberately NOT accepted here. Advancing the review
 // workflow must go through the dedicated /submit, /approve, /reject,
@@ -66,6 +79,19 @@ export const updateGoalSchema = z.object({
   specialNotes: z.string().max(2000, "Special notes cannot exceed 2000 characters").nullable().optional(),
   // IDs of employees to ADD to this goal (elevated roles only; never removes existing assignees)
   addEmployeeIds: z.array(z.string().min(1)).max(200).optional(),
+}).refine((data) => {
+  const due = data.dueDate || data.targetDate;
+  if (data.startDate && due) {
+    const start = new Date(data.startDate);
+    const end = new Date(due);
+    if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+      return end >= start;
+    }
+  }
+  return true;
+}, {
+  message: 'Target completion date cannot be earlier than start date',
+  path: ['targetDate'],
 });
 // (default zod behaviour strips unknown keys, so stray `status` / `employeeId`
 //  in the payload are silently dropped rather than applied.)

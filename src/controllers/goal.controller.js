@@ -250,6 +250,15 @@ export async function createGoal(req, res, next) {
       return res.status(400).json({ error: 'Goal title is required' });
     }
 
+    const effectiveDue = dueDate || targetDate;
+    if (startDate && effectiveDue) {
+      const start = new Date(startDate);
+      const due = new Date(effectiveDue);
+      if (!isNaN(start.getTime()) && !isNaN(due.getTime()) && due < start) {
+        return res.status(400).json({ error: 'Target completion date cannot be earlier than start date' });
+      }
+    }
+
     let targetEmployeeIds = [];
     if (Array.isArray(rawEmployeeIds) && rawEmployeeIds.length > 0) {
       targetEmployeeIds = rawEmployeeIds;
@@ -925,6 +934,16 @@ export async function updateGoal(req, res, next) {
     // Prevent direct status manipulation through the generic update endpoint.
     // Status changes must go through dedicated workflow action endpoints.
     const { status: _ignoredStatus, addEmployeeIds, ...safeData } = parsed.data;
+
+    const effectiveStart = safeData.startDate !== undefined ? safeData.startDate : existing.startDate;
+    const effectiveDue = safeData.dueDate !== undefined ? safeData.dueDate : (safeData.targetDate !== undefined ? safeData.targetDate : (existing.dueDate || existing.targetDate));
+    if (effectiveStart && effectiveDue) {
+      const start = new Date(effectiveStart);
+      const due = new Date(effectiveDue);
+      if (!isNaN(start.getTime()) && !isNaN(due.getTime()) && due < start) {
+        return res.status(400).json({ error: 'Target completion date cannot be earlier than start date' });
+      }
+    }
 
     const updated = await prisma.goal.update({
       where: { id },

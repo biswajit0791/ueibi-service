@@ -269,6 +269,37 @@ export async function updateMilestone(req, res, next) {
         if (task.dueDate && due > new Date(task.dueDate)) {
           return res.status(400).json({ error: "Milestone due date cannot be later than the task's own due date" });
         }
+
+        // Ensure not earlier than previous milestone
+        const prevMilestone = await prisma.taskMilestone.findFirst({
+          where: { taskId, order: { lt: milestone.order } },
+          orderBy: { order: 'desc' },
+        });
+        if (prevMilestone && prevMilestone.dueDate) {
+          const prevDue = new Date(prevMilestone.dueDate);
+          prevDue.setHours(0, 0, 0, 0);
+          if (dueMidnight < prevDue) {
+            return res.status(400).json({
+              error: `Milestone checkpoint due date cannot be earlier than Station 0${prevMilestone.order} (${prevDue.toISOString().slice(0, 10)})`,
+            });
+          }
+        }
+
+        // Ensure not later than next milestone
+        const nextMilestone = await prisma.taskMilestone.findFirst({
+          where: { taskId, order: { gt: milestone.order } },
+          orderBy: { order: 'asc' },
+        });
+        if (nextMilestone && nextMilestone.dueDate) {
+          const nextDue = new Date(nextMilestone.dueDate);
+          nextDue.setHours(0, 0, 0, 0);
+          if (dueMidnight > nextDue) {
+            return res.status(400).json({
+              error: `Milestone checkpoint due date cannot be later than Station 0${nextMilestone.order} (${nextDue.toISOString().slice(0, 10)})`,
+            });
+          }
+        }
+
         data.dueDate = due;
         auditLines.push(`due date set to ${due.toISOString().slice(0, 10)}`);
       }
