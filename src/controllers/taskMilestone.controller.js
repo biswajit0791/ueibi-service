@@ -127,7 +127,10 @@ export async function createMilestone(req, res, next) {
     const dueMidnight = new Date(dueDate);
     dueMidnight.setHours(0, 0, 0, 0);
 
-    if (dueMidnight < today) {
+    const taskDue = task.dueDate ? new Date(task.dueDate) : null;
+    const isTaskOverdue = taskDue && taskDue < today;
+
+    if (!isTaskOverdue && dueMidnight < today) {
       return res.status(400).json({ error: 'Milestone checkpoint due date cannot be in the past' });
     }
 
@@ -248,7 +251,10 @@ export async function updateMilestone(req, res, next) {
         const dueMidnight = new Date(dueDate);
         dueMidnight.setHours(0, 0, 0, 0);
 
-        if (dueMidnight < today) {
+        const taskDue = task.dueDate ? new Date(task.dueDate) : null;
+        const isTaskOverdue = taskDue && taskDue < today;
+
+        if (!isTaskOverdue && dueMidnight < today) {
           return res.status(400).json({ error: 'Milestone checkpoint due date cannot be in the past' });
         }
 
@@ -291,7 +297,10 @@ export async function updateMilestone(req, res, next) {
         const proposedMidnight = new Date(proposedCompletionDate);
         proposedMidnight.setHours(0, 0, 0, 0);
 
-        if (proposedMidnight < today) {
+        const taskDue = task.dueDate ? new Date(task.dueDate) : null;
+        const isTaskOverdue = taskDue && taskDue < today;
+
+        if (!isTaskOverdue && proposedMidnight < today) {
           return res.status(400).json({ error: 'Proposed completion date cannot be in the past' });
         }
 
