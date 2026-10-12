@@ -120,6 +120,25 @@ export async function createMilestone(req, res, next) {
     if (Number.isNaN(due.getTime())) {
       return res.status(400).json({ error: 'Invalid milestone due date' });
     }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const dueMidnight = new Date(dueDate);
+    dueMidnight.setHours(0, 0, 0, 0);
+
+    if (dueMidnight < today) {
+      return res.status(400).json({ error: 'Milestone checkpoint due date cannot be in the past' });
+    }
+
+    if (task.startDate) {
+      const taskStart = new Date(task.startDate);
+      taskStart.setHours(0, 0, 0, 0);
+      if (dueMidnight < taskStart) {
+        return res.status(400).json({ error: "Milestone checkpoint due date cannot be earlier than the task's start date" });
+      }
+    }
+
     if (due > new Date(task.dueDate)) {
       return res.status(400).json({ error: "Milestone due date cannot be later than the task's own due date" });
     }
@@ -127,6 +146,21 @@ export async function createMilestone(req, res, next) {
     const existingCount = await prisma.taskMilestone.count({ where: { taskId } });
     if (existingCount >= MAX_MILESTONES_PER_TASK) {
       return res.status(400).json({ error: `A task may have at most ${MAX_MILESTONES_PER_TASK} milestones` });
+    }
+
+    // Ensure not earlier than prior milestone
+    const lastMilestone = await prisma.taskMilestone.findFirst({
+      where: { taskId },
+      orderBy: { order: 'desc' },
+    });
+    if (lastMilestone && lastMilestone.dueDate) {
+      const lastDue = new Date(lastMilestone.dueDate);
+      lastDue.setHours(0, 0, 0, 0);
+      if (dueMidnight < lastDue) {
+        return res.status(400).json({
+          error: `Milestone checkpoint due date cannot be earlier than Station 0${lastMilestone.order} (${lastDue.toISOString().slice(0, 10)})`,
+        });
+      }
     }
 
     const milestone = await prisma.taskMilestone.create({
@@ -208,6 +242,24 @@ export async function updateMilestone(req, res, next) {
         if (Number.isNaN(due.getTime())) {
           return res.status(400).json({ error: 'Invalid milestone due date' });
         }
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        const dueMidnight = new Date(dueDate);
+        dueMidnight.setHours(0, 0, 0, 0);
+
+        if (dueMidnight < today) {
+          return res.status(400).json({ error: 'Milestone checkpoint due date cannot be in the past' });
+        }
+
+        if (task.startDate) {
+          const taskStart = new Date(task.startDate);
+          taskStart.setHours(0, 0, 0, 0);
+          if (dueMidnight < taskStart) {
+            return res.status(400).json({ error: "Milestone checkpoint due date cannot be earlier than the task's start date" });
+          }
+        }
+
         if (task.dueDate && due > new Date(task.dueDate)) {
           return res.status(400).json({ error: "Milestone due date cannot be later than the task's own due date" });
         }
@@ -232,6 +284,27 @@ export async function updateMilestone(req, res, next) {
         const proposed = new Date(proposedCompletionDate);
         if (Number.isNaN(proposed.getTime())) {
           return res.status(400).json({ error: 'Invalid proposed completion date' });
+        }
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        const proposedMidnight = new Date(proposedCompletionDate);
+        proposedMidnight.setHours(0, 0, 0, 0);
+
+        if (proposedMidnight < today) {
+          return res.status(400).json({ error: 'Proposed completion date cannot be in the past' });
+        }
+
+        if (task.startDate) {
+          const taskStart = new Date(task.startDate);
+          taskStart.setHours(0, 0, 0, 0);
+          if (proposedMidnight < taskStart) {
+            return res.status(400).json({ error: "Proposed completion date cannot be earlier than the task's start date" });
+          }
+        }
+
+        if (task.dueDate && proposed > new Date(task.dueDate)) {
+          return res.status(400).json({ error: "Proposed completion date cannot be later than the task's own due date" });
         }
         data.proposedCompletionDate = proposed;
         data.proposedById = req.user.id;
