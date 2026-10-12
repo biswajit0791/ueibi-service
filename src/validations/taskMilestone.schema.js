@@ -3,16 +3,14 @@ import { z } from 'zod';
 export const MAX_MILESTONES_PER_TASK = 4;
 export const MAX_WATCHERS_PER_MILESTONE = 10;
 
-const watcherEmailsSchema = z
+const watcherEmailsBaseSchema = z
   .array(z.string().trim().email('Each watcher must be a valid email address'))
-  .max(MAX_WATCHERS_PER_MILESTONE, `A milestone may have at most ${MAX_WATCHERS_PER_MILESTONE} watchers`)
-  .optional()
-  .default([]);
+  .max(MAX_WATCHERS_PER_MILESTONE, `A milestone may have at most ${MAX_WATCHERS_PER_MILESTONE} watchers`);
 
 export const createMilestoneSchema = z.object({
   title: z.string().trim().min(1, 'Milestone title is required').max(300),
   dueDate: z.string({ required_error: 'Milestone due date is required' }),
-  watcherEmails: watcherEmailsSchema,
+  watcherEmails: watcherEmailsBaseSchema.optional().default([]),
 });
 
 // One endpoint, several distinct actions — see taskMilestone.controller.js for
@@ -21,7 +19,7 @@ export const createMilestoneSchema = z.object({
 export const updateMilestoneSchema = z.object({
   title: z.string().trim().min(1).max(300).optional(),
   dueDate: z.string().optional(),
-  watcherEmails: watcherEmailsSchema.optional(),
+  watcherEmails: watcherEmailsBaseSchema.optional(),
   // Employee proposes a new completion date. Null clears a pending proposal.
   proposedCompletionDate: z.string().nullable().optional(),
   // Manager approves the milestone as-is, or approves the currently proposed

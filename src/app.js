@@ -41,6 +41,7 @@ import dashboardSummaryRoutes from './routes/dashboardSummary.routes.js';
 import exitRoutes from './routes/exit.routes.js';
 import companySettingsRoutes from './routes/companySettings.routes.js';
 import documentTemplateRoutes from './routes/documentTemplate.routes.js';
+import roleHierarchyRoutes from './routes/roleHierarchy.routes.js';
 import { notFound } from './middleware/notFound.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
@@ -140,6 +141,7 @@ apiRouter.use(dashboardSummaryRoutes);
 apiRouter.use(exitRoutes);
 apiRouter.use(companySettingsRoutes);
 apiRouter.use(documentTemplateRoutes);
+apiRouter.use(roleHierarchyRoutes);
 if (env.nodeEnv !== 'production') {
   apiRouter.use(devRoutes);
 }

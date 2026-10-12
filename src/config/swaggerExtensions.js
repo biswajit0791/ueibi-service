@@ -133,6 +133,10 @@ export const swaggerExtensions = {
         'Identity always comes from the verified session: a `senderId`/`userId` in a request body or socket payload is ignored. ' +
         'Live events are documented under the `x-socket-events` extension on this spec.',
     },
+    {
+      name: 'Role Hierarchy',
+      description: 'Role Hierarchy and Organizational Reporting: real database role governance, reporting lines tree, management chain traversal, and circular-safe manager assignment.',
+    },
   ],
 
   schemas: {
@@ -1039,6 +1043,119 @@ export const swaggerExtensions = {
       required: ['body'],
       properties: {
         body: { type: 'string', minLength: 1, maxLength: 5000 },
+      },
+    },
+    SystemRoleDefinition: {
+      type: 'object',
+      properties: {
+        role: { type: 'string', example: 'SUPER_ADMIN' },
+        title: { type: 'string', example: 'Super Administrator' },
+        subtitle: { type: 'string', example: 'Chief Tenant Authority & Owner' },
+        tierName: { type: 'string', example: 'Executive Governance' },
+        tierLevel: { type: 'integer', example: 1 },
+        tierRank: { type: 'integer', example: 100 },
+        badgeColor: { type: 'string', example: '#6366f1' },
+        badgeBg: { type: 'string', example: '#eef2ff' },
+        description: { type: 'string' },
+        responsibilities: { type: 'array', items: { type: 'string' } },
+        userCount: { type: 'integer', example: 2 },
+        isElevated: { type: 'boolean', example: true },
+        creatableRoles: { type: 'array', items: { type: 'string' } },
+        visibleDashboards: { type: 'array', items: { type: 'string' } },
+      },
+    },
+    SystemRolesResponse: {
+      type: 'object',
+      properties: {
+        roles: { type: 'array', items: { $ref: '#/components/schemas/SystemRoleDefinition' } },
+        activeRolesCount: { type: 'integer', example: 5 },
+        activeRoleKeys: { type: 'array', items: { type: 'string' } },
+      },
+    },
+    OrgTreeNode: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', example: 'cuid_user_1' },
+        name: { type: 'string', example: 'John Doe' },
+        email: { type: 'string', example: 'john@example.com' },
+        role: { type: 'string', example: 'MANAGER' },
+        designation: { type: 'string', example: 'Engineering Lead' },
+        department: { type: 'string', example: 'Engineering' },
+        managerId: { type: 'string', nullable: true },
+        directReportCount: { type: 'integer', example: 4 },
+        totalDownlineCount: { type: 'integer', example: 12 },
+        subordinates: { type: 'array', items: { $ref: '#/components/schemas/OrgTreeNode' } },
+      },
+    },
+    OrgTreeResponse: {
+      type: 'object',
+      properties: {
+        tree: { type: 'array', items: { $ref: '#/components/schemas/OrgTreeNode' } },
+        stats: {
+          type: 'object',
+          properties: {
+            totalHeadcount: { type: 'integer', example: 42 },
+            managersCount: { type: 'integer', example: 8 },
+            departmentsCount: { type: 'integer', example: 5 },
+            rootLeadersCount: { type: 'integer', example: 2 },
+            activeRolesCount: { type: 'integer', example: 5 },
+          },
+        },
+      },
+    },
+    HierarchyChainResponse: {
+      type: 'object',
+      properties: {
+        employee: { $ref: '#/components/schemas/OrgTreeNode' },
+        managementChain: { type: 'array', items: { $ref: '#/components/schemas/OrgTreeNode' } },
+        directReports: { type: 'array', items: { $ref: '#/components/schemas/OrgTreeNode' } },
+      },
+    },
+    AssignManagerRequest: {
+      type: 'object',
+      required: ['employeeId'],
+      properties: {
+        employeeId: { type: 'string', description: 'ID of employee whose reporting manager is being assigned' },
+        managerId: { type: 'string', nullable: true, description: 'ID of target manager, or null to make root leader' },
+      },
+    },
+    AssignManagerResponse: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean', example: true },
+        message: { type: 'string', example: 'Reporting manager updated successfully.' },
+        employee: { type: 'object' },
+      },
+    },
+    HierarchyMatrixFeature: {
+      type: 'object',
+      properties: {
+        feature: { type: 'string', example: 'User Provisioning Rights' },
+      },
+      additionalProperties: { type: 'string', description: 'Access level per active role (e.g. Full Control, View Only, No Access)' },
+    },
+    HierarchyMatrixSection: {
+      type: 'object',
+      properties: {
+        category: { type: 'string', example: 'User & Employee Lifecycle' },
+        features: {
+          type: 'array',
+          items: { $ref: '#/components/schemas/HierarchyMatrixFeature' },
+        },
+      },
+    },
+    HierarchyMatrixResponse: {
+      type: 'object',
+      properties: {
+        matrix: {
+          type: 'array',
+          items: { $ref: '#/components/schemas/HierarchyMatrixSection' },
+        },
+        activeRoles: {
+          type: 'array',
+          items: { type: 'string' },
+          example: ['SUPER_ADMIN', 'CMD', 'ADMIN', 'HR', 'FINANCE', 'MANAGER', 'EMPLOYEE'],
+        },
       },
     },
   },
@@ -4958,6 +5075,107 @@ export const swaggerExtensions = {
         responses: {
           200: { description: 'File stream', content: { 'application/pdf': {}, 'image/jpeg': {}, 'image/png': {} } },
           404: { description: 'Dispute or attachment not found, or not visible to the caller' },
+        },
+      },
+    },
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ROLE & ORGANIZATIONAL HIERARCHY
+    // ═══════════════════════════════════════════════════════════════════════════
+    '/hierarchy/system': {
+      get: {
+        tags: ['Role Hierarchy'],
+        summary: 'List active role hierarchy tiers and governance permissions',
+        description: 'Returns real database role definitions, tier levels, creation rights, and active user counts in this tenant.',
+        operationId: 'getSystemRolesHierarchy',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        responses: {
+          200: {
+            description: 'Canonical active role hierarchy metadata',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/SystemRolesResponse' } } },
+          },
+          401: { description: 'Authentication required' },
+        },
+      },
+    },
+    '/hierarchy/tree': {
+      get: {
+        tags: ['Role Hierarchy'],
+        summary: 'Get live organizational reporting hierarchy tree',
+        description: 'Returns the recursive reporting lines tree with direct report and downline counts, with optional department and search filtering.',
+        operationId: 'getOrgHierarchyTree',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [
+          { name: 'department', in: 'query', schema: { type: 'string' }, description: 'Filter branches by department' },
+          { name: 'search', in: 'query', schema: { type: 'string' }, description: 'Search employees by name, email, or designation' },
+        ],
+        responses: {
+          200: {
+            description: 'Organizational hierarchy tree with downline statistics',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/OrgTreeResponse' } } },
+          },
+          400: { description: 'Validation failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+          401: { description: 'Authentication required' },
+        },
+      },
+    },
+    '/hierarchy/chain/{employeeId}': {
+      get: {
+        tags: ['Role Hierarchy'],
+        summary: 'Get management chain of command for an employee',
+        description: 'Returns the ancestor reporting line from root leadership down to this employee, plus direct subordinates.',
+        operationId: 'getHierarchyChain',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [
+          { name: 'employeeId', in: 'path', required: true, schema: { type: 'string' }, description: 'Target employee ID' },
+        ],
+        responses: {
+          200: {
+            description: 'Management chain of command and direct reports',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/HierarchyChainResponse' } } },
+          },
+          400: { description: 'Validation failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
+          401: { description: 'Authentication required' },
+          404: { description: 'Employee not found' },
+        },
+      },
+    },
+    '/hierarchy/matrix': {
+      get: {
+        tags: ['Role Hierarchy'],
+        summary: 'Get feature authority and permission matrix',
+        description: 'Returns side-by-side comparison matrix across features, dynamically filtered to the active roles present in this tenant.',
+        operationId: 'getHierarchyMatrix',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        responses: {
+          200: {
+            description: 'Feature authority matrix across active roles',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/HierarchyMatrixResponse' } } },
+          },
+          401: { description: 'Authentication required' },
+        },
+      },
+    },
+    '/hierarchy/assign-manager': {
+      patch: {
+        tags: ['Role Hierarchy'],
+        summary: 'Reassign an employee reporting manager (cycle-safe)',
+        description: 'Updates an employee line manager. Performs strict cycle detection to prevent circular reporting loops. Restricted to SUPER_ADMIN, ADMIN, HR.',
+        operationId: 'assignEmployeeManager',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { $ref: '#/components/schemas/AssignManagerRequest' } } },
+        },
+        responses: {
+          200: {
+            description: 'Manager reassigned successfully',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/AssignManagerResponse' } } },
+          },
+          400: { description: 'Validation failed or circular reporting loop detected' },
+          401: { description: 'Authentication required' },
+          403: { description: 'Forbidden — SUPER_ADMIN, ADMIN, HR only' },
+          404: { description: 'Employee or target manager not found' },
         },
       },
     },

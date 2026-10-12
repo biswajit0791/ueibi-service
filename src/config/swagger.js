@@ -39,6 +39,7 @@ const options = {
       { name: 'Policies & Compliance', description: 'Corporate policies, electronic signatures, versioning, reminders, and auditable compliance registry' },
       { name: 'Uploads', description: 'Secure document and file uploads' },
       { name: 'Company Hub', description: 'Team directory and personal hub profile management' },
+      { name: 'Role Hierarchy', description: 'Role hierarchy governance, organizational reporting tree, management chain traversal, and circular-safe manager assignment' },
       { name: 'Dev', description: 'Development-only endpoints (disabled in production)' },
     ],
     components: {
