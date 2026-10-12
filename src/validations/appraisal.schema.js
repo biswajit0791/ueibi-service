@@ -12,6 +12,22 @@ export const createCycleSchema = z.object({
   endDate: z.string().optional(),
   dueDate: z.string().optional(),
   status: z.enum(['ACTIVE', 'CLOSED']).optional().default('ACTIVE'),
+}).refine((data) => {
+  if (data.startDate && data.endDate) {
+    return new Date(data.startDate) <= new Date(data.endDate);
+  }
+  return true;
+}, {
+  message: 'End date cannot be earlier than start date',
+  path: ['endDate'],
+}).refine((data) => {
+  if (data.startDate && data.dueDate) {
+    return new Date(data.startDate) <= new Date(data.dueDate);
+  }
+  return true;
+}, {
+  message: 'Due date cannot be earlier than start date',
+  path: ['dueDate'],
 });
 
 export const updateCycleSchema = z.object({
@@ -25,6 +41,22 @@ export const updateCycleSchema = z.object({
   status:    z.enum(['ACTIVE', 'CLOSED']).optional(),
 }).refine(data => Object.keys(data).length > 0, {
   message: 'At least one field must be provided',
+}).refine((data) => {
+  if (data.startDate && data.endDate) {
+    return new Date(data.startDate) <= new Date(data.endDate);
+  }
+  return true;
+}, {
+  message: 'End date cannot be earlier than start date',
+  path: ['endDate'],
+}).refine((data) => {
+  if (data.startDate && data.dueDate) {
+    return new Date(data.startDate) <= new Date(data.dueDate);
+  }
+  return true;
+}, {
+  message: 'Due date cannot be earlier than start date',
+  path: ['dueDate'],
 });
 
 export const createParameterSchema = z.object({

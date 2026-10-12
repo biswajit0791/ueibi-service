@@ -93,6 +93,14 @@ const workHistoryEntrySchema = z.object({
   isCurrent: z.boolean().optional(),
   reasonForExit: z.string().optional().nullable(),
   remarks: z.string().optional().nullable(),
+}).refine((data) => {
+  if (data.startDate && data.endDate) {
+    return new Date(data.startDate) <= new Date(data.endDate);
+  }
+  return true;
+}, {
+  message: "End date cannot be earlier than start date",
+  path: ["endDate"],
 });
 
 const educationEntrySchema = z.object({

@@ -87,7 +87,31 @@ export const createTaskSchema = z.object({
   // the controller re-checks priority = 'critical' and MANAGER+ role before
   // trusting this flag; see createTask in task.controller.js.
   isMilestoneTracked: z.boolean().optional(),
-}).passthrough();
+}).passthrough().refine((data) => {
+  if (data.startDate && data.dueDate) {
+    const start = new Date(data.startDate);
+    const due = new Date(data.dueDate);
+    if (!isNaN(start.getTime()) && !isNaN(due.getTime())) {
+      return due >= start;
+    }
+  }
+  return true;
+}, {
+  message: 'Due date cannot be earlier than start date',
+  path: ['dueDate'],
+}).refine((data) => {
+  if (data.actualStartDate && data.actualCompletionDate) {
+    const start = new Date(data.actualStartDate);
+    const end = new Date(data.actualCompletionDate);
+    if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+      return end >= start;
+    }
+  }
+  return true;
+}, {
+  message: 'Actual completion date cannot be earlier than actual start date',
+  path: ['actualCompletionDate'],
+});
 
 export const updateTaskSchema = z.object({
   title: z.string().min(1, "Task title is required").optional(),
@@ -108,7 +132,31 @@ export const updateTaskSchema = z.object({
   isDependencyOf: z.string().nullable().optional(),
   status: taskStatusSchema.optional(),
   progress: progressSchema,
-}).passthrough();
+}).passthrough().refine((data) => {
+  if (data.startDate && data.dueDate) {
+    const start = new Date(data.startDate);
+    const due = new Date(data.dueDate);
+    if (!isNaN(start.getTime()) && !isNaN(due.getTime())) {
+      return due >= start;
+    }
+  }
+  return true;
+}, {
+  message: 'Due date cannot be earlier than start date',
+  path: ['dueDate'],
+}).refine((data) => {
+  if (data.actualStartDate && data.actualCompletionDate) {
+    const start = new Date(data.actualStartDate);
+    const end = new Date(data.actualCompletionDate);
+    if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+      return end >= start;
+    }
+  }
+  return true;
+}, {
+  message: 'Actual completion date cannot be earlier than actual start date',
+  path: ['actualCompletionDate'],
+});
 
 export const createTaskCommentSchema = z.object({
   comment: z.string().max(2000, "Comment cannot exceed 2000 characters").optional().default(''),

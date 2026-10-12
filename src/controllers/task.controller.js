@@ -11,6 +11,7 @@ import {
 } from '../services/goalWeight.service.js';
 import { timingUpdates, isWorkStarted, taskTiming } from '../lib/taskTiming.js';
 import { visibleTaskWhere } from '../services/taskVisibility.service.js';
+import { assertTaskDatesFitMilestones } from '../lib/dateValidation.js';
 
 // ─── Helper: actual start / completion dates ───────────────────────────────
 //
@@ -697,10 +698,18 @@ export async function updateTask(req, res, next) {
       actualStartDate, actualCompletionDate,
     } = parsed.data;
 
-    // Date validation on update too
-    if (startDate && dueDate) {
-      const start = new Date(startDate);
-      const due = new Date(dueDate);
+    const existing = await assertTaskOwner(id, req.user, tenantId).catch(e => {
+      res.status(e.status || 500).json({ error: e.message });
+      return null;
+    });
+    if (!existing) return;
+
+    // Date validation on update against effective combined dates
+    const effectiveStartDate = startDate !== undefined ? startDate : existing.startDate;
+    const effectiveDueDate = dueDate !== undefined ? dueDate : existing.dueDate;
+    if (effectiveStartDate && effectiveDueDate) {
+      const start = new Date(effectiveStartDate);
+      const due = new Date(effectiveDueDate);
       if (!isNaN(start.getTime()) && !isNaN(due.getTime()) && due < start) {
         return res.status(400).json({
           success: false,
@@ -709,11 +718,14 @@ export async function updateTask(req, res, next) {
       }
     }
 
-    const existing = await assertTaskOwner(id, req.user, tenantId).catch(e => {
-      res.status(e.status || 500).json({ error: e.message });
-      return null;
-    });
-    if (!existing) return;
+    // Revalidate milestones if task dates are changing
+    if (existing.isMilestoneTracked && (startDate !== undefined || dueDate !== undefined)) {
+      try {
+        await assertTaskDatesFitMilestones(id, effectiveStartDate, effectiveDueDate);
+      } catch (err) {
+        return res.status(err.status || 400).json({ success: false, message: err.message });
+      }
+    }
 
     const isElevated = hasRole(req.user.role, ELEVATED_ROLES);
     // "Manager" here means anywhere up the reporting chain of the task owner.
