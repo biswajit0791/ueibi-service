@@ -5179,5 +5179,199 @@ export const swaggerExtensions = {
         },
       },
     },
+    '/hierarchy/permissions': {
+      patch: {
+        tags: ['Role Hierarchy'],
+        summary: 'Update role-wise permission assignments',
+        description: 'Updates permission states (ALLOWED, DENIED, INHERITED) for a specific corporate role. Protected enterprise capabilities are guarded and logged.',
+        operationId: 'updateRolePermissions',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['role', 'permissions'],
+                properties: {
+                  role: { type: 'string', enum: ['SUPER_ADMIN', 'CMD', 'ADMIN', 'HR', 'FINANCE', 'MANAGER', 'EMPLOYEE'] },
+                  permissions: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      required: ['feature', 'category', 'state'],
+                      properties: {
+                        feature: { type: 'string' },
+                        category: { type: 'string' },
+                        state: { type: 'string', enum: ['ALLOWED', 'DENIED', 'INHERITED', 'PROTECTED'] },
+                        label: { type: 'string' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: 'Permissions updated successfully' },
+          400: { description: 'Validation failed or protected security boundary violation' },
+          401: { description: 'Authentication required' },
+          403: { description: 'Forbidden — SUPER_ADMIN, ADMIN only' },
+        },
+      },
+    },
+    '/hierarchy/permissions/reset': {
+      post: {
+        tags: ['Role Hierarchy'],
+        summary: 'Reset role permissions to enterprise defaults',
+        description: 'Clears custom permission overrides and reverts to standard role definitions. Gated to SUPER_ADMIN, ADMIN.',
+        operationId: 'resetRolePermissions',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        requestBody: {
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  role: { type: 'string', enum: ['SUPER_ADMIN', 'CMD', 'ADMIN', 'HR', 'FINANCE', 'MANAGER', 'EMPLOYEE', 'ALL'] },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: 'Permissions reset to defaults' },
+          401: { description: 'Authentication required' },
+          403: { description: 'Forbidden — SUPER_ADMIN, ADMIN only' },
+        },
+      },
+    },
+    '/hierarchy/visibility': {
+      get: {
+        tags: ['Role Hierarchy'],
+        summary: 'Get role hierarchy visibility configuration',
+        description: 'Returns visibility rules controlling which hierarchy sections and actions are accessible per role.',
+        operationId: 'getHierarchyVisibility',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        responses: {
+          200: { description: 'Current visibility configurations' },
+          401: { description: 'Authentication required' },
+        },
+      },
+      patch: {
+        tags: ['Role Hierarchy'],
+        summary: 'Update role hierarchy visibility configuration',
+        description: 'Updates dynamic role hierarchy view rules (Tree, Ladder, Matrix, Stats, Directory, Dept filters, Actions). Gated to SUPER_ADMIN, ADMIN.',
+        operationId: 'updateHierarchyVisibility',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['visibility'],
+                properties: {
+                  visibility: { type: 'object' },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: 'Visibility configuration updated successfully' },
+          401: { description: 'Authentication required' },
+          403: { description: 'Forbidden — SUPER_ADMIN, ADMIN only' },
+        },
+      },
+    },
+    '/hierarchy/dashboard-config': {
+      get: {
+        tags: ['Role Hierarchy'],
+        summary: 'Get role-based dashboard widget configuration',
+        description: 'Returns enabled dashboard widgets and supported widgets per role.',
+        operationId: 'getRoleDashboardConfig',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        responses: {
+          200: { description: 'Dashboard widget configuration' },
+          401: { description: 'Authentication required' },
+        },
+      },
+      patch: {
+        tags: ['Role Hierarchy'],
+        summary: 'Update role dashboard widget configuration',
+        description: 'Configures enabled dashboard widgets for a corporate role. Gated to SUPER_ADMIN, ADMIN.',
+        operationId: 'updateRoleDashboardConfig',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['role', 'widgets'],
+                properties: {
+                  role: { type: 'string', enum: ['SUPER_ADMIN', 'CMD', 'ADMIN', 'HR', 'FINANCE', 'MANAGER', 'EMPLOYEE'] },
+                  widgets: { type: 'array', items: { type: 'string' } },
+                  allowedNavModules: { type: 'array', items: { type: 'string' } },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: 'Dashboard configuration updated' },
+          401: { description: 'Authentication required' },
+          403: { description: 'Forbidden — SUPER_ADMIN, ADMIN only' },
+        },
+      },
+    },
+    '/hierarchy/dashboard-config/reset': {
+      post: {
+        tags: ['Role Hierarchy'],
+        summary: 'Reset dashboard widgets to defaults',
+        description: 'Reverts dashboard widget configurations to enterprise defaults. Gated to SUPER_ADMIN, ADMIN.',
+        operationId: 'resetRoleDashboardConfig',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        requestBody: {
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  role: { type: 'string', enum: ['SUPER_ADMIN', 'CMD', 'ADMIN', 'HR', 'FINANCE', 'MANAGER', 'EMPLOYEE', 'ALL'] },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: 'Dashboard configuration reset' },
+          401: { description: 'Authentication required' },
+          403: { description: 'Forbidden — SUPER_ADMIN, ADMIN only' },
+        },
+      },
+    },
+    '/hierarchy/audit-logs': {
+      get: {
+        tags: ['Role Hierarchy'],
+        summary: 'Get role permissions and visibility audit logs',
+        description: 'Retrieves immutable audit trail history recording who modified role permissions, visibility, and dashboard configs. Gated to SUPER_ADMIN, ADMIN.',
+        operationId: 'getPermissionAuditLogs',
+        security: [{ userCookie: [] }, { bearerAuth: [] }],
+        parameters: [
+          { name: 'page', in: 'query', schema: { type: 'integer', default: 1 } },
+          { name: 'limit', in: 'query', schema: { type: 'integer', default: 20 } },
+          { name: 'action', in: 'query', schema: { type: 'string' } },
+          { name: 'targetRole', in: 'query', schema: { type: 'string' } },
+        ],
+        responses: {
+          200: { description: 'Audit trail history logs' },
+          401: { description: 'Authentication required' },
+          403: { description: 'Forbidden — SUPER_ADMIN, ADMIN only' },
+        },
+      },
+    },
   },
 };

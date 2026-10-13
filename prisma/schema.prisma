@@ -121,6 +121,7 @@ model Tenant {
   licenseRequests      LicenseRequest[]
   documentTemplates    DocumentTemplate[]
   generatedDocuments   GeneratedDocument[]
+  permissionAuditLogs  PermissionAuditLog[]
 
   @@index([isPlatform])
   @@index([status])
@@ -309,6 +310,7 @@ model TenantUser {
   galleryComments     GalleryComment[]     @relation("GalleryCommentAuthor")
   licenseRequests     LicenseRequest[]     @relation("UserLicenseRequests")
   paidLicenseRequests LicenseRequest[]     @relation("PaidLicenseRequests")
+  permissionAuditsActed PermissionAuditLog[] @relation("PermissionAuditActor")
 
   remarks   String?
   docs      Json?
@@ -1229,10 +1231,38 @@ model TenantSettings {
   /// null = the default look. Editable by SUPER_ADMIN / ADMIN / HR only.
   theme Json?
 
+  /// Dynamic role hierarchy visibility configuration: which tabs and actions are allowed per role
+  hierarchyVisibility Json?
+
+  /// Dynamic role-wise feature permission matrix overrides
+  rolePermissions     Json?
+
+  /// Dynamic role-based dashboard widget and navigation configuration
+  dashboardConfig     Json?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@map("tenant_settings")
+}
+
+/// Audit trail of role permissions, hierarchy visibility, and dashboard configuration changes.
+model PermissionAuditLog {
+  id         String     @id @default(cuid())
+  tenantId   String
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  actorId    String
+  actor      TenantUser @relation("PermissionAuditActor", fields: [actorId], references: [id], onDelete: Cascade)
+  actorRole  String
+  action     String     // PERMISSION_UPDATE | VISIBILITY_UPDATE | DASHBOARD_CONFIG_UPDATE | RESET_DEFAULTS
+  targetRole String?    // e.g. "MANAGER", "EMPLOYEE", "ALL"
+  details    String?    @db.Text
+  changes    Json?
+  createdAt  DateTime   @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([actorId])
+  @@map("permission_audit_logs")
 }
 
 model WfhPolicy {

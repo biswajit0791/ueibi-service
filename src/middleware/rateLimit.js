@@ -24,3 +24,12 @@ export const uploadRateLimiter = rateLimit({
   message: { error: 'Too many upload requests, please try again later.' },
 });
 
+export const authRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many login attempts from this IP, please try again later.' },
+});
+
+

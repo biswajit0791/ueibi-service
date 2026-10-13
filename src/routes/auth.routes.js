@@ -1,11 +1,11 @@
 import { Router } from 'express';
 import { login, me, logout, forgotPassword, resetPassword } from '../controllers/auth.controller.js';
 import { requireAuth } from '../middleware/auth.js';
-import { passwordResetRateLimit } from '../middleware/rateLimit.js';
+import { passwordResetRateLimit, authRateLimit } from '../middleware/rateLimit.js';
 
 const router = Router();
 
-router.post('/auth/login', login);
+router.post('/auth/login', authRateLimit, login);
 router.post('/auth/logout', logout);
 router.get('/auth/me', requireAuth, me);
 

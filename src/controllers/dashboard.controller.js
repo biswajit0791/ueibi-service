@@ -487,14 +487,21 @@ export async function getDashboardSummary(req, res, next) {
 
     let events = [];
     try {
-      events = await prisma.$queryRawUnsafe(
-        'SELECT "id", "title", "startsAt" FROM "hub_events" WHERE "tenantId" = $1 AND "startsAt" >= $2 ORDER BY "startsAt" ASC LIMIT 3',
-        tenantId,
-        now,
-      );
+      const hubEvents = await prisma.hubEvent.findMany({
+        where: { tenantId },
+        select: { id: true, title: true, date: true, time: true, location: true },
+        orderBy: { date: 'asc' },
+        take: 3,
+      });
+      events = hubEvents.map((e) => ({
+        id: e.id,
+        title: e.title,
+        date: e.date,
+        time: e.time,
+        location: e.location,
+        startsAt: e.date,
+      }));
     } catch {
-      // hub_events is created lazily by the Hub module. An absent table is not
-      // an error here — it just means there is nothing to show yet.
       events = [];
     }
 
