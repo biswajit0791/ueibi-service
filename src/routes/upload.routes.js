@@ -3,6 +3,7 @@ import multer from 'multer';
 import path from 'node:path';
 import fs from 'node:fs';
 import { requireAuth } from '../middleware/auth.js';
+import { uploadRateLimiter } from '../middleware/rateLimit.js';
 import { DISALLOWED_EXTENSIONS } from '../services/storage/storage.service.js';
 
 const router = Router();
@@ -43,7 +44,7 @@ const upload = multer({
   },
 });
 
-router.post('/upload', requireAuth, (req, res) => {
+router.post('/upload', requireAuth, uploadRateLimiter, (req, res) => {
   upload.single('file')(req, res, (err) => {
     if (err) {
       if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {

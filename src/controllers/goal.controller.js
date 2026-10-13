@@ -297,6 +297,35 @@ export async function createGoal(req, res, next) {
       targetEmployeeIds = [req.user.id];
     }
 
+    // Idempotency & rapid double-click guard:
+    // If an identical goal was created by this user within the last 5 seconds, suppress duplicate creation
+    const fiveSecondsAgo = new Date(Date.now() - 5000);
+    const existingRecentGoal = await prisma.goal.findFirst({
+      where: {
+        tenantId: req.tenantId,
+        createdById: req.user.id,
+        title: title.trim(),
+        createdAt: { gte: fiveSecondsAgo },
+      },
+      include: {
+        assignments: {
+          include: {
+            employee: {
+              select: { id: true, name: true, email: true, department: true, designation: true },
+            },
+          },
+        },
+      },
+    });
+
+    if (existingRecentGoal) {
+      return res.status(200).json({
+        goal: existingRecentGoal,
+        assignments: existingRecentGoal.assignments,
+        message: 'Goal already created (duplicate request suppressed)',
+      });
+    }
+
     const isSelfAssigned = targetEmployeeIds.length === 1 && targetEmployeeIds[0] === req.user.id;
 
     // Verify all target employees exist in tenant and are active

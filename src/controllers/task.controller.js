@@ -298,6 +298,40 @@ export async function createTask(req, res, next) {
       }
     }
 
+    // 3b. Dependency date validation
+    if (dependency && typeof dependency === 'object' && dependency.dueDate) {
+      const depDue = new Date(dependency.dueDate);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      if (!isNaN(depDue.getTime()) && depDue < today) {
+        return res.status(400).json({
+          success: false,
+          message: 'Dependency due date cannot be in the past',
+        });
+      }
+      if (dependency.type === 'pre' && dueDate) {
+        const parentDue = new Date(dueDate);
+        if (!isNaN(parentDue.getTime()) && depDue > parentDue) {
+          return res.status(400).json({
+            success: false,
+            message: 'Pre-requisite dependency due date cannot be later than main task due date',
+          });
+        }
+      }
+    }
+
+    if (isDependencyOf && dueDate) {
+      const depDue = new Date(dueDate);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      if (!isNaN(depDue.getTime()) && depDue < today) {
+        return res.status(400).json({
+          success: false,
+          message: 'Dependency task due date cannot be in the past',
+        });
+      }
+    }
+
     // 4a. If this task is a companion of a parent ("dependency") task, that parent
     //     must be a real task in this tenant that the caller is allowed to act on.
     let parentTask = null;
@@ -324,6 +358,23 @@ export async function createTask(req, res, next) {
       } catch (e) {
         return res.status(e.status || 500).json({ success: false, message: e.message });
       }
+    }
+
+    // Idempotency & rapid double-click guard:
+    // If an identical task was created with the same title, assignee, and goal within the last 5 seconds, suppress duplicate creation
+    const fiveSecondsAgo = new Date(Date.now() - 5000);
+    const existingRecentTask = await prisma.task.findFirst({
+      where: {
+        tenantId,
+        title: title.trim(),
+        employeeId: targetEmployeeIds[0],
+        goalId: resolvedGoalId,
+        createdAt: { gte: fiveSecondsAgo },
+      },
+    });
+
+    if (existingRecentTask && !isDependencyOf) {
+      return res.status(200).json(existingRecentTask);
     }
 
     // 5b. Weight. Resolved once, before the loop, because one submission can
@@ -775,6 +826,16 @@ export async function updateTask(req, res, next) {
     if (dependency !== undefined && dependency !== null) {
       if (dependency.status === 'approved' && existing.dependency?.status !== 'approved' && !isElevated && !isDirectManager) {
         return res.status(403).json({ success: false, error: 'Forbidden: Employees cannot approve dependencies' });
+      }
+
+      // 5b. Dependency due date past validation
+      if (dependency.dueDate) {
+        const depDue = new Date(dependency.dueDate);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        if (!isNaN(depDue.getTime()) && depDue < today && dependency.status !== 'completed' && dependency.status !== 'done') {
+          return res.status(400).json({ success: false, message: 'Dependency due date cannot be in the past' });
+        }
       }
     }
 
