@@ -29,7 +29,10 @@ export async function visibleTaskWhere({ user, tenantId, employeeId, fy }) {
     return {
       where: {
         tenantId,
-        employeeId: user.id,
+        OR: [
+          { employeeId: user.id },
+          { assigneeIds: { has: user.id } },
+        ],
         ...(fy ? { financialYear: fy } : {}),
       },
     };
@@ -73,6 +76,7 @@ export async function visibleTaskWhere({ user, tenantId, employeeId, fy }) {
     });
     where.OR = [
       { employeeId: { in: allowedIdList } },
+      { assigneeIds: { hasSome: allowedIdList } },
       { isDependencyOf: { in: visibleParents.map((t) => t.id) } },
     ];
     return { where };
@@ -121,7 +125,10 @@ export async function visibleTaskWhere({ user, tenantId, employeeId, fy }) {
   return {
     where: {
       tenantId,
-      employeeId: targetEmployeeId,
+      OR: [
+        { employeeId: targetEmployeeId },
+        { assigneeIds: { has: targetEmployeeId } },
+      ],
       // A private task is only ever visible to its owner.
       ...(targetEmployeeId !== user.id ? { isPrivate: false } : {}),
       ...(fy ? { financialYear: fy } : {}),

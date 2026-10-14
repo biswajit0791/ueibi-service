@@ -39,6 +39,7 @@ export async function loadTaskForUser(taskId, user, tenantId) {
 
   if (hasRole(user.role, ELEVATED_ROLES)) return task;
   if (task.employeeId === user.id) return task;
+  if (Array.isArray(task.assigneeIds) && task.assigneeIds.includes(user.id)) return task;
 
   if (task.employeeId && await goalService.isSubordinate(user.id, task.employeeId, tenantId)) {
     return task;

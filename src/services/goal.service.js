@@ -307,7 +307,9 @@ export class GoalService {
     if (!goalId) return 0;
 
     const allGoalTasks = await prisma.task.findMany({ where: { goalId } });
-    const empTasks = employeeId ? allGoalTasks.filter(t => !t.employeeId || t.employeeId === employeeId) : allGoalTasks;
+    const empTasks = employeeId
+      ? allGoalTasks.filter(t => !t.employeeId || t.employeeId === employeeId || (Array.isArray(t.assigneeIds) && t.assigneeIds.includes(employeeId)))
+      : allGoalTasks;
 
     const calcEarned = (tasks) => tasks.reduce((sum, t) => {
       if (t.managerFinalWeight !== null && t.managerFinalWeight !== undefined) {
