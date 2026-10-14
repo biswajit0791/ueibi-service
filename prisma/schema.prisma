@@ -967,6 +967,7 @@ model Task {
   weightAdjustReason  String?     @db.Text
   employeeId     String
   employee       TenantUser     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  assigneeIds    String[]       @default([])
   description    String?        @db.Text
   dependency     Json? // serialised dep object: { assigneeId, depTitle, status, escalated, depTaskId }
   isDependencyOf String? // parent task ID this task is a companion dep of

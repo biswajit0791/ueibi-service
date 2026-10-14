@@ -344,9 +344,12 @@ export async function createTask(req, res, next) {
     }
 
     // 4b. Determine target employee(s) (single or multiple)
-    const targetEmployeeIds = Array.isArray(employeeIds) && employeeIds.length > 0
-      ? Array.from(new Set(employeeIds.filter(Boolean)))
+    const rawTargets = Array.isArray(employeeIds) && employeeIds.length > 0
+      ? employeeIds
+      : Array.isArray(req.body.assigneeIds) && req.body.assigneeIds.length > 0
+      ? req.body.assigneeIds
       : [employeeId || req.user.id];
+    const targetEmployeeIds = Array.from(new Set(rawTargets.filter(Boolean)));
 
     // 5. Validate goal tenant scope (if goalId provided)
     let resolvedGoal = null;
@@ -377,12 +380,9 @@ export async function createTask(req, res, next) {
       return res.status(200).json(existingRecentTask);
     }
 
-    // 5b. Weight. Resolved once, before the loop, because one submission can
-    //     create a task per assignee and they each carry the full weight — so
-    //     the ceiling has to be measured against the whole batch, not against
-    //     one task at a time.
+    // 5b. Weight. Single weight for the task (even when shared among multiple assignees).
     let resolvedWeight = weight === undefined || weight === null || weight === ''
-      ? await defaultWeightFor(resolvedGoalId, targetEmployeeIds.length)
+      ? await defaultWeightFor(resolvedGoalId, 1)
       : Number(weight);
     if (!Number.isFinite(resolvedWeight) || resolvedWeight < 1) resolvedWeight = 1;
 
@@ -391,7 +391,7 @@ export async function createTask(req, res, next) {
         await assertWeightFits({
           goalId: resolvedGoalId,
           weight: resolvedWeight,
-          copies: targetEmployeeIds.length,
+          copies: 1,
         });
       } catch (e) {
         if (sendWeightError(res, e)) return;
@@ -452,7 +452,7 @@ export async function createTask(req, res, next) {
         });
       }
       if (summary && !summary.exempt) {
-        const projected = summary.totalWeight + (resolvedWeight * targetEmployeeIds.length);
+        const projected = summary.totalWeight + resolvedWeight;
         if (projected !== 100) {
           const reason = projected > 100
             ? `Task weights for this goal would total ${projected}%, which exceeds 100%.`
@@ -493,101 +493,94 @@ export async function createTask(req, res, next) {
       targets.push(target);
     }
 
-    // 7. Create them inside one serialisable transaction that re-checks the
-    //    goal's total before committing. Two people adding 20% to an 80% goal
-    //    at the same moment would otherwise both pass their own check and
-    //    leave the goal at 120%.
-    let createdTasks;
+    // 7. Create ONE task record inside serialisable transaction.
+    //    The task carries resolvedWeight (single weightage) and links all target assignees
+    //    in assigneeIds, with the primary assignee in employeeId.
+    let createdTask;
+    const allTargetIds = targets.map((t) => t.id);
+    const primaryTarget = targets[0];
     try {
-      createdTasks = await withWeightGuard(resolvedGoalId, async (tx) => {
-        const made = [];
-        for (const target of targets) {
-          made.push(await tx.task.create({
-            data: {
-              title: title.trim(),
-              priority: priority || 'medium',
-              status: effStatus,
-              progress: effProgress,
-              startDate: startDate ? new Date(startDate) : undefined,
-              dueDate: dueDate ? new Date(dueDate) : undefined,
-              financialYear: financialYear || null,
-              tags: tags || null,
-              isPrivate: isPrivate ?? false,
-              isStandalone: isStandalone ?? false,
-              weight: resolvedWeight,
-              description: description || null,
-              dependency: dependency || null,
-              isDependencyOf: isDependencyOf || null,
-              isMilestoneTracked: isMilestoneTracked === true,
-              createdOnBehalfOf: Boolean(req.body.createdOnBehalfOf),
-              requiresApproval: Boolean(req.body.requiresApproval),
-              onHoldReason: req.body.onHoldReason || null,
-              // A task created already in progress has actually started now,
-              // unless the caller recorded when it really began.
-              ...actualDates.data,
-              // ─ Relations ─
-              employee: { connect: { id: target.id } },
-              tenant: { connect: { id: tenantId } },
-              ...(resolvedGoalId ? { goal: { connect: { id: resolvedGoalId } } } : {}),
+      createdTask = await withWeightGuard(resolvedGoalId, async (tx) => {
+        return await tx.task.create({
+          data: {
+            title: title.trim(),
+            priority: priority || 'medium',
+            status: effStatus,
+            progress: effProgress,
+            startDate: startDate ? new Date(startDate) : undefined,
+            dueDate: dueDate ? new Date(dueDate) : undefined,
+            financialYear: financialYear || null,
+            tags: tags || null,
+            isPrivate: isPrivate ?? false,
+            isStandalone: isStandalone ?? false,
+            weight: resolvedWeight,
+            description: description || null,
+            dependency: dependency || null,
+            isDependencyOf: isDependencyOf || null,
+            isMilestoneTracked: isMilestoneTracked === true,
+            createdOnBehalfOf: Boolean(req.body.createdOnBehalfOf),
+            requiresApproval: Boolean(req.body.requiresApproval),
+            onHoldReason: req.body.onHoldReason || null,
+            assigneeIds: allTargetIds,
+            // A task created already in progress has actually started now,
+            // unless the caller recorded when it really began.
+            ...actualDates.data,
+            // ─ Relations ─
+            employee: { connect: { id: primaryTarget.id } },
+            tenant: { connect: { id: tenantId } },
+            ...(resolvedGoalId ? { goal: { connect: { id: resolvedGoalId } } } : {}),
+          },
+          include: {
+            employee: {
+              select: { id: true, name: true, email: true, designation: true },
             },
-          }));
-        }
-        return made;
+          },
+        });
       });
     } catch (e) {
       if (sendWeightError(res, e)) return;
       return res.status(e.status || 500).json({ success: false, message: e.message || 'Could not create the task' });
     }
 
-    // 8. Side effects, once the rows are safely committed.
-    for (const task of createdTasks) {
-      let goalProgress = 0;
-      if (resolvedGoalId) {
-        goalProgress = await recalculateGoalProgress(resolvedGoalId, task.employeeId);
+    // 8. Side effects, once the row is safely committed.
+    let goalProgress = 0;
+    if (resolvedGoalId) {
+      for (const empId of allTargetIds) {
+        goalProgress = await recalculateGoalProgress(resolvedGoalId, empId);
       }
+    }
 
+    await logTaskAudit({
+      taskId: createdTask.id,
+      performedById: req.user.id,
+      action: 'created',
+      details: `Task "${createdTask.title}" created (assigned to: ${targets.map(t => t.name || t.id).join(', ')}).`,
+    });
+
+    if (actualDates.manuallySet) {
+      const parts = [];
+      if (createdTask.actualStartDate) parts.push(`actual start ${createdTask.actualStartDate.toISOString().slice(0, 10)}`);
+      if (createdTask.actualCompletionDate) parts.push(`actual completion ${createdTask.actualCompletionDate.toISOString().slice(0, 10)}`);
       await logTaskAudit({
-        taskId: task.id,
+        taskId: createdTask.id,
         performedById: req.user.id,
-        action: 'created',
-        details: `Task "${task.title}" created.`,
-      });
-
-      // An actual date entered by hand is recorded, so a back-dated task can
-      // always be told apart from one the system stamped itself.
-      if (actualDates.manuallySet) {
-        const parts = [];
-        if (task.actualStartDate) parts.push(`actual start ${task.actualStartDate.toISOString().slice(0, 10)}`);
-        if (task.actualCompletionDate) parts.push(`actual completion ${task.actualCompletionDate.toISOString().slice(0, 10)}`);
-        await logTaskAudit({
-          taskId: task.id,
-          performedById: req.user.id,
-          action: 'edited',
-          details: `Actual dates entered manually at creation: ${parts.join(', ') || 'cleared'}.`,
-        }).catch(() => {});
-      }
-
-      emitToTenant(tenantId, 'task_updated', {
-        action: 'create',
-        task: {
-          ...task,
-          progress: task.progress || 0,
-          weight: task.weight,
-        },
-        goalId: resolvedGoalId,
-        goalProgress,
-      });
+        action: 'edited',
+        details: `Actual dates entered manually at creation: ${parts.join(', ') || 'cleared'}.`,
+      }).catch(() => {});
     }
 
-    if (createdTasks.length === 1) {
-      res.status(201).json(createdTasks[0]);
-    } else {
-      res.status(201).json({
-        ...createdTasks[0],
-        createdTasks,
-        count: createdTasks.length,
-      });
-    }
+    emitToTenant(tenantId, 'task_updated', {
+      action: 'create',
+      task: {
+        ...createdTask,
+        progress: createdTask.progress || 0,
+        weight: createdTask.weight,
+      },
+      goalId: resolvedGoalId,
+      goalProgress,
+    });
+
+    return res.status(201).json(createdTask);
   } catch (err) {
     next(err);
   }
@@ -760,8 +753,15 @@ export async function updateTask(req, res, next) {
       title, priority, startDate, dueDate, financialYear,
       tags, goalId, isPrivate, isStandalone, weight,
       description, status, progress, dependency, isDependencyOf, employeeId,
+      employeeIds, assigneeIds,
       actualStartDate, actualCompletionDate,
     } = parsed.data;
+
+    const resolvedAssigneeIds = Array.isArray(assigneeIds)
+      ? assigneeIds
+      : Array.isArray(employeeIds)
+      ? employeeIds
+      : undefined;
 
     const existing = await assertTaskOwner(id, req.user, tenantId).catch(e => {
       res.status(e.status || 500).json({ error: e.message });
@@ -984,6 +984,7 @@ export async function updateTask(req, res, next) {
         ...(dependency !== undefined && (isElevated || isDirectManager || existing.employeeId === req.user.id) && { dependency: dependency || null }),
         ...(isDependencyOf !== undefined && (isElevated || isDirectManager || existing.employeeId === req.user.id) && { isDependencyOf: isDependencyOf || null }),
         ...(employeeId !== undefined && (isElevated || isDirectManager) && { employeeId }),
+        ...(resolvedAssigneeIds !== undefined && (isElevated || isDirectManager) && { assigneeIds: resolvedAssigneeIds }),
         ...(req.body.createdOnBehalfOf !== undefined && { createdOnBehalfOf: Boolean(req.body.createdOnBehalfOf) }),
         ...(req.body.requiresApproval !== undefined && { requiresApproval: Boolean(req.body.requiresApproval) }),
         ...(req.body.onHoldReason !== undefined && { onHoldReason: req.body.onHoldReason }),
@@ -1004,6 +1005,13 @@ export async function updateTask(req, res, next) {
     let goalProgress = 0;
     if (updated.goalId) {
       goalProgress = await recalculateGoalProgress(updated.goalId, updated.employeeId);
+      if (Array.isArray(updated.assigneeIds)) {
+        for (const coId of updated.assigneeIds) {
+          if (coId !== updated.employeeId) {
+            await recalculateGoalProgress(updated.goalId, coId);
+          }
+        }
+      }
     }
 
     // If dependency was updated and has a companion task - keep it synchronized
@@ -1163,6 +1171,13 @@ export async function deleteTask(req, res, next) {
     let goalProgress = 0;
     if (existing.goalId) {
       goalProgress = await recalculateGoalProgress(existing.goalId, existing.employeeId);
+      if (Array.isArray(existing.assigneeIds)) {
+        for (const coId of existing.assigneeIds) {
+          if (coId !== existing.employeeId) {
+            await recalculateGoalProgress(existing.goalId, coId);
+          }
+        }
+      }
     }
 
     emitToTenant(tenantId, 'task_updated', {
