@@ -118,7 +118,7 @@ export async function createPolicy(req, res, next) {
   try {
     const parsed = createPolicySchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+      return res.status(400).json({ error: parsed.error.issues?.[0]?.message || 'Validation failed', details: parsed.error.issues });
     }
 
     const policy = await policyService.createPolicy({
@@ -146,7 +146,7 @@ export async function updatePolicy(req, res, next) {
     const { id } = parsedParams.data;
     const parsed = updatePolicySchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+      return res.status(400).json({ error: parsed.error.issues?.[0]?.message || 'Validation failed', details: parsed.error.issues });
     }
 
     const updated = await policyService.updatePolicy({
@@ -247,7 +247,7 @@ export async function assignPolicy(req, res, next) {
     const { id } = parsedParams.data;
     const parsed = assignPolicySchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+      return res.status(400).json({ error: parsed.error.issues?.[0]?.message || 'Validation failed', details: parsed.error.issues });
     }
 
     const result = await policyService.assignPolicy({

@@ -1,5 +1,26 @@
 import { z } from 'zod';
 
+export function isDateInPast(dateStr) {
+  if (!dateStr) return false;
+  let dYear, dMonth, dDay;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    const parts = dateStr.split('-');
+    dYear = parseInt(parts[0], 10);
+    dMonth = parseInt(parts[1], 10) - 1;
+    dDay = parseInt(parts[2], 10);
+  } else {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return false;
+    dYear = d.getFullYear();
+    dMonth = d.getMonth();
+    dDay = d.getDate();
+  }
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const targetEndOfDay = new Date(dYear, dMonth, dDay, 23, 59, 59, 999);
+  return targetEndOfDay < today;
+}
+
 export const createPolicySchema = z.object({
   title: z.string().min(1, 'Policy title is required').max(200, 'Title is too long'),
   content: z.string().min(1, 'Policy content is required'),
@@ -9,7 +30,13 @@ export const createPolicySchema = z.object({
   pdfUrl: z.string().optional().nullable(),
   pdfOriginalName: z.string().optional().nullable(),
   effectiveDate: z.string().optional().nullable(),
-  dueDate: z.string().optional().nullable(),
+  dueDate: z
+    .string()
+    .optional()
+    .nullable()
+    .refine((val) => !val || !isDateInPast(val), {
+      message: 'Sign-off due date cannot be in the past',
+    }),
   assignees: z.union([z.array(z.string()), z.literal('ALL')]).optional(),
 });
 
@@ -36,7 +63,13 @@ export const signPolicySchema = z.object({
 export const assignPolicySchema = z.object({
   userIds: z.array(z.string()).optional(),
   target: z.enum(['ALL', 'INDIVIDUAL']).optional(),
-  dueAt: z.string().optional().nullable(),
+  dueAt: z
+    .string()
+    .optional()
+    .nullable()
+    .refine((val) => !val || !isDateInPast(val), {
+      message: 'Sign-off due date cannot be in the past',
+    }),
 });
 
 export const reminderSchema = z.object({
