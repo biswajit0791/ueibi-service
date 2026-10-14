@@ -1,5 +1,5 @@
 import { prisma } from '../lib/prisma.js';
-import { logTaskAudit } from './taskActivity.controller.js';
+import { logTaskAudit, pushNotification } from './taskActivity.controller.js';
 import { emitToTenant } from '../lib/socket.js';
 import { createTaskSchema, updateTaskSchema, updateTaskStatusSchema, taskIdParamSchema, listTasksQuerySchema } from '../validations/task.schema.js';
 import { goalService } from '../services/goal.service.js';
@@ -519,6 +519,9 @@ export async function createTask(req, res, next) {
               dependency: dependency || null,
               isDependencyOf: isDependencyOf || null,
               isMilestoneTracked: isMilestoneTracked === true,
+              createdOnBehalfOf: Boolean(req.body.createdOnBehalfOf),
+              requiresApproval: Boolean(req.body.requiresApproval),
+              onHoldReason: req.body.onHoldReason || null,
               // A task created already in progress has actually started now,
               // unless the caller recorded when it really began.
               ...actualDates.data,
@@ -668,6 +671,7 @@ export async function updateTaskStatus(req, res, next) {
       data: { 
         status,
         ...(progressUpdate !== undefined && !isNaN(progressUpdate) && { progress: progressUpdate }),
+        ...(req.body.onHoldReason !== undefined && { onHoldReason: req.body.onHoldReason }),
         ...timingUpdates(existing, nextState),
       },
     });
@@ -690,8 +694,8 @@ export async function updateTaskStatus(req, res, next) {
         const updatedParent = await prisma.task.update({
           where: { id: parentTask.id },
           data: {
-            status: parentTask.status === 'pending_on_others' ? 'in_progress' : parentTask.status,
-            dependency: updatedDependency
+            status: parentTask.status, // Manual resume required by assignee/manager
+            dependency: updatedDependency,
           }
         });
         
@@ -699,6 +703,16 @@ export async function updateTaskStatus(req, res, next) {
         if (updatedParent.goalId) {
           parentGoalProgress = await recalculateGoalProgress(updatedParent.goalId, updatedParent.employeeId);
         }
+
+        await pushNotification({
+          tenantId,
+          recipientId: parentTask.employeeId,
+          type: 'task_update',
+          title: `Dependency Finished for "${parentTask.title}"`,
+          body: `Supporting task "${updated.title}" was completed. You can now resume your task when ready.`,
+          entityType: 'task',
+          entityId: parentTask.id,
+        }).catch(() => null);
         
         emitToTenant(tenantId, 'task_updated', {
           action: 'update',
@@ -970,6 +984,10 @@ export async function updateTask(req, res, next) {
         ...(dependency !== undefined && (isElevated || isDirectManager || existing.employeeId === req.user.id) && { dependency: dependency || null }),
         ...(isDependencyOf !== undefined && (isElevated || isDirectManager || existing.employeeId === req.user.id) && { isDependencyOf: isDependencyOf || null }),
         ...(employeeId !== undefined && (isElevated || isDirectManager) && { employeeId }),
+        ...(req.body.createdOnBehalfOf !== undefined && { createdOnBehalfOf: Boolean(req.body.createdOnBehalfOf) }),
+        ...(req.body.requiresApproval !== undefined && { requiresApproval: Boolean(req.body.requiresApproval) }),
+        ...(req.body.onHoldReason !== undefined && { onHoldReason: req.body.onHoldReason }),
+        ...(req.body.approveDelegation === true && { approvedById: req.user.id, approvedAt: new Date() }),
       },
     });
 
@@ -1029,7 +1047,7 @@ export async function updateTask(req, res, next) {
         const updatedParent = await prisma.task.update({
           where: { id: parentTask.id },
           data: {
-            status: parentTask.status === 'pending_on_others' ? 'in_progress' : parentTask.status,
+            status: parentTask.status, // Manual resume required by assignee/manager
             dependency: updatedDependency
           }
         });
@@ -1038,6 +1056,16 @@ export async function updateTask(req, res, next) {
         if (updatedParent.goalId) {
           parentGoalProgress = await recalculateGoalProgress(updatedParent.goalId, updatedParent.employeeId);
         }
+
+        await pushNotification({
+          tenantId,
+          recipientId: parentTask.employeeId,
+          type: 'task_update',
+          title: `Dependency Finished for "${parentTask.title}"`,
+          body: `Supporting task "${updated.title}" was completed. You can now resume your task when ready.`,
+          entityType: 'task',
+          entityId: parentTask.id,
+        }).catch(() => null);
         
         emitToTenant(tenantId, 'task_updated', {
           action: 'update',

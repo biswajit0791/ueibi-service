@@ -309,9 +309,18 @@ export class GoalService {
     const allGoalTasks = await prisma.task.findMany({ where: { goalId } });
     const empTasks = employeeId ? allGoalTasks.filter(t => !t.employeeId || t.employeeId === employeeId) : allGoalTasks;
 
+    const calcEarned = (tasks) => tasks.reduce((sum, t) => {
+      if (t.managerFinalWeight !== null && t.managerFinalWeight !== undefined) {
+        return sum + Number(t.managerFinalWeight);
+      }
+      const w = Number(t.weight || 1);
+      const p = Math.min(100, Math.max(0, Number(t.progress || 0)));
+      return sum + ((w * p) / 100);
+    }, 0);
+
     const totalWeight = empTasks.reduce((sum, t) => sum + Number(t.weight || 1), 0);
-    const earned = empTasks.reduce((sum, t) => sum + (Number(t.progress || 0) * Number(t.weight || 1)), 0);
-    const empProgress = totalWeight > 0 ? Math.min(100, Math.round(earned / totalWeight)) : 0;
+    const earned = calcEarned(empTasks);
+    const empProgress = totalWeight > 0 ? Math.min(100, Math.round((earned / totalWeight) * 100)) : 0;
     const empCompletedCount = empTasks.filter(t => t.status === 'done' || t.progress === 100).length;
 
     // Update specific GoalAssignment if employeeId is specified
@@ -348,8 +357,8 @@ export class GoalService {
 
     // Recalculate overall goal progress across all tasks
     const totalAllWeight = allGoalTasks.reduce((sum, t) => sum + Number(t.weight || 1), 0);
-    const earnedAll = allGoalTasks.reduce((sum, t) => sum + (Number(t.progress || 0) * Number(t.weight || 1)), 0);
-    const overallProgress = totalAllWeight > 0 ? Math.min(100, Math.round(earnedAll / totalAllWeight)) : 0;
+    const earnedAll = calcEarned(allGoalTasks);
+    const overallProgress = totalAllWeight > 0 ? Math.min(100, Math.round((earnedAll / totalAllWeight) * 100)) : 0;
     const allCompletedCount = allGoalTasks.filter(t => t.status === 'done' || t.progress === 100).length;
 
     const goal = await prisma.goal.findUnique({ where: { id: goalId } });
@@ -772,9 +781,13 @@ export class GoalService {
 
     if (reviewedEmpIds.length > 0) {
       try {
+        const assignmentUpdateData = { status: newStatus };
+        if (rating !== undefined && rating !== null) {
+          assignmentUpdateData.managerRating = Number(rating);
+        }
         await prisma.goalAssignment.updateMany({
           where: { goalId, employeeId: { in: reviewedEmpIds } },
-          data: { status: newStatus },
+          data: assignmentUpdateData,
         });
       } catch (err) {
         console.warn('[GoalService] Notice updating goal assignment on manager review:', err.message);
@@ -783,12 +796,20 @@ export class GoalService {
 
     const parentData = await this.rolledUpParentData(goalId, newStatus, goal.progress);
 
+    const goalUpdateData = {
+      ...parentData,
+      specialNotes: comment ? `Manager Note: ${comment}` : goal.specialNotes,
+    };
+    if (rating !== undefined && rating !== null) {
+      goalUpdateData.managerRating = Number(rating);
+    }
+    if (comment) {
+      goalUpdateData.managerRatingNotes = comment;
+    }
+
     const updated = await prisma.goal.update({
       where: { id: goalId },
-      data: {
-        ...parentData,
-        specialNotes: comment ? `Manager Note: ${comment}` : goal.specialNotes,
-      },
+      data: goalUpdateData,
       include: {
         employee: true,
         assignments: {
@@ -896,9 +917,13 @@ export class GoalService {
 
     if (reviewedEmpIds.length > 0) {
       try {
+        const assignmentData = isApprove ? { status: newStatus, progress: 100 } : { status: newStatus };
+        if (isApprove && rating !== undefined && rating !== null) {
+          assignmentData.finalScore = Number(rating);
+        }
         await prisma.goalAssignment.updateMany({
           where: { goalId, employeeId: { in: reviewedEmpIds } },
-          data: isApprove ? { status: newStatus, progress: 100 } : { status: newStatus },
+          data: assignmentData,
         });
       } catch (err) {
         console.warn('[GoalService] Notice updating goal assignment on HR review:', err.message);
@@ -909,12 +934,18 @@ export class GoalService {
     // assignee who has not submitted yet keeps it in review.
     const parentData = await this.rolledUpParentData(goalId, newStatus, isApprove ? 100 : goal.progress);
 
+    const goalUpdateData = {
+      ...parentData,
+      specialNotes: comment ? `HR Note: ${comment}` : goal.specialNotes,
+    };
+    if (isApprove) {
+      goalUpdateData.closedAt = new Date();
+      goalUpdateData.closedById = user.id;
+    }
+
     const updated = await prisma.goal.update({
       where: { id: goalId },
-      data: {
-        ...parentData,
-        specialNotes: comment ? `HR Note: ${comment}` : goal.specialNotes,
-      },
+      data: goalUpdateData,
       include: {
         employee: true,
         assignments: {

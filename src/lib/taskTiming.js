@@ -58,24 +58,38 @@ export function taskTiming(task, now = new Date()) {
     ? daysBetween(task.startDate, task.actualStartDate)
     : null;
 
-  const completionDelayDays = task?.actualCompletionDate && task?.dueDate
+  // Calculate hold duration (both past accumulated hold and active hold if currently paused)
+  let activeHoldDays = 0;
+  if (task?.holdStartedAt) {
+    const holdDays = daysBetween(task.holdStartedAt, now);
+    if (holdDays !== null && holdDays > 0) activeHoldDays = holdDays;
+  }
+  const holdAdjustment = (Number(task?.totalHoldDays || 0) + activeHoldDays);
+
+  const rawCompletionDelay = task?.actualCompletionDate && task?.dueDate
     ? daysBetween(task.dueDate, task.actualCompletionDate)
+    : null;
+  const completionDelayDays = rawCompletionDelay !== null
+    ? Math.max(0, rawCompletionDelay - holdAdjustment)
     : null;
 
   // Only meaningful while the work is still open.
   let daysOverdue = null;
   if (!complete && task?.dueDate) {
     const d = daysBetween(task.dueDate, now);
-    daysOverdue = d !== null && d > 0 ? d : 0;
+    daysOverdue = d !== null ? Math.max(0, d - holdAdjustment) : 0;
   }
 
   const isOverdue = daysOverdue !== null && daysOverdue > 0;
+  const isOnHold = task?.status === 'on_hold' || task?.status === 'pending_on_others';
 
   let state;
   if (complete) {
     if (completionDelayDays === null) state = 'COMPLETED';           // no actual date recorded
     else if (completionDelayDays > 0) state = 'COMPLETED_LATE';
     else state = 'COMPLETED_ON_TIME';
+  } else if (isOnHold) {
+    state = 'ON_HOLD';
   } else if (isOverdue) {
     state = 'OVERDUE';
   } else if (daysOverdue === 0 && task?.dueDate && daysBetween(now, task.dueDate) === 0) {
@@ -93,6 +107,8 @@ export function taskTiming(task, now = new Date()) {
     isStarted: started,
     isComplete: complete,
     isOverdue,
+    isOnHold,
+    totalHoldDays: holdAdjustment,
     startedLate: startDelayDays !== null && startDelayDays > 0,
     finishedLate: completionDelayDays !== null && completionDelayDays > 0,
     state,
@@ -108,18 +124,16 @@ export function taskTiming(task, now = new Date()) {
  * given day stays true even if it is later pushed back to 'todo'.
  * actualCompletionDate is cleared when a task stops being complete, because a
  * reopened task has not finished.
+ * holdStartedAt / holdReleasedAt / totalHoldDays are updated when pausing or resuming.
  */
 export function timingUpdates(existing, next, now = new Date()) {
+  const nextStatus = next?.status !== undefined ? next.status : existing?.status;
   const after = {
-    status: next?.status !== undefined ? next.status : existing?.status,
+    status: nextStatus,
     progress: next?.progress !== undefined ? next.progress : existing?.progress,
   };
   const data = {};
 
-  // An explicit status wins over progress. Reopening a finished task sets the
-  // status to 'in_progress' but leaves progress at 100 — that is how the task
-  // endpoints have always behaved — so reading completion off progress alone
-  // would keep a completion date on a task that is demonstrably open again.
   const statusGiven = next?.status !== undefined && next?.status !== null;
   const complete = statusGiven ? String(next.status) === 'done' : isWorkComplete(after);
 
@@ -128,10 +142,22 @@ export function timingUpdates(existing, next, now = new Date()) {
   }
   if (complete) {
     if (!existing?.actualCompletionDate) data.actualCompletionDate = now;
-    // A task completed without ever being marked started still has a start.
     if (!existing?.actualStartDate && !data.actualStartDate) data.actualStartDate = now;
   } else if (existing?.actualCompletionDate) {
     data.actualCompletionDate = null;
+  }
+
+  // Handle On-Hold / Pause transitions
+  const wasOnHold = existing?.status === 'on_hold' || existing?.status === 'pending_on_others' || Boolean(existing?.holdStartedAt);
+  const willBeOnHold = nextStatus === 'on_hold' || nextStatus === 'pending_on_others';
+
+  if (willBeOnHold && !existing?.holdStartedAt) {
+    data.holdStartedAt = now;
+  } else if (!willBeOnHold && wasOnHold && existing?.holdStartedAt) {
+    const elapsedDays = Math.max(0, daysBetween(existing.holdStartedAt, now) || 0);
+    data.totalHoldDays = (Number(existing.totalHoldDays) || 0) + elapsedDays;
+    data.holdStartedAt = null;
+    data.holdReleasedAt = now;
   }
 
   return data;

@@ -56,6 +56,7 @@ export const TASK_STATUSES = [
   'todo',
   'in_progress',
   'pending_on_others',
+  'on_hold',
   'in_review',
   'done',
   'pending_approval',

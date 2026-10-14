@@ -24,12 +24,71 @@ import {
 } from '../validations/taskMilestone.schema.js';
 import { dispatchMilestoneWatcherAlert, sendMilestoneTestEmail } from '../services/milestoneEscalation.service.js';
 
-const MILESTONE_INCLUDE = {
+export const MILESTONE_INCLUDE = {
   proposedBy: { select: { id: true, name: true } },
   approvedBy: { select: { id: true, name: true } },
   completedBy: { select: { id: true, name: true } },
   createdBy: { select: { id: true, name: true } },
+  escalationLevels: {
+    include: {
+      user: {
+        select: { id: true, name: true, email: true, designation: true, role: true },
+      },
+    },
+    orderBy: { levelNumber: 'asc' },
+  },
 };
+
+export async function getEscalationChainForEmployee(tenantId, employeeId) {
+  const employee = await prisma.tenantUser.findFirst({
+    where: { id: employeeId, tenantId, isDeleted: false },
+    select: { id: true, managerId: true },
+  });
+  if (!employee) return [];
+
+  const chain = [];
+  const visited = new Set([employee.id]);
+  let currentManagerId = employee.managerId;
+
+  while (currentManagerId && !visited.has(currentManagerId)) {
+    visited.add(currentManagerId);
+    const mgr = await prisma.tenantUser.findFirst({
+      where: { id: currentManagerId, tenantId, isDeleted: false },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        designation: true,
+        managerId: true,
+      },
+    });
+    if (!mgr) break;
+    chain.push(mgr);
+    currentManagerId = mgr.managerId;
+  }
+
+  if (chain.length < 3) {
+    const cxo = await prisma.tenantUser.findFirst({
+      where: {
+        tenantId,
+        isDeleted: false,
+        role: { in: ['CMD', 'SUPER_ADMIN', 'ADMIN'] },
+        id: { notIn: [employeeId, ...chain.map(c => c.id)] },
+      },
+      select: { id: true, name: true, email: true, role: true, designation: true },
+    });
+    if (cxo) chain.push(cxo);
+  }
+
+  const roleTitles = ['Direct Manager', 'General Manager', 'CXO / COO'];
+  return chain.slice(0, 3).map((u, idx) => ({
+    levelNumber: idx + 1,
+    roleOrTitle: u.designation || roleTitles[idx] || `Escalation Level ${idx + 1}`,
+    userId: u.id,
+    user: u,
+  }));
+}
 
 async function loadMilestoneOrThrow(taskId, milestoneId) {
   const milestone = await prisma.taskMilestone.findFirst({
@@ -113,7 +172,7 @@ export async function createMilestone(req, res, next) {
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
-    const { title, dueDate, watcherEmails } = parsed.data;
+    const { title, description, dueDate, progress, watcherEmails } = parsed.data;
     await assertWatcherEmailsAllowed(tenantId, watcherEmails);
 
     const due = new Date(dueDate);
@@ -161,7 +220,7 @@ export async function createMilestone(req, res, next) {
       lastDue.setHours(0, 0, 0, 0);
       if (dueMidnight < lastDue) {
         return res.status(400).json({
-          error: `Milestone checkpoint due date cannot be earlier than Station 0${lastMilestone.order} (${lastDue.toISOString().slice(0, 10)})`,
+          error: `Milestone checkpoint due date cannot be earlier than Checkpoint 0${lastMilestone.order} (${lastDue.toISOString().slice(0, 10)})`,
         });
       }
     }
@@ -172,11 +231,30 @@ export async function createMilestone(req, res, next) {
         taskId,
         order: existingCount + 1,
         title: title.trim(),
+        description: description?.trim() || null,
         dueDate: due,
+        progress: Number(progress || 0),
         watcherEmails,
         status: 'PENDING_APPROVAL',
         createdById: req.user.id,
       },
+    });
+
+    // Populate dynamic reporting hierarchy escalation levels
+    const chainLevels = await getEscalationChainForEmployee(tenantId, task.employeeId);
+    if (chainLevels.length > 0) {
+      await prisma.checkpointEscalationLevel.createMany({
+        data: chainLevels.map((lvl) => ({
+          milestoneId: milestone.id,
+          levelNumber: lvl.levelNumber,
+          roleOrTitle: lvl.roleOrTitle,
+          userId: lvl.userId,
+        })),
+      });
+    }
+
+    const milestoneWithDetails = await prisma.taskMilestone.findUnique({
+      where: { id: milestone.id },
       include: MILESTONE_INCLUDE,
     });
 
@@ -201,7 +279,7 @@ export async function createMilestone(req, res, next) {
       });
     }
 
-    res.status(201).json({ item: milestone });
+    res.status(201).json({ item: milestoneWithDetails || milestone });
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });
     next(err);
@@ -220,12 +298,39 @@ export async function updateMilestone(req, res, next) {
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
-    const { title, dueDate, watcherEmails, proposedCompletionDate, approve, isDone } = parsed.data;
+    const {
+      title,
+      description,
+      dueDate,
+      progress,
+      watcherEmails,
+      proposedCompletionDate,
+      extensionDaysRequested,
+      extensionReason,
+      approve,
+      isDone,
+    } = parsed.data;
 
     const isManager = hasRole(req.user.role, MANAGER_OR_ELEVATED_ROLES);
     const isAssignee = task.employeeId === req.user.id;
     const data = {};
     const auditLines = [];
+
+    // Description and Progress updates (allowed by assignee or manager)
+    if (description !== undefined) {
+      data.description = description ? description.trim() : null;
+      auditLines.push('updated checkpoint description');
+    }
+    if (progress !== undefined) {
+      data.progress = Math.min(100, Math.max(0, Number(progress)));
+      auditLines.push(`updated progress to ${data.progress}%`);
+      if (data.progress === 100 && !milestone.isDone) {
+        data.isDone = true;
+        data.status = 'DONE';
+        data.completedById = req.user.id;
+        data.completedAt = new Date();
+      }
+    }
 
     // ── Manager: edit the milestone's own fields ──────────────────────────
     if (title !== undefined || dueDate !== undefined || watcherEmails !== undefined) {
@@ -305,7 +410,31 @@ export async function updateMilestone(req, res, next) {
       }
     }
 
-    // ── Employee: propose a new completion date ───────────────────────────
+    // ── Employee: propose a new completion date or extension days ────────
+    if (extensionDaysRequested !== undefined) {
+      if (!isAssignee) {
+        return res.status(403).json({ error: 'Only the task owner can request an extension' });
+      }
+      if (extensionDaysRequested === null) {
+        data.extensionDaysRequested = null;
+        data.extensionReason = null;
+      } else {
+        const days = Number(extensionDaysRequested);
+        if (days <= 0) {
+          return res.status(400).json({ error: 'Extension days requested must be at least 1 day' });
+        }
+        const currentDue = milestone.dueDate ? new Date(milestone.dueDate) : new Date();
+        const proposed = new Date(currentDue.getTime() + days * 24 * 60 * 60 * 1000);
+        data.extensionDaysRequested = days;
+        data.extensionReason = extensionReason ? extensionReason.trim() : null;
+        data.proposedCompletionDate = proposed;
+        data.proposedById = req.user.id;
+        data.proposedAt = new Date();
+        data.status = 'RESCHEDULE_REQUESTED';
+        auditLines.push(`requested +${days} day(s) extension: ${data.extensionReason || 'no reason provided'}`);
+      }
+    }
+
     if (proposedCompletionDate !== undefined) {
       if (!isAssignee) {
         return res.status(403).json({ error: 'Only the task owner can propose a completion date' });
@@ -362,19 +491,28 @@ export async function updateMilestone(req, res, next) {
         return res.status(409).json({ error: 'This milestone has already been decided' });
       }
       if (approve) {
-        // Accepting a pending proposal locks it in as the new dueDate.
+        // Accepting a pending proposal or extension locks it in as the new dueDate.
         const proposed = data.proposedCompletionDate !== undefined
           ? data.proposedCompletionDate
           : milestone.proposedCompletionDate;
-        if (proposed) data.dueDate = proposed;
+        if (proposed) {
+          data.dueDate = proposed;
+        } else if (milestone.extensionDaysRequested) {
+          const currentDue = milestone.dueDate ? new Date(milestone.dueDate) : new Date();
+          data.dueDate = new Date(currentDue.getTime() + milestone.extensionDaysRequested * 24 * 60 * 60 * 1000);
+        }
+        data.proposedCompletionDate = null;
+        data.extensionDaysRequested = null;
+        data.extensionReason = null;
         data.status = 'APPROVED';
         data.approvedById = req.user.id;
         data.approvedAt = new Date();
-        auditLines.push('approved');
+        auditLines.push('approved checkpoint / extension');
       } else {
         data.status = 'RESCHEDULE_REQUESTED';
         data.proposedCompletionDate = null;
-        auditLines.push('sent the proposed date back for another try');
+        data.extensionDaysRequested = null;
+        auditLines.push('sent the proposed date back / rejected extension');
       }
     }
 
@@ -601,13 +739,13 @@ export async function getMilestoneLiveStatusSvg(req, res, next) {
     const isDone = milestone.status === 'DONE';
     const isOverdue = !isDone && milestone.dueDate && new Date(milestone.dueDate) < now;
 
-    let statusText = 'ACTIVE IN ORBIT (ON TRACK)';
-    let statusColor = '#6366f1';
-    let statusBg = '#1e1b4b';
+    let statusText = 'ON TRACK';
+    let statusColor = '#3b82f6';
+    let statusBg = '#1e293b';
     let iconChar = '●';
 
     if (isDone) {
-      statusText = 'COMPLETED &amp; SECURED (100%)';
+      statusText = 'COMPLETED (100%)';
       statusColor = '#10b981';
       statusBg = '#064e3b';
       iconChar = '✓';
@@ -626,15 +764,15 @@ export async function getMilestoneLiveStatusSvg(req, res, next) {
     }
 
     const allMilestones = milestone.task?.milestones || [];
-    const totalMilestones = allMilestones.length || 4;
+    const totalMilestones = Math.min(3, Math.max(1, allMilestones.length || 3));
     const completedCount = allMilestones.filter((m) => m.status === 'DONE').length;
     const completionPercent = Math.round((completedCount / (allMilestones.length || 1)) * 100);
 
     const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' });
 
-    // 4 orbital station slots
-    const slotX = [68, 202, 336, 470];
-    const stations = [1, 2, 3, 4].map((stepNum, idx) => {
+    // 3 checkpoint slots
+    const slotX = totalMilestones === 1 ? [270] : totalMilestones === 2 ? [160, 380] : [90, 270, 450];
+    const stations = [1, 2, 3].slice(0, totalMilestones).map((stepNum, idx) => {
       const found = allMilestones.find((m) => m.order === stepNum);
       const isTarget = found?.id === milestone.id;
       const stationDone = found?.status === 'DONE';
@@ -644,14 +782,14 @@ export async function getMilestoneLiveStatusSvg(req, res, next) {
       let dotStroke = '#334155';
       let labelColor = '#64748b';
       let char = `0${stepNum}`;
-      let stateBadge = found ? 'STANDBY' : 'EMPTY';
+      let stateBadge = found ? 'PENDING' : 'EMPTY';
 
       if (stationDone) {
         dotFill = '#10b981';
         dotStroke = '#10b981';
         labelColor = '#10b981';
         char = '✓';
-        stateBadge = 'SECURED';
+        stateBadge = 'COMPLETED';
       } else if (stationOverdue) {
         dotFill = '#ef4444';
         dotStroke = '#ef4444';
@@ -660,17 +798,17 @@ export async function getMilestoneLiveStatusSvg(req, res, next) {
         stateBadge = 'OVERDUE';
       } else if (isTarget) {
         dotFill = statusColor;
-        dotStroke = '#a5b4fc';
-        labelColor = '#818cf8';
+        dotStroke = '#93c5fd';
+        labelColor = '#60a5fa';
         char = `0${stepNum}`;
-        stateBadge = isDone ? 'SECURED' : 'IN ORBIT';
+        stateBadge = isDone ? 'COMPLETED' : 'ACTIVE';
       }
 
-      const title = found ? found.title : `Station 0${stepNum}`;
-      const shortTitle = title.length > 15 ? title.slice(0, 14) + '…' : title;
+      const title = found ? found.title : `Checkpoint 0${stepNum}`;
+      const shortTitle = title.length > 20 ? title.slice(0, 19) + '…' : title;
 
       return {
-        x: slotX[idx],
+        x: slotX[idx] || (idx + 1) * 120,
         dotFill,
         dotStroke,
         labelColor,
@@ -680,6 +818,9 @@ export async function getMilestoneLiveStatusSvg(req, res, next) {
       };
     });
 
+    const startX = slotX[0];
+    const endX = slotX[slotX.length - 1];
+
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="540" height="124" viewBox="0 0 540 124">
       <defs>
         <linearGradient id="cyberBorder" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -688,19 +829,19 @@ export async function getMilestoneLiveStatusSvg(req, res, next) {
           <stop offset="100%" stop-color="${statusColor}" stop-opacity="0.2"/>
         </linearGradient>
         <linearGradient id="pulseGlow" x1="0%" y1="0%" x2="100%" y2="0%">
-          <stop offset="0%" stop-color="#6366f1"/>
+          <stop offset="0%" stop-color="#3b82f6"/>
           <stop offset="100%" stop-color="${statusColor}"/>
         </linearGradient>
       </defs>
 
-      <!-- Main Tactical Hull Container -->
+      <!-- Main Container Card -->
       <rect width="540" height="124" rx="14" fill="#0b0f19" stroke="url(#cyberBorder)" stroke-width="1.5"/>
 
-      <!-- Top Row: Radar Beacon, Title, Status & Live UTC Pill -->
+      <!-- Top Row: Icon, Title, Status & Live UTC Pill -->
       <circle cx="30" cy="28" r="14" fill="${statusBg}" stroke="${statusColor}" stroke-width="2"/>
       <text x="30" y="33" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" font-weight="900" fill="${statusColor}">${iconChar}</text>
 
-      <text x="54" y="21" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="9.5" font-weight="800" fill="#818cf8" letter-spacing="1">LIVE TELEMETRY // STATION 0${milestone.order} OF 0${totalMilestones}</text>
+      <text x="54" y="21" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="9.5" font-weight="800" fill="#93c5fd" letter-spacing="1">CRITICAL CHECKPOINTS // CHECKPOINT 0${milestone.order} OF 0${totalMilestones}</text>
       <text x="54" y="39" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="14" font-weight="900" fill="#f8fafc" letter-spacing="0.3">${statusText}</text>
 
       <!-- Live Sync Pill -->
@@ -711,11 +852,13 @@ export async function getMilestoneLiveStatusSvg(req, res, next) {
       <!-- Subtle Divider Line -->
       <line x1="20" y1="52" x2="520" y2="52" stroke="#1f293d" stroke-width="1"/>
 
-      <!-- Connecting Orbit Track Bar -->
-      <line x1="${slotX[0]}" y1="74" x2="${slotX[3]}" y2="74" stroke="#1e293b" stroke-width="3" stroke-linecap="round"/>
-      <line x1="${slotX[0]}" y1="74" x2="${slotX[0] + (slotX[3] - slotX[0]) * (completionPercent / 100)}" y2="74" stroke="url(#pulseGlow)" stroke-width="3" stroke-linecap="round"/>
+      <!-- Connecting Progress Track Bar -->
+      ${slotX.length > 1 ? `
+      <line x1="${startX}" y1="74" x2="${endX}" y2="74" stroke="#1e293b" stroke-width="3" stroke-linecap="round"/>
+      <line x1="${startX}" y1="74" x2="${startX + (endX - startX) * (completionPercent / 100)}" y2="74" stroke="url(#pulseGlow)" stroke-width="3" stroke-linecap="round"/>
+      ` : ''}
 
-      <!-- 4 Orbital Station Nodes -->
+      <!-- Checkpoint Nodes -->
       ${stations.map((s) => `
         <g>
           <circle cx="${s.x}" cy="74" r="11" fill="${s.dotFill}" stroke="${s.dotStroke}" stroke-width="2"/>

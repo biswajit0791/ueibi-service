@@ -1,9 +1,32 @@
 import { prisma } from '../lib/prisma.js';
 import { AppraisalNotificationService } from '../services/appraisalNotification.service.js';
+import { emitToUser } from '../lib/socket.js';
 import { goalService } from '../services/goal.service.js';
 import { buildTeamScopeWhere, buildExplicitReportsWhere } from '../services/teamScope.service.js';
 import { computeCycleRollup } from '../services/reportAggregation.service.js';
 import { ELEVATED_ROLES, HR_ROLES, MANAGER_OR_ELEVATED_ROLES, SUPER_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
+
+async function pushNotification({ tenantId, recipientId, type, title, body, entityType, entityId }) {
+  if (!recipientId || recipientId === 'system' || !tenantId) return null;
+  try {
+    const notif = await prisma.notification.create({
+      data: {
+        tenantId,
+        recipientId,
+        type: type || 'review_update',
+        title,
+        body: body || null,
+        entityType: entityType || 'review',
+        entityId: entityId || null,
+      },
+    });
+    emitToUser(tenantId, recipientId, 'notification', notif);
+    return notif;
+  } catch (err) {
+    console.warn('[AppraisalController] Notification failed:', err.message);
+    return null;
+  }
+}
 
 /**
  * True when `user` may act as the reviewing manager for `employee`:
@@ -2316,6 +2339,19 @@ export async function getReviewById(req, res, next) {
         hrSignedOffBy: {
           select: { id: true, name: true, email: true },
         },
+        resultsSharedBy: {
+          select: { id: true, name: true, email: true },
+        },
+        finalisedBy: {
+          select: { id: true, name: true, email: true },
+        },
+        concerns: {
+          include: {
+            raisedBy: { select: { id: true, name: true, role: true, email: true } },
+            respondedBy: { select: { id: true, name: true, role: true, email: true } },
+          },
+          orderBy: { createdAt: 'asc' },
+        },
       },
     });
 
@@ -2639,4 +2675,403 @@ export async function updateReview(req, res, next) {
     next(err);
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TWO-STAGE REVIEW CYCLE & CONCERN TICKETING
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * POST /performance-reviews/:id/share-results
+ * HR / Admin shares review results (Work Score, Manager Rating, HR Rating) with employee.
+ */
+export async function shareReviewResults(req, res, next) {
+  try {
+    const parsedParams = reviewIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid review ID parameter', details: parsedParams.error.errors });
+    }
+    const { id } = parsedParams.data;
+    const isElevated = hasRole(req.user.role, ELEVATED_ROLES);
+    if (!isElevated) {
+      return res.status(403).json({ error: 'Only HR or administrative personnel can share review results.' });
+    }
+
+    const review = await prisma.performanceReview.findUnique({
+      where: { id },
+      include: {
+        employee: true,
+        cycle: true,
+      },
+    });
+
+    if (!review || review.employee.tenantId !== req.tenantId) {
+      return res.status(404).json({ error: 'Performance review not found' });
+    }
+
+    if (review.hrSignoffStatus === 'FINALISED' || review.hrSignoffStatus === 'RELEASED') {
+      return res.status(409).json({ error: 'This review has already been finalised.' });
+    }
+
+    const { hrRating, hrRemarks, workScore: manualWorkScore, averageManagerRating: manualAvgRating } = req.body || {};
+
+    // Calculate workScore automatically if not manually provided
+    let calculatedWorkScore = manualWorkScore !== undefined ? Number(manualWorkScore) : review.workScore;
+    if (calculatedWorkScore === null || calculatedWorkScore === undefined) {
+      const goals = await prisma.goal.findMany({
+        where: {
+          tenantId: req.tenantId,
+          employeeId: review.employeeId,
+          status: { in: ['COMPLETED', 'ACTIVE', 'PENDING_HR_REVIEW', 'PENDING_MANAGER_REVIEW'] },
+        },
+        select: { progress: true },
+      });
+      if (goals.length > 0) {
+        calculatedWorkScore = Math.round(goals.reduce((acc, g) => acc + (g.progress || 0), 0) / goals.length);
+      } else {
+        calculatedWorkScore = 100;
+      }
+    }
+
+    // Calculate averageManagerRating automatically if not manually provided
+    let calculatedAvgManagerRating = manualAvgRating !== undefined ? Number(manualAvgRating) : review.averageManagerRating;
+    if (calculatedAvgManagerRating === null || calculatedAvgManagerRating === undefined) {
+      const goalsWithRating = await prisma.goal.findMany({
+        where: {
+          tenantId: req.tenantId,
+          employeeId: review.employeeId,
+          managerRating: { not: null },
+        },
+        select: { managerRating: true },
+      });
+      if (goalsWithRating.length > 0) {
+        const sum = goalsWithRating.reduce((acc, g) => acc + (g.managerRating || 0), 0);
+        calculatedAvgManagerRating = Number((sum / goalsWithRating.length).toFixed(1));
+      } else if (review.managerRating) {
+        calculatedAvgManagerRating = Number(review.managerRating);
+      }
+    }
+
+    const updated = await prisma.performanceReview.update({
+      where: { id },
+      data: {
+        hrSignoffStatus: 'SHARED',
+        resultsSharedAt: new Date(),
+        resultsSharedById: req.user.id,
+        workScore: calculatedWorkScore,
+        averageManagerRating: calculatedAvgManagerRating,
+        ...(hrRating !== undefined && { hrRating: Number(hrRating) }),
+        ...(hrRemarks !== undefined && { hrRemarks }),
+      },
+      include: {
+        resultsSharedBy: { select: { id: true, name: true, email: true } },
+        scores: { include: { parameter: true } },
+        concerns: {
+          include: {
+            raisedBy: { select: { id: true, name: true, role: true } },
+            respondedBy: { select: { id: true, name: true, role: true } },
+          },
+        },
+      },
+    });
+
+    // Notify employee that results are ready to view
+    await pushNotification({
+      tenantId: req.tenantId,
+      recipientId: review.employeeId,
+      type: 'review_shared',
+      title: 'Performance Review Results Shared',
+      body: `HR Partner ${req.user.name} has shared your performance review results. You can review them and submit any feedback or concerns.`,
+      entityType: 'review',
+      entityId: id,
+    });
+
+    res.json({ success: true, review: updated });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /performance-reviews/:id/concerns
+ * Employee raises a concern on their shared review results.
+ */
+export async function raiseReviewConcern(req, res, next) {
+  try {
+    const parsedParams = reviewIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid review ID parameter', details: parsedParams.error.errors });
+    }
+    const { id } = parsedParams.data;
+    const { comment } = req.body || {};
+
+    if (!comment || typeof comment !== 'string' || comment.trim().length < 5) {
+      return res.status(400).json({ error: 'Please enter a clear explanation for your concern (at least 5 characters).' });
+    }
+
+    const review = await prisma.performanceReview.findUnique({
+      where: { id },
+      include: { employee: true },
+    });
+
+    if (!review || review.employee.tenantId !== req.tenantId) {
+      return res.status(404).json({ error: 'Performance review not found' });
+    }
+
+    if (review.employeeId !== req.user.id && !hasRole(req.user.role, ELEVATED_ROLES)) {
+      return res.status(403).json({ error: 'Only the review owner can raise a concern.' });
+    }
+
+    if (review.hrSignoffStatus === 'FINALISED' || review.hrSignoffStatus === 'RELEASED') {
+      return res.status(409).json({ error: 'Cannot raise concerns on a finalised review.' });
+    }
+
+    const concern = await prisma.reviewConcern.create({
+      data: {
+        tenantId: req.tenantId,
+        reviewId: id,
+        raisedById: req.user.id,
+        comment: comment.trim(),
+        status: 'OPEN',
+      },
+      include: {
+        raisedBy: { select: { id: true, name: true, role: true, email: true } },
+      },
+    });
+
+    await prisma.performanceReview.update({
+      where: { id },
+      data: { hrSignoffStatus: 'CONCERN_RAISED' },
+    });
+
+    // Notify Manager & HR
+    const managerId = review.employee?.managerId;
+    if (managerId) {
+      await pushNotification({
+        tenantId: req.tenantId,
+        recipientId: managerId,
+        type: 'review_concern',
+        title: 'Review Concern Raised',
+        body: `${req.user.name} raised a concern on their performance review: "${comment.trim().slice(0, 80)}..."`,
+        entityType: 'review',
+        entityId: id,
+      });
+    }
+
+    const hrUsers = await prisma.tenantUser.findMany({
+      where: { tenantId: req.tenantId, role: { in: ['HR', 'ADMIN', 'SUPER_ADMIN'] } },
+      select: { id: true },
+    });
+    for (const hr of hrUsers) {
+      if (hr.id !== req.user.id && hr.id !== managerId) {
+        await pushNotification({
+          tenantId: req.tenantId,
+          recipientId: hr.id,
+          type: 'review_concern',
+          title: 'Review Concern Raised',
+          body: `${req.user.name} raised a concern on their performance review.`,
+          entityType: 'review',
+          entityId: id,
+        });
+      }
+    }
+
+    res.status(201).json({ success: true, concern });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /performance-reviews/:id/concerns
+ * Lists all concern thread entries for a review.
+ */
+export async function listReviewConcerns(req, res, next) {
+  try {
+    const parsedParams = reviewIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid review ID parameter', details: parsedParams.error.errors });
+    }
+    const { id } = parsedParams.data;
+
+    const review = await prisma.performanceReview.findUnique({
+      where: { id },
+      include: { employee: true },
+    });
+    if (!review || review.employee.tenantId !== req.tenantId) {
+      return res.status(404).json({ error: 'Review not found' });
+    }
+
+    const isOwner = review.employeeId === req.user.id;
+    const canView = isOwner || await canManagerReview(req.user, review.employee, req.tenantId);
+    if (!canView) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const concerns = await prisma.reviewConcern.findMany({
+      where: { reviewId: id, tenantId: req.tenantId },
+      include: {
+        raisedBy: { select: { id: true, name: true, role: true, email: true } },
+        respondedBy: { select: { id: true, name: true, role: true, email: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    res.json({ concerns });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /performance-reviews/:id/concerns/:cid/respond
+ * Manager or HR responds to a raised concern.
+ */
+export async function respondReviewConcern(req, res, next) {
+  try {
+    const { id, cid } = req.params;
+    const { response, markResolved = true } = req.body || {};
+
+    if (!response || typeof response !== 'string' || response.trim().length === 0) {
+      return res.status(400).json({ error: 'Response content is required.' });
+    }
+
+    const concern = await prisma.reviewConcern.findFirst({
+      where: { id: cid, reviewId: id, tenantId: req.tenantId },
+      include: { review: { include: { employee: true } } },
+    });
+
+    if (!concern) {
+      return res.status(404).json({ error: 'Review concern not found.' });
+    }
+
+    const isElevated = hasRole(req.user.role, ELEVATED_ROLES);
+    const isManager = concern.review.employee?.managerId === req.user.id;
+    if (!isElevated && !isManager) {
+      return res.status(403).json({ error: 'Only reporting managers or HR can respond to review concerns.' });
+    }
+
+    const updatedConcern = await prisma.reviewConcern.update({
+      where: { id: cid },
+      data: {
+        response: response.trim(),
+        respondedById: req.user.id,
+        respondedAt: new Date(),
+        status: markResolved ? 'RESOLVED' : 'OPEN',
+      },
+      include: {
+        raisedBy: { select: { id: true, name: true, role: true, email: true } },
+        respondedBy: { select: { id: true, name: true, role: true, email: true } },
+      },
+    });
+
+    // If marked resolved, check if all concerns on this review are now resolved
+    if (markResolved) {
+      const openCount = await prisma.reviewConcern.count({
+        where: { reviewId: id, status: 'OPEN' },
+      });
+      if (openCount === 0) {
+        await prisma.performanceReview.update({
+          where: { id },
+          data: { hrSignoffStatus: 'SHARED' },
+        });
+      }
+    }
+
+    // Notify employee of resolution response
+    await pushNotification({
+      tenantId: req.tenantId,
+      recipientId: concern.raisedById,
+      type: 'concern_responded',
+      title: 'Concern Response Received',
+      body: `${req.user.name} responded to your review concern: "${response.trim().slice(0, 80)}..."`,
+      entityType: 'review',
+      entityId: id,
+    });
+
+    res.json({ success: true, concern: updatedConcern });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /performance-reviews/:id/finalise
+ * HR final sign-off: locks review permanently.
+ */
+export async function finaliseReview(req, res, next) {
+  try {
+    const parsedParams = reviewIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid review ID parameter', details: parsedParams.error.errors });
+    }
+    const { id } = parsedParams.data;
+    const isElevated = hasRole(req.user.role, ELEVATED_ROLES);
+    if (!isElevated) {
+      return res.status(403).json({ error: 'Only HR or administrative personnel can finalise a review.' });
+    }
+
+    const review = await prisma.performanceReview.findUnique({
+      where: { id },
+      include: { employee: true },
+    });
+
+    if (!review || review.employee.tenantId !== req.tenantId) {
+      return res.status(404).json({ error: 'Performance review not found' });
+    }
+
+    // Check if open concerns remain
+    const openConcernsCount = await prisma.reviewConcern.count({
+      where: { reviewId: id, status: 'OPEN' },
+    });
+    if (openConcernsCount > 0) {
+      return res.status(400).json({
+        error: `Cannot finalise review: There are ${openConcernsCount} open concern(s) that must be addressed or resolved first.`,
+      });
+    }
+
+    const finalised = await prisma.performanceReview.update({
+      where: { id },
+      data: {
+        hrSignoffStatus: 'FINALISED',
+        finalisedAt: new Date(),
+        finalisedById: req.user.id,
+        hrSignedOffAt: new Date(),
+        hrSignedOffById: req.user.id,
+        status: 'COMPLETED',
+      },
+      include: {
+        finalisedBy: { select: { id: true, name: true, email: true } },
+        scores: { include: { parameter: true } },
+      },
+    });
+
+    // Notify employee & manager
+    await pushNotification({
+      tenantId: req.tenantId,
+      recipientId: review.employeeId,
+      type: 'review_finalised',
+      title: 'Performance Review Finalised',
+      body: `Your performance review has been officially finalised by HR Partner ${req.user.name}.`,
+      entityType: 'review',
+      entityId: id,
+    });
+
+    if (review.employee?.managerId) {
+      await pushNotification({
+        tenantId: req.tenantId,
+        recipientId: review.employee.managerId,
+        type: 'review_finalised',
+        title: 'Report Review Finalised',
+        body: `The performance review for ${review.employee.name} has been finalised by HR.`,
+        entityType: 'review',
+        entityId: id,
+      });
+    }
+
+    res.json({ success: true, review: finalised });
+  } catch (err) {
+    next(err);
+  }
+}
+
 

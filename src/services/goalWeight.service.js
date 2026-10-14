@@ -47,6 +47,7 @@ export async function goalWeightSummary(goalId, client = prisma) {
         select: {
           id: true, title: true, weight: true, status: true,
           progress: true, isStandalone: true, employeeId: true,
+          managerFinalWeight: true,
         },
       },
     },
@@ -109,10 +110,15 @@ export async function goalWeightSummary(goalId, client = prisma) {
 function weightedCompletion(tasks) {
   const totalWeight = tasks.reduce((sum, t) => sum + Number(t.weight || 0), 0);
   if (totalWeight <= 0) return 0;
-  const earned = tasks.reduce(
-    (sum, t) => sum + (Number(t.progress || 0) * Number(t.weight || 0)), 0,
-  );
-  return Math.min(100, Math.round(earned / totalWeight));
+  const earned = tasks.reduce((sum, t) => {
+    if (t.managerFinalWeight !== null && t.managerFinalWeight !== undefined) {
+      return sum + Number(t.managerFinalWeight);
+    }
+    const w = Number(t.weight || 0);
+    const p = Math.min(100, Math.max(0, Number(t.progress || 0)));
+    return sum + ((w * p) / 100);
+  }, 0);
+  return Math.min(100, Math.round((earned / totalWeight) * 100));
 }
 
 function lockReason({ locked, exempt, totalWeight, taskCount, awaitingApproval }) {
