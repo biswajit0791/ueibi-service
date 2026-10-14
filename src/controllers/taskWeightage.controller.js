@@ -20,6 +20,7 @@ import { logTaskAudit } from './taskActivity.controller.js';
 import { emitToTenant } from '../lib/socket.js';
 import { ELEVATED_ROLES, SUPER_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
 import { finalWeightSchema, teamWeightageQuerySchema, taskIdParamSchema } from '../validations/task.schema.js';
+import { goalService } from '../services/goal.service.js';
 
 // ─── GET /api/team/:id/weightage ────────────────────────────────────────────
 /**
@@ -147,6 +148,11 @@ export async function setTaskFinalWeight(req, res, next) {
     }).catch(() => { /* the ledger entry is not worth failing the request over */ });
 
     const row = weightageRow(updated);
+    if (task.goalId) {
+      await goalService.recalculateProgress(task.goalId, task.employeeId).catch((err) => {
+        console.warn('[taskWeightage] Notice recalculating goal progress:', err?.message || err);
+      });
+    }
     emitToTenant(req.tenantId, 'task_weightage_updated', { taskId: id, row });
     res.json(row);
   } catch (err) {

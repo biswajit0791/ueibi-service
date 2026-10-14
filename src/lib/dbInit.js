@@ -107,6 +107,7 @@ export async function ensureAppraisalColumns() {
 
     await ensurePasswordResetTable();
     await ensureGoalAssignmentsTable();
+    await ensurePerformanceColumns();
   } catch (err) {
     console.warn('[dbInit] Notice on appraisal cycle columns init:', err?.message || err);
   }
@@ -237,7 +238,10 @@ export async function ensureGoalAssignmentsTable() {
     console.warn('[dbInit] Notice on goal_assignments table init:', err?.message || err);
   }
 
-  // 6. Reset any legacy auto-approved leave requests in the database
+  // 6. Performance Module Tables & Columns
+  await ensurePerformanceColumns();
+
+  // 7. Reset any legacy auto-approved leave requests in the database
   try {
     const pendingLeaves = await prisma.leaveRequest.findMany({
       where: {
@@ -665,5 +669,224 @@ export async function ensureDynamicLeaveSystem() {
     console.warn('[dbInit] Notice on dynamic leave system init:', err?.message || err);
   }
 }
+
+/**
+ * Ensures performance module columns and tables exist idempotently:
+ * - goals: ownerManagerId, parentGoalId, managerRating, managerRatingNotes, closedAt, closedById
+ * - goal_assignments: managerRating, finalScore
+ * - tasks: holdStartedAt, holdReleasedAt, totalHoldDays, onHoldReason, createdOnBehalfOf, requiresApproval, approvedById, approvedAt
+ * - task_milestones: description, progress, extensionDaysRequested, extensionReason
+ * - HrSignoffStatus enum: SHARED, CONCERN_RAISED, FINALISED
+ * - performance_reviews: workScore, averageManagerRating, hrRating, selfSummary, resultsSharedAt, resultsSharedById, finalisedAt, finalisedById
+ * - checkpoint_escalation_levels table
+ * - followers table
+ * - review_concerns table
+ */
+export async function ensurePerformanceColumns() {
+  try {
+    // 1. Alter goals table
+    await prisma.$executeRawUnsafe(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'goals' AND column_name = 'ownerManagerId') THEN
+          ALTER TABLE "goals" ADD COLUMN "ownerManagerId" TEXT;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'goals' AND column_name = 'parentGoalId') THEN
+          ALTER TABLE "goals" ADD COLUMN "parentGoalId" TEXT;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'goals' AND column_name = 'managerRating') THEN
+          ALTER TABLE "goals" ADD COLUMN "managerRating" DOUBLE PRECISION;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'goals' AND column_name = 'managerRatingNotes') THEN
+          ALTER TABLE "goals" ADD COLUMN "managerRatingNotes" TEXT;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'goals' AND column_name = 'closedAt') THEN
+          ALTER TABLE "goals" ADD COLUMN "closedAt" TIMESTAMP(3);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'goals' AND column_name = 'closedById') THEN
+          ALTER TABLE "goals" ADD COLUMN "closedById" TEXT;
+        END IF;
+      END $$;
+    `);
+
+    // 2. Alter goal_assignments table
+    await prisma.$executeRawUnsafe(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'goal_assignments' AND column_name = 'managerRating') THEN
+          ALTER TABLE "goal_assignments" ADD COLUMN "managerRating" DOUBLE PRECISION;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'goal_assignments' AND column_name = 'finalScore') THEN
+          ALTER TABLE "goal_assignments" ADD COLUMN "finalScore" DOUBLE PRECISION;
+        END IF;
+      END $$;
+    `);
+
+    // 3. Alter tasks table
+    await prisma.$executeRawUnsafe(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tasks' AND column_name = 'holdStartedAt') THEN
+          ALTER TABLE "tasks" ADD COLUMN "holdStartedAt" TIMESTAMP(3);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tasks' AND column_name = 'holdReleasedAt') THEN
+          ALTER TABLE "tasks" ADD COLUMN "holdReleasedAt" TIMESTAMP(3);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tasks' AND column_name = 'totalHoldDays') THEN
+          ALTER TABLE "tasks" ADD COLUMN "totalHoldDays" INTEGER NOT NULL DEFAULT 0;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tasks' AND column_name = 'onHoldReason') THEN
+          ALTER TABLE "tasks" ADD COLUMN "onHoldReason" TEXT;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tasks' AND column_name = 'createdOnBehalfOf') THEN
+          ALTER TABLE "tasks" ADD COLUMN "createdOnBehalfOf" BOOLEAN NOT NULL DEFAULT false;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tasks' AND column_name = 'requiresApproval') THEN
+          ALTER TABLE "tasks" ADD COLUMN "requiresApproval" BOOLEAN NOT NULL DEFAULT false;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tasks' AND column_name = 'approvedById') THEN
+          ALTER TABLE "tasks" ADD COLUMN "approvedById" TEXT;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tasks' AND column_name = 'approvedAt') THEN
+          ALTER TABLE "tasks" ADD COLUMN "approvedAt" TIMESTAMP(3);
+        END IF;
+      END $$;
+    `);
+
+    // 4. Alter task_milestones table
+    await prisma.$executeRawUnsafe(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'task_milestones' AND column_name = 'description') THEN
+          ALTER TABLE "task_milestones" ADD COLUMN "description" TEXT;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'task_milestones' AND column_name = 'progress') THEN
+          ALTER TABLE "task_milestones" ADD COLUMN "progress" INTEGER NOT NULL DEFAULT 0;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'task_milestones' AND column_name = 'extensionDaysRequested') THEN
+          ALTER TABLE "task_milestones" ADD COLUMN "extensionDaysRequested" INTEGER;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'task_milestones' AND column_name = 'extensionReason') THEN
+          ALTER TABLE "task_milestones" ADD COLUMN "extensionReason" TEXT;
+        END IF;
+      END $$;
+    `);
+
+    // 5. Update HrSignoffStatus enum
+    try {
+      await prisma.$executeRawUnsafe(`
+        DO $$ BEGIN
+          ALTER TYPE "HrSignoffStatus" ADD VALUE IF NOT EXISTS 'SHARED';
+          ALTER TYPE "HrSignoffStatus" ADD VALUE IF NOT EXISTS 'CONCERN_RAISED';
+          ALTER TYPE "HrSignoffStatus" ADD VALUE IF NOT EXISTS 'FINALISED';
+        EXCEPTION
+          WHEN duplicate_object THEN null;
+          WHEN undefined_object THEN null;
+        END $$;
+      `);
+    } catch {
+      // Ignored if type does not exist or values already present
+    }
+
+    // 6. Alter performance_reviews table
+    await prisma.$executeRawUnsafe(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'performance_reviews' AND column_name = 'workScore') THEN
+          ALTER TABLE "performance_reviews" ADD COLUMN "workScore" DOUBLE PRECISION;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'performance_reviews' AND column_name = 'averageManagerRating') THEN
+          ALTER TABLE "performance_reviews" ADD COLUMN "averageManagerRating" DOUBLE PRECISION;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'performance_reviews' AND column_name = 'hrRating') THEN
+          ALTER TABLE "performance_reviews" ADD COLUMN "hrRating" DOUBLE PRECISION;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'performance_reviews' AND column_name = 'selfSummary') THEN
+          ALTER TABLE "performance_reviews" ADD COLUMN "selfSummary" TEXT;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'performance_reviews' AND column_name = 'resultsSharedAt') THEN
+          ALTER TABLE "performance_reviews" ADD COLUMN "resultsSharedAt" TIMESTAMP(3);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'performance_reviews' AND column_name = 'resultsSharedById') THEN
+          ALTER TABLE "performance_reviews" ADD COLUMN "resultsSharedById" TEXT;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'performance_reviews' AND column_name = 'finalisedAt') THEN
+          ALTER TABLE "performance_reviews" ADD COLUMN "finalisedAt" TIMESTAMP(3);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'performance_reviews' AND column_name = 'finalisedById') THEN
+          ALTER TABLE "performance_reviews" ADD COLUMN "finalisedById" TEXT;
+        END IF;
+      END $$;
+    `);
+
+    // 7. Create checkpoint_escalation_levels table if not exists
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "checkpoint_escalation_levels" (
+        "id" TEXT PRIMARY KEY,
+        "milestoneId" TEXT NOT NULL REFERENCES "task_milestones"("id") ON DELETE CASCADE,
+        "levelNumber" INTEGER NOT NULL,
+        "roleOrTitle" TEXT NOT NULL,
+        "userId" TEXT REFERENCES "tenant_users"("id") ON DELETE SET NULL,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    try {
+      await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "checkpoint_escalation_levels_milestoneId_idx" ON "checkpoint_escalation_levels"("milestoneId");`);
+      await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "checkpoint_escalation_levels_userId_idx" ON "checkpoint_escalation_levels"("userId");`);
+    } catch {
+      // index already exists
+    }
+
+    // 8. Create followers table if not exists
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "followers" (
+        "id" TEXT PRIMARY KEY,
+        "tenantId" TEXT NOT NULL REFERENCES "tenants"("id") ON DELETE CASCADE,
+        "entityType" TEXT NOT NULL,
+        "entityId" TEXT NOT NULL,
+        "userId" TEXT NOT NULL REFERENCES "tenant_users"("id") ON DELETE CASCADE,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    try {
+      await prisma.$executeRawUnsafe(`CREATE UNIQUE INDEX IF NOT EXISTS "followers_tenantId_entityType_entityId_userId_key" ON "followers"("tenantId", "entityType", "entityId", "userId");`);
+      await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "followers_tenantId_entityType_entityId_idx" ON "followers"("tenantId", "entityType", "entityId");`);
+      await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "followers_userId_idx" ON "followers"("userId");`);
+    } catch {
+      // index already exists
+    }
+
+    // 9. Create review_concerns table if not exists
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "review_concerns" (
+        "id" TEXT PRIMARY KEY,
+        "tenantId" TEXT NOT NULL REFERENCES "tenants"("id") ON DELETE CASCADE,
+        "reviewId" TEXT NOT NULL REFERENCES "performance_reviews"("id") ON DELETE CASCADE,
+        "raisedById" TEXT NOT NULL REFERENCES "tenant_users"("id") ON DELETE CASCADE,
+        "subject" TEXT NOT NULL,
+        "details" TEXT NOT NULL,
+        "status" TEXT NOT NULL DEFAULT 'OPEN',
+        "response" TEXT,
+        "respondedById" TEXT REFERENCES "tenant_users"("id") ON DELETE SET NULL,
+        "respondedAt" TIMESTAMP(3),
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    try {
+      await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "review_concerns_tenantId_idx" ON "review_concerns"("tenantId");`);
+      await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "review_concerns_reviewId_idx" ON "review_concerns"("reviewId");`);
+      await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "review_concerns_raisedById_idx" ON "review_concerns"("raisedById");`);
+    } catch {
+      // index already exists
+    }
+
+    console.log('[dbInit] Performance module columns, tables & indexes verified successfully.');
+  } catch (err) {
+    console.warn('[dbInit] Notice on performance module columns init:', err?.message || err);
+  }
+}
+
 
 

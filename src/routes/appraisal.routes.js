@@ -32,6 +32,11 @@ import {
   deleteReview,
   updateReview,
   syncGoalsToAppraisal,
+  shareReviewResults,
+  raiseReviewConcern,
+  listReviewConcerns,
+  respondReviewConcern,
+  finaliseReview,
 } from '../controllers/appraisal.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
@@ -89,5 +94,12 @@ router.patch('/performance-reviews/:id/hr-audit', requireAuth, requireTenant, au
 
 // ── Phase 9: Reviews Dashboard (/uer/reviews) ────────────────────────────────
 router.get('/performance-reviews/mine/all', requireAuth, requireTenant, getMyAllReviews);
+
+// ── Two-Stage Review & Concern Ticketing ─────────────────────────────────────
+router.post('/performance-reviews/:id/share-results', requireAuth, requireTenant, authorize('HR', 'SUPER_ADMIN', 'CMD', 'ADMIN'), shareReviewResults);
+router.post('/performance-reviews/:id/concerns', requireAuth, requireTenant, raiseReviewConcern);
+router.get('/performance-reviews/:id/concerns', requireAuth, requireTenant, listReviewConcerns);
+router.post('/performance-reviews/:id/concerns/:cid/respond', requireAuth, requireTenant, respondReviewConcern);
+router.post('/performance-reviews/:id/finalise', requireAuth, requireTenant, authorize('HR', 'SUPER_ADMIN', 'CMD', 'ADMIN'), finaliseReview);
 
 export default router;

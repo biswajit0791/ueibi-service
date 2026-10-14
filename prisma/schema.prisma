@@ -122,6 +122,8 @@ model Tenant {
   documentTemplates    DocumentTemplate[]
   generatedDocuments   GeneratedDocument[]
   permissionAuditLogs  PermissionAuditLog[]
+  followers            Follower[]
+  reviewConcerns       ReviewConcern[]
 
   @@index([isPlatform])
   @@index([status])
@@ -250,9 +252,18 @@ model TenantUser {
   exitDetails                ExitDetails?
   goals                      Goal[]                   @relation("GoalAssignee")
   createdGoals               Goal[]                   @relation("GoalCreatedBy")
+  ownedGoals                 Goal[]                   @relation("GoalOwnerManager")
+  closedGoals                Goal[]                   @relation("GoalClosedBy")
   goalAssignments            GoalAssignment[]         @relation("UserGoalAssignments")
   assignedGoalRecords        GoalAssignment[]         @relation("AssignedGoals")
   tasks                      Task[]
+  tasksApproved              Task[]                   @relation("TaskApprovedBy")
+  assignedEscalations        CheckpointEscalationLevel[] @relation("EscalationAssignedTo")
+  userFollowers              Follower[]               @relation("UserFollowers")
+  hrSharedReviews            PerformanceReview[]      @relation("HrSharedBy")
+  hrFinalisedReviews         PerformanceReview[]      @relation("HrFinalisedBy")
+  concernsRaised             ReviewConcern[]          @relation("ConcernRaisedBy")
+  concernsResponded          ReviewConcern[]          @relation("ConcernRespondedBy")
   leaveRequests              LeaveRequest[]           @relation("EmployeeLeaves")
   approvedLeaves             LeaveRequest[]           @relation("ApprovedLeaves")
   createdLeaveTypes          LeaveType[]              @relation("LeaveTypeCreator")
@@ -865,6 +876,18 @@ model Goal {
   handoverOverridden   Boolean          @default(false)
   handoverOverriddenBy String?
 
+  // ── Performance Module Extensions ───────────────────────────────────────
+  ownerManagerId       String?
+  ownerManager         TenantUser?      @relation("GoalOwnerManager", fields: [ownerManagerId], references: [id], onDelete: SetNull)
+  parentGoalId         String?
+  parentGoal           Goal?            @relation("GoalHierarchy", fields: [parentGoalId], references: [id], onDelete: SetNull)
+  childGoals           Goal[]           @relation("GoalHierarchy")
+  managerRating        Float?
+  managerRatingNotes   String?          @db.Text
+  closedAt             DateTime?
+  closedById           String?
+  closedBy             TenantUser?      @relation("GoalClosedBy", fields: [closedById], references: [id], onDelete: SetNull)
+
   tasks               Task[]
   comments            GoalComment[]
   auditLogs           GoalAuditLog[]
@@ -893,6 +916,8 @@ model GoalAssignment {
   status              String      @default("DRAFT") // DRAFT | ASSIGNED | ACKNOWLEDGED | IN_PROGRESS | UNDER_REVIEW | COMPLETED
   milestones          Int         @default(0)
   completedMilestones Int         @default(0)
+  managerRating       Float?
+  finalScore          Float?
   createdAt           DateTime    @default(now())
   updatedAt           DateTime    @updatedAt
 
@@ -945,6 +970,17 @@ model Task {
   description    String?        @db.Text
   dependency     Json? // serialised dep object: { assigneeId, depTitle, status, escalated, depTaskId }
   isDependencyOf String? // parent task ID this task is a companion dep of
+  // ── On-Hold / Pause Tracking ─────────────────────────────────────────────
+  holdStartedAt      DateTime?
+  holdReleasedAt     DateTime?
+  totalHoldDays      Int            @default(0)
+  onHoldReason       String?        @db.Text
+  // ── Delegation & Approval Flow ───────────────────────────────────────────
+  createdOnBehalfOf  Boolean        @default(false)
+  requiresApproval   Boolean        @default(false)
+  approvedById       String?
+  approvedBy         TenantUser?    @relation("TaskApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt         DateTime?
   /// Opt-in milestone tracking for critical work. Only settable at creation,
   /// only when priority = 'critical', only by a MANAGER or above (see
   /// taskMilestone.controller.js). Replaces the old SubTask checklist.
@@ -1004,6 +1040,11 @@ model TaskMilestone {
   completedAt   DateTime?
   createdById   String?
   createdBy     TenantUser? @relation("MilestoneCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  description   String?     @db.Text
+  progress      Int         @default(0) // 0-100% completion of this checkpoint
+  extensionDaysRequested Int?
+  extensionReason String?   @db.Text
+  escalationLevels CheckpointEscalationLevel[]
   /// Escalation throttle: an overdue milestone is only emailed/notified once
   /// per calendar day, however often the daily check runs.
   lastEscalatedAt DateTime?
@@ -1367,6 +1408,9 @@ enum ReviewStatus {
 enum HrSignoffStatus {
   PENDING_RELEASE
   RELEASED
+  SHARED
+  CONCERN_RAISED
+  FINALISED
 }
 
 enum NominationStatus {
@@ -1431,16 +1475,28 @@ model PerformanceReview {
   selfAccomplishments String?            @db.Text
   selfWeaknesses      String?            @db.Text
   selfRating          Decimal?           @db.Decimal(3, 2)
+  selfSummary         String?            @db.Text
   selfSubmittedAt     DateTime?
   managerRemarks      String?            @db.Text
   managerRating       Decimal?           @db.Decimal(3, 2)
   managerSubmittedAt  DateTime?
   hikePercentage      Decimal?           @db.Decimal(5, 2)
+  // Two-Stage Review & Finalisation
   hrSignoffStatus     HrSignoffStatus    @default(PENDING_RELEASE)
   hrRemarks           String?            @db.Text
   hrSignedOffById     String?
   hrSignedOffBy       TenantUser?        @relation("HrSignoffActor", fields: [hrSignedOffById], references: [id])
   hrSignedOffAt       DateTime?
+  workScore            Float?
+  averageManagerRating Float?
+  hrRating             Float?
+  resultsSharedAt      DateTime?
+  resultsSharedById    String?
+  resultsSharedBy      TenantUser?        @relation("HrSharedBy", fields: [resultsSharedById], references: [id], onDelete: SetNull)
+  finalisedAt          DateTime?
+  finalisedById        String?
+  finalisedBy          TenantUser?        @relation("HrFinalisedBy", fields: [finalisedById], references: [id], onDelete: SetNull)
+  concerns             ReviewConcern[]
   scores              ReviewScore[]
   createdAt           DateTime           @default(now())
   updatedAt           DateTime           @updatedAt
@@ -1467,6 +1523,62 @@ model ReviewScore {
   @@index([reviewId])
   @@index([parameterId])
   @@map("review_scores")
+}
+
+model CheckpointEscalationLevel {
+  id           String         @id @default(cuid())
+  milestoneId  String
+  milestone    TaskMilestone  @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+  levelNumber  Int            // 1, 2, 3...
+  roleOrTitle  String         // "Manager", "General Manager", "CXO / COO"
+  userId       String?
+  user         TenantUser?    @relation("EscalationAssignedTo", fields: [userId], references: [id], onDelete: SetNull)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  @@index([milestoneId])
+  @@index([userId])
+  @@map("checkpoint_escalation_levels")
+}
+
+model Follower {
+  id         String     @id @default(cuid())
+  tenantId   String
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  entityType String     // "GOAL" | "TASK" | "CHECKPOINT"
+  entityId   String
+  userId     String
+  user       TenantUser @relation("UserFollowers", fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime   @default(now())
+
+  @@unique([tenantId, entityType, entityId, userId])
+  @@index([tenantId, entityType, entityId])
+  @@index([userId])
+  @@map("followers")
+}
+
+model ReviewConcern {
+  id            String            @id @default(cuid())
+  tenantId      String
+  tenant        Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reviewId      String
+  review        PerformanceReview @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  raisedById    String
+  raisedBy      TenantUser        @relation("ConcernRaisedBy", fields: [raisedById], references: [id], onDelete: Cascade)
+  subject       String
+  details       String            @db.Text
+  status        String            @default("OPEN") // OPEN | IN_PROGRESS | RESOLVED | CLOSED
+  response      String?           @db.Text
+  respondedById String?
+  respondedBy   TenantUser?       @relation("ConcernRespondedBy", fields: [respondedById], references: [id], onDelete: SetNull)
+  respondedAt   DateTime?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@index([tenantId])
+  @@index([reviewId])
+  @@index([raisedById])
+  @@map("review_concerns")
 }
 
 // ── Project Engagements & Contributions (Team Detail page) ───────────────────
