@@ -763,7 +763,7 @@ export async function listGoals(req, res, next) {
         where,
         include: {
           employee: {
-            select: { id: true, name: true, email: true, department: true, designation: true, managerId: true },
+            select: { id: true, name: true, email: true, department: true, designation: true, role: true, managerId: true },
           },
           createdByUser: {
             select: { id: true, name: true, role: true },
@@ -834,7 +834,7 @@ export async function getGoalById(req, res, next) {
       where: { id, tenantId: req.tenantId },
       include: {
         employee: {
-          select: { id: true, name: true, email: true, department: true, designation: true, managerId: true },
+          select: { id: true, name: true, email: true, department: true, designation: true, role: true, managerId: true },
         },
         createdByUser: {
           select: { id: true, name: true, role: true },
@@ -939,7 +939,11 @@ export async function updateGoal(req, res, next) {
 
     const existing = await prisma.goal.findFirst({
       where: { id, tenantId: req.tenantId },
-      include: { assignments: true },
+      include: {
+        assignments: true,
+        createdByUser: { select: { id: true, name: true, role: true } },
+        employee: { select: { id: true, name: true, role: true } },
+      },
     });
 
     if (!existing) {
@@ -949,6 +953,35 @@ export async function updateGoal(req, res, next) {
     const canAccess = await goalService.canAccessGoal(existing, req.user, req.tenantId);
     if (!canAccess) {
       return res.status(403).json({ error: 'Access forbidden: you cannot edit this goal' });
+    }
+
+    // Determine if goal was created from employee end
+    let creatorRole = existing.createdByUser?.role;
+    if (!creatorRole && existing.createdById) {
+      const creator = await prisma.tenantUser.findUnique({
+        where: { id: existing.createdById },
+        select: { role: true },
+      });
+      creatorRole = creator?.role;
+    }
+    const isEmployeeCreated =
+      creatorRole === 'EMPLOYEE' ||
+      (existing.employee?.role === 'EMPLOYEE' && (!existing.createdById || existing.createdById === existing.employeeId));
+
+    const isActivated = !['PENDING_APPROVAL', 'DRAFT'].includes(existing.status);
+
+    // Rule 1: Regular employees cannot edit goals after activation
+    if (req.user.role === 'EMPLOYEE' && isActivated) {
+      return res.status(403).json({
+        error: 'Goals cannot be edited by employees after activation.',
+      });
+    }
+
+    // Rule 2: Regular employees cannot edit goals assigned to them by Management or HR
+    if (req.user.role === 'EMPLOYEE' && !isEmployeeCreated) {
+      return res.status(403).json({
+        error: 'Access forbidden: employees cannot edit goals assigned by management or HR.',
+      });
     }
 
     // A plain edit is only allowed while the goal is still being worked on.
