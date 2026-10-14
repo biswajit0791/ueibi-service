@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { prisma } from '../lib/prisma.js';
 import { emitToTenant, emitToUser } from '../lib/socket.js';
+import { isDateInPast } from '../validations/policy.schema.js';
 
 export class PolicyService {
   /**
@@ -279,6 +280,21 @@ export class PolicyService {
       const err = new Error('Policy not found');
       err.status = 404;
       throw err;
+    }
+
+    if (data.dueDate && isDateInPast(data.dueDate)) {
+      const existingDateStr = existing.dueDate ? existing.dueDate.toISOString().split('T')[0] : null;
+      let newDateStr = null;
+      try {
+        newDateStr = new Date(data.dueDate).toISOString().split('T')[0];
+      } catch {
+        newDateStr = data.dueDate;
+      }
+      if (newDateStr !== existingDateStr) {
+        const err = new Error('Sign-off due date cannot be in the past');
+        err.status = 400;
+        throw err;
+      }
     }
 
     let version = existing.version;
