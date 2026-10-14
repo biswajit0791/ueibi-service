@@ -56,7 +56,7 @@ function isSameCalendarDay(a, b) {
 /**
  * Builds a clean, high-clarity HTML email template for checkpoint status and escalations
  */
-function buildModernMilestoneEmailHtml({ milestone, task, allMilestones = [], daysOverdue = 0, escalationRole = null }) {
+export function buildModernMilestoneEmailHtml({ milestone, task, allMilestones = [], daysOverdue = 0, escalationRole = null }) {
   const dueStr = milestone?.dueDate ? new Date(milestone.dueDate).toISOString().slice(0, 10) : '—';
   const dashboardUrl = `${env.frontendOrigin || 'http://localhost:5173'}/uer/goals`;
 
@@ -75,9 +75,9 @@ function buildModernMilestoneEmailHtml({ milestone, task, allMilestones = [], da
     ? `Checkpoint 0${milestone.order} ("${milestone.title}") has been completed.`
     : `Checkpoint 0${milestone.order} ("${milestone.title}") is scheduled for review.`;
 
-  // Up to 3 checkpoints
-  const totalCount = Math.min(3, Math.max(1, allMilestones.length || 3));
-  const stations = [1, 2, 3].slice(0, totalCount).map((stepNum) => {
+  // Up to 4 checkpoints
+  const totalCount = Math.min(4, Math.max(1, allMilestones.length || 4));
+  const stations = [1, 2, 3, 4].slice(0, totalCount).map((stepNum) => {
     const found = allMilestones.find((m) => m.order === stepNum);
     if (found) return found;
     if (milestone.order === stepNum) return milestone;

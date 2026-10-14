@@ -17,12 +17,19 @@ import { prisma } from '../lib/prisma.js';
 import { loadTaskForUser } from '../services/taskAccess.service.js';
 import { visibleTaskWhere } from '../services/taskVisibility.service.js';
 import { logTaskAudit, pushNotification } from './taskActivity.controller.js';
+import { emitToUser } from '../lib/socket.js';
+import { sendMail } from '../lib/mailer.js';
+import { env } from '../config/env.js';
 import { MANAGER_OR_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
 import { getCompanySettings, findDisallowedWatcherEmails } from '../services/companySettings.service.js';
 import {
   createMilestoneSchema, updateMilestoneSchema, MAX_MILESTONES_PER_TASK,
 } from '../validations/taskMilestone.schema.js';
-import { dispatchMilestoneWatcherAlert, sendMilestoneTestEmail } from '../services/milestoneEscalation.service.js';
+import {
+  dispatchMilestoneWatcherAlert,
+  sendMilestoneTestEmail,
+  buildModernMilestoneEmailHtml,
+} from '../services/milestoneEscalation.service.js';
 
 export const MILESTONE_INCLUDE = {
   proposedBy: { select: { id: true, name: true } },
@@ -286,6 +293,146 @@ export async function createMilestone(req, res, next) {
   }
 }
 
+/**
+ * Broadcasts milestone completion to ALL stakeholders:
+ * - Assignee / Task Owner
+ * - Manager of the Assignee / Task Creator
+ * - Escalation chain managers (L1, L2, L3)
+ * - All Milestone Watchers
+ * - All Task & Goal Followers
+ * Creates in-app Notification records, pushes via Socket.IO, and dispatches email alerts.
+ */
+async function broadcastMilestoneCompleted({ tenantId, task, milestone, actorUser }) {
+  try {
+    const recipientUserIds = new Set();
+
+    // 1. Assignee / Task Owner
+    if (task.employeeId) recipientUserIds.add(task.employeeId);
+
+    // 2. Task Creator / Initiator
+    if (task.createdById) recipientUserIds.add(task.createdById);
+
+    // 3. Direct Manager of the assignee
+    if (task.employeeId) {
+      const emp = await prisma.tenantUser.findUnique({
+        where: { id: task.employeeId },
+        select: { managerId: true },
+      });
+      if (emp?.managerId) recipientUserIds.add(emp.managerId);
+    }
+
+    // 4. Escalation hierarchy managers (L1, L2, L3)
+    const escalationLevels = await prisma.checkpointEscalationLevel.findMany({
+      where: { milestoneId: milestone.id },
+      select: { userId: true },
+    });
+    for (const lvl of escalationLevels) {
+      if (lvl.userId) recipientUserIds.add(lvl.userId);
+    }
+
+    // 5. Followers of the task and its parent goal
+    const entityIds = [task.id, task.goalId].filter(Boolean);
+    const followers = await prisma.follower.findMany({
+      where: { tenantId, entityId: { in: entityIds } },
+      select: { userId: true },
+    });
+    for (const f of followers) {
+      if (f.userId) recipientUserIds.add(f.userId);
+    }
+
+    // 6. Milestone Watchers who are tenant users
+    if (milestone.watcherEmails && milestone.watcherEmails.length > 0) {
+      const watcherUsers = await prisma.tenantUser.findMany({
+        where: {
+          tenantId,
+          isDeleted: false,
+          email: { in: milestone.watcherEmails.map((e) => e.toLowerCase()) },
+        },
+        select: { id: true },
+      });
+      for (const wu of watcherUsers) {
+        if (wu.id) recipientUserIds.add(wu.id);
+      }
+    }
+
+    const title = `Milestone Completed: Station 0${milestone.order}`;
+    const body = `Station 0${milestone.order} ("${milestone.title}") on task "${task.title}" has been marked 100% completed by ${actorUser.name}.`;
+
+    // Dispatch in-app notification & Socket.io push to all recipient users
+    for (const uid of recipientUserIds) {
+      try {
+        const notif = await prisma.notification.create({
+          data: {
+            tenantId,
+            recipientId: uid,
+            type: 'TASK',
+            title,
+            body,
+            entityType: 'TASK',
+            entityId: task.id,
+          },
+        });
+        emitToUser(tenantId, uid, 'notification', notif);
+        emitToUser(tenantId, uid, 'task_updated', { taskId: task.id });
+        if (task.goalId) {
+          emitToUser(tenantId, uid, 'goal_updated', { goalId: task.goalId });
+        }
+      } catch (err) {
+        console.warn(`[broadcastMilestoneCompleted] Notification delivery error for user ${uid}:`, err.message);
+      }
+    }
+
+    // Gather all email recipients (watchers + involved users)
+    const emailsToNotify = new Set(
+      (milestone.watcherEmails || []).map((e) => e.toLowerCase())
+    );
+    if (recipientUserIds.size > 0) {
+      const users = await prisma.tenantUser.findMany({
+        where: { id: { in: [...recipientUserIds] }, isDeleted: false },
+        select: { email: true },
+      });
+      for (const u of users) {
+        if (u.email) emailsToNotify.add(u.email.toLowerCase());
+      }
+    }
+
+    // Prepare full task milestone context for rich HTML email
+    const allTaskMilestones = await prisma.taskMilestone.findMany({
+      where: { taskId: task.id },
+      orderBy: { order: 'asc' },
+    });
+
+    const subject = `[Checkpoint Completed] Station 0${milestone.order} "${milestone.title}" on "${task.title}" is Complete!`;
+    const text = `Critical Checkpoint Completed (100%)\n\n`
+      + `Task: "${task.title}"\n`
+      + `Milestone: Station 0${milestone.order} — "${milestone.title}"\n`
+      + `Completed By: ${actorUser.name}\n`
+      + `Date: ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}\n\n`
+      + `Review in Performance Management: ${env.frontendOrigin || 'http://localhost:5173'}/uer/goals`;
+
+    const html = buildModernMilestoneEmailHtml({
+      milestone: { ...milestone, status: 'DONE' },
+      task,
+      allMilestones: allTaskMilestones,
+      daysOverdue: 0,
+    });
+
+    for (const email of emailsToNotify) {
+      sendMail({
+        to: email,
+        subject,
+        text,
+        html,
+        event: 'MILESTONE_COMPLETED',
+      }).catch((err) => {
+        console.warn(`[broadcastMilestoneCompleted] Email failed for ${email}:`, err.message);
+      });
+    }
+  } catch (err) {
+    console.warn('[broadcastMilestoneCompleted] Error broadcasting milestone completion:', err);
+  }
+}
+
 // ─── PATCH /api/tasks/:id/milestones/:mid ──────────────────────────────────
 export async function updateMilestone(req, res, next) {
   try {
@@ -322,13 +469,29 @@ export async function updateMilestone(req, res, next) {
       auditLines.push('updated checkpoint description');
     }
     if (progress !== undefined) {
-      data.progress = Math.min(100, Math.max(0, Number(progress)));
+      if (!isAssignee && !isManager) {
+        return res.status(403).json({ error: 'Only the task owner or manager can update milestone progress' });
+      }
+      const newProgress = Math.min(100, Math.max(0, Number(progress)));
+      const settings = await getCompanySettings(tenantId);
+      if (newProgress === 100 && settings.milestoneRequireApproval && milestone.status !== 'APPROVED') {
+        return res.status(409).json({ error: 'This milestone must be approved by a manager before it can reach 100% completion' });
+      }
+
+      data.progress = newProgress;
       auditLines.push(`updated progress to ${data.progress}%`);
+
       if (data.progress === 100 && !milestone.isDone) {
         data.isDone = true;
         data.status = 'DONE';
         data.completedById = req.user.id;
         data.completedAt = new Date();
+      } else if (data.progress < 100 && milestone.isDone) {
+        data.isDone = false;
+        data.status = milestone.approvedById ? 'APPROVED' : (milestone.proposedCompletionDate ? 'RESCHEDULE_REQUESTED' : 'PENDING_APPROVAL');
+        data.completedById = null;
+        data.completedAt = null;
+        auditLines.push('reopened checkpoint via progress slider');
       }
     }
 
@@ -509,10 +672,15 @@ export async function updateMilestone(req, res, next) {
         data.approvedAt = new Date();
         auditLines.push('approved checkpoint / extension');
       } else {
-        data.status = 'RESCHEDULE_REQUESTED';
+        // Manager declined extension / reschedule request:
+        // Restore status to APPROVED (or PENDING_APPROVAL) and clear all extension request fields
+        data.status = milestone.approvedById ? 'APPROVED' : 'PENDING_APPROVAL';
         data.proposedCompletionDate = null;
         data.extensionDaysRequested = null;
-        auditLines.push('sent the proposed date back / rejected extension');
+        data.extensionReason = null;
+        data.proposedById = null;
+        data.proposedAt = null;
+        auditLines.push(`declined extension request; maintained target date (${milestone.dueDate ? new Date(milestone.dueDate).toISOString().slice(0, 10) : 'none'})`);
       }
     }
 
@@ -535,6 +703,7 @@ export async function updateMilestone(req, res, next) {
         }
         data.isDone = true;
         data.status = 'DONE';
+        data.progress = 100;
         data.completedById = req.user.id;
         data.completedAt = new Date();
         auditLines.push('marked complete');
@@ -545,6 +714,7 @@ export async function updateMilestone(req, res, next) {
         // Un-ticking clears both — an item open again was not completed.
         data.isDone = false;
         data.status = 'APPROVED';
+        data.progress = 0;
         data.completedById = null;
         data.completedAt = null;
         auditLines.push('reopened');
@@ -570,26 +740,87 @@ export async function updateMilestone(req, res, next) {
       await maybeUnlockTask(taskId);
     }
 
-    // Notify the other side of the conversation.
-    if (isAssignee && approve === undefined && proposedCompletionDate !== undefined) {
-      // Employee proposed — tell whoever can approve it (their reporting manager, if any).
+    // ── Milestone Completion: Broadcast to ALL stakeholders ─────────────
+    const wasDone = milestone.isDone || milestone.status === 'DONE';
+    const isNowDone = updated.isDone || updated.status === 'DONE';
+
+    if (!wasDone && isNowDone) {
+      await broadcastMilestoneCompleted({
+        tenantId,
+        task,
+        milestone: updated,
+        actorUser: req.user,
+      });
+    }
+
+    // ── Manager Extension Decisions (Approve / Decline) ───────────────────
+    if (approve === false) {
+      // Notify assignee that extension was declined
+      const notifyUsers = new Set();
+      if (task.employeeId && task.employeeId !== req.user.id) notifyUsers.add(task.employeeId);
+      for (const uid of notifyUsers) {
+        await pushNotification({
+          tenantId,
+          recipientId: uid,
+          type: 'TASK',
+          title: `Extension Request Declined`,
+          body: `The extension request for Station 0${milestone.order} ("${milestone.title}") on task "${task.title}" was declined by ${req.user.name}. The target date remains ${milestone.dueDate ? new Date(milestone.dueDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'unchanged'}.`,
+          entityType: 'TASK',
+          entityId: task.id,
+        });
+      }
+    } else if (approve === true) {
+      // Notify assignee that extension was approved
+      const notifyUsers = new Set();
+      if (task.employeeId && task.employeeId !== req.user.id) notifyUsers.add(task.employeeId);
+      for (const uid of notifyUsers) {
+        await pushNotification({
+          tenantId,
+          recipientId: uid,
+          type: 'TASK',
+          title: `Extension Request Approved`,
+          body: `The extension request for Station 0${milestone.order} ("${milestone.title}") on task "${task.title}" was approved by ${req.user.name}. New target date is ${updated.dueDate ? new Date(updated.dueDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'updated'}.`,
+          entityType: 'TASK',
+          entityId: task.id,
+        });
+      }
+    } else if (isAssignee && extensionDaysRequested !== undefined && extensionDaysRequested !== null) {
+      // Assignee requested extension — notify their direct manager
       const employeeRecord = await prisma.tenantUser.findUnique({
         where: { id: task.employeeId }, select: { managerId: true },
       });
-      if (employeeRecord?.managerId) {
+      if (employeeRecord?.managerId && employeeRecord.managerId !== req.user.id) {
         await pushNotification({
-          tenantId, recipientId: employeeRecord.managerId, type: 'task_update',
-          title: `Proposed date on "${task.title}"`,
-          body: `${req.user.name} proposed a new completion date for milestone "${updated.title}".`,
-          entityType: 'milestone', entityId: updated.id,
+          tenantId,
+          recipientId: employeeRecord.managerId,
+          type: 'TASK',
+          title: `Extension Request: Station 0${milestone.order}`,
+          body: `${req.user.name} requested +${extensionDaysRequested} day(s) extension for milestone "${updated.title}" on task "${task.title}". Reason: ${extensionReason || 'No reason provided'}.`,
+          entityType: 'TASK',
+          entityId: task.id,
         });
       }
-    } else if (isManager && task.employeeId !== req.user.id) {
+    } else if (isAssignee && proposedCompletionDate !== undefined && proposedCompletionDate !== null) {
+      const employeeRecord = await prisma.tenantUser.findUnique({
+        where: { id: task.employeeId }, select: { managerId: true },
+      });
+      if (employeeRecord?.managerId && employeeRecord.managerId !== req.user.id) {
+        await pushNotification({
+          tenantId,
+          recipientId: employeeRecord.managerId,
+          type: 'TASK',
+          title: `Proposed Date on "${task.title}"`,
+          body: `${req.user.name} proposed a new completion date for milestone "${updated.title}".`,
+          entityType: 'TASK',
+          entityId: task.id,
+        });
+      }
+    } else if (isManager && task.employeeId !== req.user.id && !isNowDone) {
       await pushNotification({
-        tenantId, recipientId: task.employeeId, type: 'task_update',
-        title: `Milestone update on "${task.title}"`,
+        tenantId, recipientId: task.employeeId, type: 'TASK',
+        title: `Milestone Update on "${task.title}"`,
         body: `${req.user.name} ${auditLines.join('; ') || 'updated'} milestone "${updated.title}".`,
-        entityType: 'milestone', entityId: updated.id,
+        entityType: 'TASK', entityId: task.id,
       });
     }
 
@@ -764,15 +995,21 @@ export async function getMilestoneLiveStatusSvg(req, res, next) {
     }
 
     const allMilestones = milestone.task?.milestones || [];
-    const totalMilestones = Math.min(3, Math.max(1, allMilestones.length || 3));
+    const totalMilestones = Math.min(4, Math.max(1, allMilestones.length || 4));
     const completedCount = allMilestones.filter((m) => m.status === 'DONE').length;
     const completionPercent = Math.round((completedCount / (allMilestones.length || 1)) * 100);
 
     const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' });
 
-    // 3 checkpoint slots
-    const slotX = totalMilestones === 1 ? [270] : totalMilestones === 2 ? [160, 380] : [90, 270, 450];
-    const stations = [1, 2, 3].slice(0, totalMilestones).map((stepNum, idx) => {
+    // Up to 4 checkpoint slots
+    const slotX = totalMilestones === 1
+      ? [270]
+      : totalMilestones === 2
+        ? [160, 380]
+        : totalMilestones === 3
+          ? [90, 270, 450]
+          : [70, 200, 340, 470];
+    const stations = [1, 2, 3, 4].slice(0, totalMilestones).map((stepNum, idx) => {
       const found = allMilestones.find((m) => m.order === stepNum);
       const isTarget = found?.id === milestone.id;
       const stationDone = found?.status === 'DONE';

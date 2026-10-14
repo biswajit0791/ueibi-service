@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const MAX_MILESTONES_PER_TASK = 3;
+export const MAX_MILESTONES_PER_TASK = 4;
 export const MAX_WATCHERS_PER_MILESTONE = 10;
 
 const watcherEmailsBaseSchema = z
