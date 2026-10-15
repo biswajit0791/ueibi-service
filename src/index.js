@@ -91,3 +91,4 @@ server.listen(env.port, async () => {
   console.log(` 📜 Swagger Docs: http://localhost:${env.port}/api-docs`);
   console.log('======================================================\n');
 });
+// Company seed sync: 4U SOFTWARE PVT LTD, CITY EXPERT CARE, BLUETELCAST

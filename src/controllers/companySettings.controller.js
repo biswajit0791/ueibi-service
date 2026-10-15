@@ -1,16 +1,27 @@
 import { prisma } from '../lib/prisma.js';
 import { getCompanySettings, updateCompanySettings, normaliseDomain } from '../services/companySettings.service.js';
 import { updateCompanySettingsSchema } from '../validations/companySettings.schema.js';
+import { getTenantFinancialYear } from '../lib/financialYear.js';
 
 // Appearance is narrower than the rest of Company Settings: CMD may change
 // milestone rules but not the company's look.
 const THEME_EDITOR_ROLES = ['SUPER_ADMIN', 'ADMIN', 'HR'];
 
 function presentSettings(settings) {
+  const fy = getTenantFinancialYear(settings);
   return {
     milestoneWatcherDomains: settings.milestoneWatcherDomains,
     milestoneRequireApproval: settings.milestoneRequireApproval,
     theme: settings.theme ?? null,
+    financialYearStartMonth: settings.financialYearStartMonth || 4,
+    financialYearStartDay: settings.financialYearStartDay || 1,
+    currentFinancialYear: {
+      label: fy.label,
+      startDate: fy.startDateStr,
+      endDate: fy.endDateStr,
+      startMonth: fy.startMonth,
+      startDay: fy.startDay,
+    },
     updatedAt: settings.updatedAt,
   };
 }
@@ -48,7 +59,13 @@ export async function patchSettings(req, res, next) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
 
-    const { milestoneWatcherDomains, milestoneRequireApproval, theme } = parsed.data;
+    const {
+      milestoneWatcherDomains,
+      milestoneRequireApproval,
+      theme,
+      financialYearStartMonth,
+      financialYearStartDay,
+    } = parsed.data;
 
     if (theme !== undefined && !THEME_EDITOR_ROLES.includes(String(req.user?.role || '').toUpperCase())) {
       return res.status(403).json({ error: 'Only Super Admin, Admin or HR can change the company appearance.' });
@@ -57,12 +74,45 @@ export async function patchSettings(req, res, next) {
     const updated = await updateCompanySettings(req.tenantId, {
       milestoneWatcherDomains: milestoneWatcherDomains?.map(normaliseDomain),
       milestoneRequireApproval,
+      financialYearStartMonth,
+      financialYearStartDay,
       theme: theme === undefined || theme === null
         ? theme
         : { ...theme, updatedBy: { id: req.user.id, name: req.user.name || req.user.email }, updatedAt: new Date().toISOString() },
     });
 
     res.json({ settings: presentSettings(updated) });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ─── GET /api/company/top-level-employees ──────────────────────────────────
+// Returns top-level employees (Leadership, CMD, Admin, HR, Directors) for Watcher selection.
+export async function getTopLevelEmployees(req, res, next) {
+  try {
+    const tenantId = req.tenantId;
+    const TOP_ROLES = ['SUPER_ADMIN', 'ADMIN', 'CMD', 'DIRECTOR', 'HR', 'LEADERSHIP'];
+
+    const employees = await prisma.tenantUser.findMany({
+      where: {
+        tenantId,
+        status: 'ACTIVE',
+        isDeleted: false,
+        role: { in: TOP_ROLES },
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        department: true,
+        designation: true,
+      },
+      orderBy: [{ role: 'asc' }, { name: 'asc' }],
+    });
+
+    res.json({ employees });
   } catch (err) {
     next(err);
   }

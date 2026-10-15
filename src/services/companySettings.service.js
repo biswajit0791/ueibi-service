@@ -24,7 +24,13 @@ export async function getCompanySettings(tenantId) {
   }
 }
 
-export async function updateCompanySettings(tenantId, { milestoneWatcherDomains, milestoneRequireApproval, theme }) {
+export async function updateCompanySettings(tenantId, {
+  milestoneWatcherDomains,
+  milestoneRequireApproval,
+  theme,
+  financialYearStartMonth,
+  financialYearStartDay,
+}) {
   await getCompanySettings(tenantId); // ensure the row exists before updating it
   return prisma.tenantSettings.update({
     where: { tenantId },
@@ -33,6 +39,8 @@ export async function updateCompanySettings(tenantId, { milestoneWatcherDomains,
       ...(milestoneRequireApproval !== undefined && { milestoneRequireApproval }),
       // Prisma needs DbNull (not JS null) to store SQL NULL in a Json column.
       ...(theme !== undefined && { theme: theme === null ? Prisma.DbNull : theme }),
+      ...(financialYearStartMonth !== undefined && { financialYearStartMonth }),
+      ...(financialYearStartDay !== undefined && { financialYearStartDay }),
     },
   });
 }

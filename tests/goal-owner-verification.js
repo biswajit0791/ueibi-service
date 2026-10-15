@@ -105,6 +105,8 @@ async function runTests() {
       const owners = mockRes.data?.owners || [];
       const hasPlatformOwner = owners.some((o) => o.role === 'PLATFORM_OWNER');
       assert(!hasPlatformOwner, 'getEligibleGoalOwners excludes PLATFORM_OWNER');
+      const empSelfInList = owners.some((o) => o.id === empUserA.id);
+      assert(!empSelfInList, 'getEligibleGoalOwners excludes employee self when caller is EMPLOYEE');
       const allSameTenant = owners.every((o) => o.id);
       assert(allSameTenant, 'All returned owners have valid IDs');
       console.log(`  Found ${owners.length} eligible owners for tenant.`);
@@ -139,6 +141,26 @@ async function runTests() {
       assert(createdGoal1?.ownerManagerId === mgrUserB.id, 'Goal Owner is Manager B');
       assert(createdGoal1?.owner?.id === mgrUserB.id, 'owner response payload includes Manager B info');
       assert(createdGoal1?.employeeId === empUserA.id, 'Assignee is Employee A');
+
+      // Sub-test: Employee attempting to select self as Goal Owner must be rejected
+      const mockReqSelf = {
+        tenantId: tenantA.id,
+        user: empUserA,
+        body: {
+          title: 'Automated Test: Employee selecting self',
+          startDate: '2026-10-15',
+          targetDate: '2027-01-15',
+          employeeIds: [empUserA.id],
+          ownerId: empUserA.id,
+        },
+      };
+      const mockResSelf = createMockRes();
+      await createGoal(mockReqSelf, mockResSelf);
+      assert(mockResSelf.statusCode === 400, 'Employee selecting self as Goal Owner is rejected with HTTP 400');
+      assert(
+        mockResSelf.data?.error?.includes('Employees cannot select themselves as Goal Owner'),
+        'Rejection message explicitly states employees cannot select themselves as Goal Owner'
+      );
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -218,6 +240,26 @@ async function runTests() {
       assert(mockRes.data?.goal?.ownerManagerId === higherOrTarget.id, 'ownerManagerId correctly matches');
       if (mockRes.data?.goal?.id) {
         await prisma.goal.delete({ where: { id: mockRes.data.goal.id } }).catch(() => {});
+      }
+
+      // Sub-test: Manager selecting self as Goal Owner MUST be allowed
+      const mockReqMgrSelf = {
+        tenantId: tenantA.id,
+        user: mgrUserB,
+        body: {
+          title: 'Automated Test: Manager sets self as owner',
+          startDate: '2026-10-15',
+          targetDate: '2027-01-15',
+          employeeIds: [mgrUserB.id],
+          ownerId: mgrUserB.id,
+        },
+      };
+      const mockResMgrSelf = createMockRes();
+      await createGoal(mockReqMgrSelf, mockResMgrSelf);
+      assert(mockResMgrSelf.statusCode === 201, 'Manager selecting self as Goal Owner succeeds with HTTP 201');
+      assert(mockResMgrSelf.data?.goal?.ownerManagerId === mgrUserB.id, 'Manager self-ownership successfully persisted');
+      if (mockResMgrSelf.data?.goal?.id) {
+        await prisma.goal.delete({ where: { id: mockResMgrSelf.data.goal.id } }).catch(() => {});
       }
     }
 

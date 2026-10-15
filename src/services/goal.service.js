@@ -432,8 +432,9 @@ export class GoalService {
       };
     }
 
-    // Authorization: Reporting manager, elevated role (HR/Admin/Leadership), goal creator, or Manager role
+    // Authorization: Goal Owner, Reporting manager, elevated role (HR/Admin/Leadership), goal creator, or Manager role
     const isElevated = hasRole(user.role, ELEVATED_ROLES);
+    const isGoalOwner = Boolean(goal.ownerManagerId && goal.ownerManagerId === user.id);
     const isDirectManager =
       goal.employee?.managerId === user.id ||
       goal.assignments?.some((a) => a.employee?.managerId === user.id);
@@ -453,11 +454,11 @@ export class GoalService {
     // the same as having no approval step at all.
     //
     // A regular employee proposing their own goal is prevented from self-approving.
-    // Elevated roles (HR/Admin/Super Admin/CMD) and Managers activating team goals
+    // Goal Owner, elevated roles (HR/Admin/Super Admin/CMD) and Managers activating team goals
     // or goals they created/manage are authorized.
     const isOwnGoal = goal.employeeId === user.id
       || goal.assignments?.some((a) => a.employeeId === user.id);
-    if (isOwnGoal && !isElevated && !(isManagerRole && (isCreator || isAssignedBy || (goal.assignments && goal.assignments.length > 1)))) {
+    if (isOwnGoal && !isElevated && !isGoalOwner && !(isManagerRole && (isCreator || isAssignedBy || (goal.assignments && goal.assignments.length > 1)))) {
       throw {
         status: 403,
         code: 'SELF_APPROVAL_FORBIDDEN',
@@ -465,11 +466,11 @@ export class GoalService {
       };
     }
 
-    const isAuthorized = isElevated || isDirectManager || isCreator || isAssignedBy || isManagerRole || isSubordinate;
+    const isAuthorized = isElevated || isGoalOwner || isDirectManager || isCreator || isAssignedBy || isManagerRole || isSubordinate;
     if (!isAuthorized) {
       throw {
         status: 403,
-        message: 'Access forbidden: only a manager, the goal creator, or HR/Admin can activate this goal',
+        message: 'Access forbidden: only the goal owner, manager, or HR/Admin can activate this goal',
       };
     }
 

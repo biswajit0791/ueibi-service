@@ -85,6 +85,8 @@ export const updateCompanySettingsSchema = z.object({
   milestoneRequireApproval: z.boolean().optional(),
   // null resets to the default look.
   theme: themeSchema.nullable().optional(),
+  financialYearStartMonth: z.number().int().min(1).max(12).optional(),
+  financialYearStartDay: z.number().int().min(1).max(31).optional(),
 }).refine((data) => Object.keys(data).length > 0, {
   message: 'At least one field must be provided',
 });
