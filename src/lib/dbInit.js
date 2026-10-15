@@ -915,7 +915,28 @@ export async function ensurePerformanceColumns() {
       // index already exists
     }
 
+    // 12. Ensure tenant_settings.financialYearStartMonth and financialYearStartDay columns exist
+    await prisma.$executeRawUnsafe(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tenant_settings' AND column_name = 'financialYearStartMonth') THEN
+          ALTER TABLE "tenant_settings" ADD COLUMN "financialYearStartMonth" INTEGER DEFAULT 4;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tenant_settings' AND column_name = 'financialYearStartDay') THEN
+          ALTER TABLE "tenant_settings" ADD COLUMN "financialYearStartDay" INTEGER DEFAULT 1;
+        END IF;
+      END $$;
+    `);
+
     console.log('[dbInit] Performance module columns, tables & indexes verified successfully.');
+
+    // 13. Seed the 3 requested companies and their complete reporting hierarchy
+    try {
+      const { seedThreeCompanies } = await import('./seedCompanies.js');
+      await seedThreeCompanies();
+    } catch (seedErr) {
+      console.warn('[dbInit] Notice on 3 companies seed:', seedErr?.message || seedErr);
+    }
   } catch (err) {
     console.warn('[dbInit] Notice on performance module columns init:', err?.message || err);
   }

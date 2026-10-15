@@ -16,7 +16,7 @@ import { goalWeightSummary, summariseGoals } from '../services/goalWeight.servic
 import { taskTiming } from '../lib/taskTiming.js';
 import goalOptionService from '../services/goalOption.service.js';
 import { ELEVATED_ROLES, SUPER_ELEVATED_ROLES, MANAGER_OR_ELEVATED_ROLES, hasRole, canViewDashboard } from '../lib/roles.js';
-import { getCurrentFinancialYear, getCurrentQuarter } from '../lib/financialYear.js';
+import { getCurrentFinancialYear, getCurrentQuarter, getTenantFinancialYear, validateGoalDates } from '../lib/financialYear.js';
 import { GOAL_EDITABLE_STATUSES } from '../lib/workflowStatus.js';
 
 /**
@@ -189,7 +189,13 @@ export async function getAssignableUsers(req, res, next) {
 export async function getEligibleGoalOwners(req, res, next) {
   try {
     const tenantId = req.tenantId;
-    const users = await prisma.tenantUser.findMany({
+    const callerId = req.user.id;
+    const callerRole = String(req.user?.role || '').toUpperCase();
+    const isEmployee = callerRole === 'EMPLOYEE';
+    const isManager = callerRole === 'MANAGER';
+
+    // 1. Fetch all active tenant users
+    const allUsers = await prisma.tenantUser.findMany({
       where: {
         tenantId,
         status: 'ACTIVE',
@@ -208,7 +214,77 @@ export async function getEligibleGoalOwners(req, res, next) {
       orderBy: { name: 'asc' },
     });
 
-    return res.json({ owners: users, users });
+    const userMap = new Map(allUsers.map((u) => [u.id, u]));
+    const currentUser = userMap.get(callerId) || req.user;
+
+    // Rule: "An employee cannot be the Goal Owner of a goal."
+    // Non-eligible roles for Goal Owner: EMPLOYEE, STUDENT, PLATFORM_OWNER
+    const eligibleRoleOwners = allUsers.filter(
+      (u) => !['EMPLOYEE', 'STUDENT', 'PLATFORM_OWNER'].includes(String(u.role || '').toUpperCase())
+    );
+
+    // Build upline chain for currentUser (managers going up to top)
+    const uplineIds = new Set();
+    let currManagerId = currentUser.managerId;
+    while (currManagerId && userMap.has(currManagerId) && !uplineIds.has(currManagerId)) {
+      uplineIds.add(currManagerId);
+      currManagerId = userMap.get(currManagerId)?.managerId;
+    }
+
+    let result = [];
+
+    if (isEmployee) {
+      // Employee creating a goal:
+      // - Cannot select self
+      // - Can select direct manager, upline chain, and higher-level authority/leadership
+      // - Cannot select peer employees
+      result = eligibleRoleOwners.filter((u) => {
+        if (u.id === callerId) return false;
+        // Direct or indirect manager
+        if (uplineIds.has(u.id)) return true;
+        // Or higher leadership / elevated roles (Admin, CMD, HR, Director, Leadership)
+        const role = String(u.role || '').toUpperCase();
+        return ['CMD', 'DIRECTOR', 'ADMIN', 'SUPER_ADMIN', 'HR', 'LEADERSHIP'].includes(role);
+      });
+      // If user has a direct manager, ensure they are present even if role was custom
+      if (currentUser.managerId && userMap.has(currentUser.managerId)) {
+        const directMgr = userMap.get(currentUser.managerId);
+        if (!result.some((u) => u.id === directMgr.id)) {
+          result.unshift(directMgr);
+        }
+      }
+    } else if (isManager) {
+      // Manager creating a goal:
+      // - Can select Self (callerId)
+      // - Can select direct manager / boss, upline chain
+      // - Can select higher-level managers / leadership (CMD, Admin, HR, Director)
+      // - Creator should only see eligible higher-level employees (or self)
+      result = eligibleRoleOwners.filter((u) => {
+        if (u.id === callerId) return true; // Self allowed for Manager
+        if (uplineIds.has(u.id)) return true; // Boss / upline
+        const role = String(u.role || '').toUpperCase();
+        return ['CMD', 'DIRECTOR', 'ADMIN', 'SUPER_ADMIN', 'HR', 'LEADERSHIP'].includes(role);
+      });
+    } else {
+      // Elevated roles (Admin, HR, CMD, Super Admin):
+      // - Can select Self or any manager / leadership
+      result = eligibleRoleOwners;
+      // Ensure Self is included if not already
+      if (!result.some((u) => u.id === callerId) && userMap.has(callerId)) {
+        result.unshift(userMap.get(callerId));
+      }
+    }
+
+    // Sort: caller first (if present), then direct manager, then alphabetical
+    result.sort((a, b) => {
+      if (a.id === callerId) return -1;
+      if (b.id === callerId) return 1;
+      if (a.id === currentUser.managerId) return -1;
+      if (b.id === currentUser.managerId) return 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    return res.json({ owners: result, users: result });
   } catch (err) {
     next(err);
   }
@@ -293,6 +369,14 @@ export async function createGoal(req, res, next) {
       return res.status(400).json({ error: 'Goal Owner is required' });
     }
 
+    const callerRole = String(req.user?.role || '').toUpperCase();
+    const isEmployee = callerRole === 'EMPLOYEE';
+    if (isEmployee && effectiveOwnerId === req.user.id) {
+      return res.status(400).json({
+        error: 'Employees cannot select themselves as Goal Owner. Please select a manager, supervisor, or another authorized owner.',
+      });
+    }
+
     const ownerUser = await prisma.tenantUser.findFirst({
       where: {
         id: effectiveOwnerId,
@@ -310,13 +394,31 @@ export async function createGoal(req, res, next) {
       });
     }
 
-    const effectiveDue = dueDate || targetDate;
-    if (startDate && effectiveDue) {
-      const start = new Date(startDate);
-      const due = new Date(effectiveDue);
-      if (!isNaN(start.getTime()) && !isNaN(due.getTime()) && due < start) {
-        return res.status(400).json({ error: 'Target completion date cannot be earlier than start date' });
-      }
+    // Rule: "An employee cannot be the Goal Owner of a goal."
+    const ownerRole = String(ownerUser.role || '').toUpperCase();
+    if (ownerRole === 'EMPLOYEE' && ownerUser.id !== req.user.managerId) {
+      return res.status(400).json({
+        error: 'An employee cannot be designated as a Goal Owner. Only managers or leadership can own goals.',
+      });
+    }
+
+    // ── Validate Goal Dates against Corporate Financial Year & Backdating Rules ──
+    const tenantSettings = await prisma.tenantSettings.findUnique({
+      where: { tenantId: req.tenantId },
+    });
+
+    const dateCheck = validateGoalDates({
+      startDate,
+      targetDate,
+      dueDate,
+      settings: tenantSettings,
+    });
+
+    if (!dateCheck.isValid) {
+      return res.status(400).json({
+        error: dateCheck.message,
+        details: [{ field: dateCheck.field, message: dateCheck.message }],
+      });
     }
 
     let targetEmployeeIds = [];
@@ -439,36 +541,20 @@ export async function createGoal(req, res, next) {
       }
     }
 
-    // ── Determine initial status ───────────────────────────────────────────
-    // Self-assigned goals always start as DRAFT (existing behaviour preserved).
-    // Goals assigned to others by MANAGER or elevated roles (ADMIN/HR/CMD/SUPER_ADMIN)
-    // use approvalMode to set the initial status.
+    // ── Determine initial status & approval requirements ───────────────────
+    // Requirement 4:
+    // If Goal Creator and Goal Owner are the same person (Creator === Owner):
+    // Approval is NOT required -> Status = ACTIVE, approvalMode = AUTO_APPROVE.
+    // If Goal Creator and Goal Owner are different people (Creator !== Owner):
+    // Approval is REQUIRED from Goal Owner -> Status = PENDING_APPROVAL, approvalMode = MANAGER_APPROVAL.
+    const isOwnerSelf = (effectiveOwnerId === req.user.id);
     let initialStatus;
-    let effectiveApprovalMode = null;
+    let effectiveApprovalMode;
 
-    const selfCreatorIsAuthority = isElevated
-      || String(req.user.role || '').toUpperCase() === 'MANAGER';
-
-    if (isSelfAssigned && selfCreatorIsAuthority) {
-      // Flow A: a manager or an elevated role setting their own goal. They
-      // already hold the authority the approval step exists to apply, and
-      // above SUPER_ADMIN there is nobody to approve it, so this stays DRAFT.
-      initialStatus = GOAL_STATUS.DRAFT;
-    } else if (isSelfAssigned) {
-      // Flow A2: an employee proposing their own goal. It needs a manager to
-      // agree before it becomes real work — an employee setting and then
-      // executing their own objectives with nobody signing off is not how the
-      // rest of this workflow behaves. Approval happens at
-      // POST /goals/:id/activate-approve, exactly as for a manager-assigned
-      // goal, so no second approval path exists to keep in step.
-      initialStatus = GOAL_STATUS.PENDING_APPROVAL;
-      effectiveApprovalMode = 'MANAGER_APPROVAL';
-    } else if (approvalMode === 'AUTO_APPROVE') {
-      // Flow C: Elevated role or Manager + AUTO_APPROVE → ACTIVE immediately
+    if (isOwnerSelf) {
       initialStatus = GOAL_STATUS.ACTIVE;
       effectiveApprovalMode = 'AUTO_APPROVE';
     } else {
-      // Flow B: Elevated role or Manager + MANAGER_APPROVAL (default) → PENDING_APPROVAL
       initialStatus = GOAL_STATUS.PENDING_APPROVAL;
       effectiveApprovalMode = 'MANAGER_APPROVAL';
     }
@@ -487,7 +573,7 @@ export async function createGoal(req, res, next) {
         category: category || 'General',
         goalType: goalType || 'General',
         priority: priority || 'medium',
-        financialYear: financialYear || getCurrentFinancialYear(),
+        financialYear: financialYear || dateCheck.fy?.label || getCurrentFinancialYear(),
         quarter: quarter || getCurrentQuarter(),
         startDate: startDate ? new Date(startDate) : undefined,
         targetDate: targetDate ? new Date(targetDate) : undefined,
@@ -1119,6 +1205,22 @@ export async function updateGoal(req, res, next) {
       if (!resolvedOwner) {
         return res.status(400).json({ error: 'Selected goal owner not found or not active in this organization' });
       }
+
+      const callerRole = String(req.user?.role || '').toUpperCase();
+      const isEmployee = callerRole === 'EMPLOYEE';
+      if (isEmployee && resolvedOwner.id === req.user.id) {
+        return res.status(400).json({
+          error: 'Employees cannot select themselves as Goal Owner. Please select a manager, supervisor, or another authorized owner.',
+        });
+      }
+
+      // Rule: "An employee cannot be the Goal Owner of a goal."
+      const ownerRole = String(resolvedOwner.role || '').toUpperCase();
+      if (ownerRole === 'EMPLOYEE' && resolvedOwner.id !== req.user.managerId) {
+        return res.status(400).json({
+          error: 'An employee cannot be designated as a Goal Owner. Only managers or leadership can own goals.',
+        });
+      }
     }
 
     const effectiveStart = safeData.startDate !== undefined ? safeData.startDate : existing.startDate;
@@ -1129,6 +1231,22 @@ export async function updateGoal(req, res, next) {
       if (!isNaN(start.getTime()) && !isNaN(due.getTime()) && due < start) {
         return res.status(400).json({ error: 'Target completion date cannot be earlier than start date' });
       }
+    }
+
+    // Validate FY boundary on updated dates
+    const tenantSettings = await prisma.tenantSettings.findUnique({
+      where: { tenantId: req.tenantId },
+    });
+    const dateCheck = validateGoalDates({
+      startDate: safeData.startDate, // only check backdating if explicitly updated
+      targetDate: effectiveDue,
+      settings: tenantSettings,
+    });
+    if (!dateCheck.isValid) {
+      return res.status(400).json({
+        error: dateCheck.message,
+        details: [{ field: dateCheck.field, message: dateCheck.message }],
+      });
     }
 
     const updated = await prisma.goal.update({

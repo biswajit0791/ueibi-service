@@ -332,6 +332,28 @@ export async function createTask(req, res, next) {
       }
     }
 
+    // 3c. Dependency Assignment Rule (Req 11): Must be a manager-level employee
+    if (dependency && typeof dependency === 'object') {
+      const depAssigneeId = dependency.concernedPersonId || dependency.assigneeId;
+      if (depAssigneeId) {
+        const depUser = await prisma.tenantUser.findFirst({
+          where: { id: depAssigneeId, tenantId, isDeleted: false, status: 'ACTIVE' },
+          select: { id: true, name: true, role: true },
+        });
+        if (!depUser) {
+          return res.status(400).json({ success: false, message: 'Dependency assigned employee not found' });
+        }
+        const depRole = String(depUser.role || '').toUpperCase();
+        const MANAGER_ROLES = ['MANAGER', 'HR', 'ADMIN', 'SUPER_ADMIN', 'CMD', 'DIRECTOR', 'LEADERSHIP'];
+        if (!MANAGER_ROLES.includes(depRole)) {
+          return res.status(400).json({
+            success: false,
+            message: `A task dependency can only be assigned to a manager-level employee. "${depUser.name}" has role ${depUser.role}.`,
+          });
+        }
+      }
+    }
+
     // 4a. If this task is a companion of a parent ("dependency") task, that parent
     //     must be a real task in this tenant that the caller is allowed to act on.
     let parentTask = null;
@@ -343,13 +365,20 @@ export async function createTask(req, res, next) {
       }
     }
 
-    // 4b. Determine target employee(s) (single or multiple)
+    // 4b. Single Employee Assignment (Req 9): Each task can be assigned to only one employee
     const rawTargets = Array.isArray(employeeIds) && employeeIds.length > 0
       ? employeeIds
       : Array.isArray(req.body.assigneeIds) && req.body.assigneeIds.length > 0
       ? req.body.assigneeIds
       : [employeeId || req.user.id];
     const targetEmployeeIds = Array.from(new Set(rawTargets.filter(Boolean)));
+
+    if (targetEmployeeIds.length > 1) {
+      return res.status(400).json({
+        success: false,
+        message: 'Each task can be assigned to only one employee. Multiple assignees are not permitted.',
+      });
+    }
 
     // 5. Validate goal tenant scope (if goalId provided)
     let resolvedGoal = null;
@@ -380,22 +409,30 @@ export async function createTask(req, res, next) {
       return res.status(200).json(existingRecentTask);
     }
 
-    // 5b. Weight. Single weight for the task (even when shared among multiple assignees).
-    let resolvedWeight = weight === undefined || weight === null || weight === ''
-      ? await defaultWeightFor(resolvedGoalId, 1)
-      : Number(weight);
-    if (!Number.isFinite(resolvedWeight) || resolvedWeight < 1) resolvedWeight = 1;
+    // 5b. Weightage: Removed for private tasks and unmonitored tasks (Req 8)
+    // A task is monitored if it is linked to a goal OR milestone tracked.
+    const isUnmonitoredOrPrivate = Boolean(isPrivate || isStandalone || (!resolvedGoalId && !isMilestoneTracked));
+    let resolvedWeight;
 
-    if (resolvedGoalId) {
-      try {
-        await assertWeightFits({
-          goalId: resolvedGoalId,
-          weight: resolvedWeight,
-          copies: 1,
-        });
-      } catch (e) {
-        if (sendWeightError(res, e)) return;
-        return res.status(e.status || 500).json({ success: false, message: e.message });
+    if (isUnmonitoredOrPrivate) {
+      resolvedWeight = 0; // Private and unmonitored tasks carry no weightage
+    } else {
+      resolvedWeight = weight === undefined || weight === null || weight === ''
+        ? await defaultWeightFor(resolvedGoalId, 1)
+        : Number(weight);
+      if (!Number.isFinite(resolvedWeight) || resolvedWeight < 1) resolvedWeight = 1;
+
+      if (resolvedGoalId) {
+        try {
+          await assertWeightFits({
+            goalId: resolvedGoalId,
+            weight: resolvedWeight,
+            copies: 1,
+          });
+        } catch (e) {
+          if (sendWeightError(res, e)) return;
+          return res.status(e.status || 500).json({ success: false, message: e.message });
+        }
       }
     }
 
@@ -763,6 +800,13 @@ export async function updateTask(req, res, next) {
       ? employeeIds
       : undefined;
 
+    if (resolvedAssigneeIds && resolvedAssigneeIds.length > 1) {
+      return res.status(400).json({
+        success: false,
+        message: 'Each task can be assigned to only one employee. Multiple assignees are not permitted.',
+      });
+    }
+
     const existing = await assertTaskOwner(id, req.user, tenantId).catch(e => {
       res.status(e.status || 500).json({ error: e.message });
       return null;
@@ -836,10 +880,28 @@ export async function updateTask(req, res, next) {
       }
     }
 
-    // 5. Dependency approval guard: employees cannot approve dependencies directly
+    // 5. Dependency approval guard & Dependency manager role check (Req 11)
     if (dependency !== undefined && dependency !== null) {
       if (dependency.status === 'approved' && existing.dependency?.status !== 'approved' && !isElevated && !isDirectManager) {
         return res.status(403).json({ success: false, error: 'Forbidden: Employees cannot approve dependencies' });
+      }
+
+      const depAssigneeId = dependency.concernedPersonId || dependency.assigneeId;
+      if (depAssigneeId) {
+        const depUser = await prisma.tenantUser.findFirst({
+          where: { id: depAssigneeId, tenantId, isDeleted: false, status: 'ACTIVE' },
+          select: { id: true, name: true, role: true },
+        });
+        if (depUser) {
+          const depRole = String(depUser.role || '').toUpperCase();
+          const MANAGER_ROLES = ['MANAGER', 'HR', 'ADMIN', 'SUPER_ADMIN', 'CMD', 'DIRECTOR', 'LEADERSHIP'];
+          if (!MANAGER_ROLES.includes(depRole)) {
+            return res.status(400).json({
+              success: false,
+              message: `A task dependency can only be assigned to a manager-level employee. "${depUser.name}" has role ${depUser.role}.`,
+            });
+          }
+        }
       }
 
       // 5b. Dependency due date past validation
@@ -881,17 +943,24 @@ export async function updateTask(req, res, next) {
       else if (progress === 0) finalStatus = 'todo';
     }
 
-    // ── Weight ceiling ───────────────────────────────────────────────────
-    // Measured against the task's siblings, so raising a task from 20 to 30
-    // on a goal totalling 100 is refused, but re-saving it at 20 is not.
+    // ── Weight ceiling & private/unmonitored zero weight ─────────────────
     const targetGoalId = resolvedGoalId !== undefined ? resolvedGoalId : existing.goalId;
-    if (weight !== undefined && weight !== null && targetGoalId
-        && (isElevated || isDirectManager)) {
-      try {
-        await assertWeightFits({ goalId: targetGoalId, weight: Number(weight), excludeTaskId: id });
-      } catch (e) {
-        if (sendWeightError(res, e)) return;
-        return res.status(e.status || 500).json({ success: false, message: e.message });
+    const effectiveIsPrivate = isPrivate !== undefined ? isPrivate : existing.isPrivate;
+    const effectiveIsStandalone = isStandalone !== undefined ? isStandalone : existing.isStandalone;
+    const isUnmonitoredOrPrivate = Boolean(effectiveIsPrivate || effectiveIsStandalone || (!targetGoalId && !existing.isMilestoneTracked));
+
+    let finalWeight = undefined;
+    if (isUnmonitoredOrPrivate) {
+      finalWeight = 0;
+    } else if (weight !== undefined && weight !== null && (isElevated || isDirectManager)) {
+      finalWeight = Number(weight);
+      if (targetGoalId) {
+        try {
+          await assertWeightFits({ goalId: targetGoalId, weight: finalWeight, excludeTaskId: id });
+        } catch (e) {
+          if (sendWeightError(res, e)) return;
+          return res.status(e.status || 500).json({ success: false, message: e.message });
+        }
       }
     }
 
@@ -979,7 +1048,7 @@ export async function updateTask(req, res, next) {
         ...(resolvedGoalId !== undefined && { goalId: resolvedGoalId }),
         ...(isPrivate !== undefined && (isElevated || isDirectManager || existing.employeeId === req.user.id) && { isPrivate }),
         ...(isStandalone !== undefined && (isElevated || isDirectManager) && { isStandalone }),
-        ...(weight !== undefined && (isElevated || isDirectManager) && { weight }),
+        ...(finalWeight !== undefined ? { weight: finalWeight } : (weight !== undefined && (isElevated || isDirectManager) && { weight })),
         ...(description !== undefined && { description }),
         ...(dependency !== undefined && (isElevated || isDirectManager || existing.employeeId === req.user.id) && { dependency: dependency || null }),
         ...(isDependencyOf !== undefined && (isElevated || isDirectManager || existing.employeeId === req.user.id) && { isDependencyOf: isDependencyOf || null }),

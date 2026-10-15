@@ -33,6 +33,22 @@ export async function login(req, res, next) {
       },
     });
 
+    // 1b. Alias fallback for defigo -> 4usoftware
+    if (!user && normalizedEmail.endsWith('@defigo.com')) {
+      const aliasEmail = normalizedEmail.replace('@defigo.com', '@4usoftware.com');
+      user = await prisma.tenantUser.findFirst({
+        where: {
+          email: { equals: aliasEmail, mode: 'insensitive' },
+        },
+        include: {
+          tenant: true,
+          bankDetails: true,
+          workHistory: true,
+          educations: true,
+        },
+      });
+    }
+
     // 2. If not found in TenantUser, check CompanyRegistration
     if (!user) {
       const reg = await prisma.companyRegistration.findFirst({
@@ -130,7 +146,7 @@ export async function login(req, res, next) {
           await prisma.tenantUser.update({
             where: { id: user.id },
             data: { passwordHash: reg.passwordHash },
-          }).catch(() => {});
+          }).catch(() => { });
         }
       }
     }
@@ -173,7 +189,7 @@ export async function login(req, res, next) {
       await prisma.tenantUser.update({
         where: { id: user.id },
         data: { status: 'ACTIVE' },
-      }).catch(() => {});
+      }).catch(() => { });
       user.status = 'ACTIVE';
     }
 
@@ -182,7 +198,7 @@ export async function login(req, res, next) {
       await prisma.tenantUser.update({
         where: { id: user.id },
         data: { email: normalizedEmail },
-      }).catch(() => {});
+      }).catch(() => { });
       user.email = normalizedEmail;
     }
 
@@ -268,7 +284,7 @@ export async function me(req, res, next) {
 
     const user = await prisma.tenantUser.findUnique({
       where: { id: req.user.id },
-      include: { 
+      include: {
         tenant: true,
         bankDetails: true,
         workHistory: true,
