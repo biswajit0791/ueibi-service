@@ -179,6 +179,41 @@ export async function getAssignableUsers(req, res, next) {
   }
 }
 
+/**
+ * GET /goals/eligible-owners (and /goals/owners)
+ *
+ * Returns active, non-deleted users in the tenant eligible to own goals.
+ * Supports selecting any eligible user (Employee, Manager, HR, Admin, etc.)
+ * within the authenticated tenant.
+ */
+export async function getEligibleGoalOwners(req, res, next) {
+  try {
+    const tenantId = req.tenantId;
+    const users = await prisma.tenantUser.findMany({
+      where: {
+        tenantId,
+        status: 'ACTIVE',
+        isDeleted: false,
+        role: { not: 'PLATFORM_OWNER' },
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        department: true,
+        designation: true,
+        managerId: true,
+      },
+      orderBy: { name: 'asc' },
+    });
+
+    return res.json({ owners: users, users });
+  } catch (err) {
+    next(err);
+  }
+}
+
 // ── Goal CRUD ──────────────────────────────────────────────────────────────
 
 /**
@@ -243,11 +278,36 @@ export async function createGoal(req, res, next) {
       specialNotes,
       employeeId,
       employeeIds: rawEmployeeIds,
+      ownerId: rawOwnerId,
+      ownerManagerId: rawOwnerManagerId,
       approvalMode,
     } = parsed.data;
 
     if (!title || !title.trim()) {
       return res.status(400).json({ error: 'Goal title is required' });
+    }
+
+    // ── Validate Goal Owner ──────────────────────────────────────────────────
+    const effectiveOwnerId = (rawOwnerId || rawOwnerManagerId || req.body?.ownerId || req.body?.ownerManagerId || '').trim();
+    if (!effectiveOwnerId) {
+      return res.status(400).json({ error: 'Goal Owner is required' });
+    }
+
+    const ownerUser = await prisma.tenantUser.findFirst({
+      where: {
+        id: effectiveOwnerId,
+        tenantId: req.tenantId,
+        status: 'ACTIVE',
+        isDeleted: false,
+        role: { not: 'PLATFORM_OWNER' },
+      },
+      select: { id: true, name: true, email: true, role: true, department: true, designation: true },
+    });
+
+    if (!ownerUser) {
+      return res.status(400).json({
+        error: 'Selected goal owner not found or not active in this organization',
+      });
     }
 
     const effectiveDue = dueDate || targetDate;
@@ -437,6 +497,7 @@ export async function createGoal(req, res, next) {
         employeeId: targetEmployeeIds[0],
         createdBy: req.user.name,
         createdById: req.user.id,
+        ownerManagerId: ownerUser.id,
         approvalMode: effectiveApprovalMode,
         status: initialStatus,
       };
@@ -449,6 +510,11 @@ export async function createGoal(req, res, next) {
 
       const createdGoal = await tx.goal.create({
         data: goalPayload,
+        include: {
+          ownerManager: {
+            select: { id: true, name: true, email: true, department: true, designation: true, role: true },
+          },
+        },
       });
 
       const createdAssignments = await Promise.all(
@@ -471,7 +537,7 @@ export async function createGoal(req, res, next) {
         )
       );
 
-      let auditDetails = `${req.user.name} created goal "${createdGoal.title}"`;
+      let auditDetails = `${req.user.name} created goal "${createdGoal.title}" (Owner: ${ownerUser.name})`;
       if (!isSelfAssigned) {
         auditDetails += ` and assigned it to ${targetEmployeeIds.length} employee(s)`;
         auditDetails += ` (approval mode: ${effectiveApprovalMode})`;
@@ -534,11 +600,25 @@ export async function createGoal(req, res, next) {
       }
     }
 
+    // Notify the Goal Owner if they are not the creator
+    if (ownerUser.id !== req.user.id) {
+      await goalService.notify({
+        tenantId: req.tenantId,
+        recipientId: ownerUser.id,
+        type: 'goal_update',
+        title: `Assigned as Goal Owner: "${goal.title}"`,
+        body: `${req.user.name} designated you as the Goal Owner for "${goal.title}".`,
+        entityType: 'goal',
+        entityId: goal.id,
+      });
+    }
+
     const fullGoal = await prisma.goal.findUnique({
       where: { id: goal.id },
       include: {
         employee: { select: { id: true, name: true, email: true, department: true, designation: true, role: true, managerId: true } },
         createdByUser: { select: { id: true, name: true, role: true } },
+        ownerManager: { select: { id: true, name: true, email: true, department: true, designation: true, role: true } },
         assignments: {
           include: {
             employee: { select: { id: true, name: true, email: true, department: true, designation: true, role: true, managerId: true } },
@@ -549,7 +629,13 @@ export async function createGoal(req, res, next) {
       },
     });
 
-    res.status(201).json(fullGoal);
+    res.status(201).json({
+      ...fullGoal,
+      ownerId: fullGoal?.ownerManagerId || null,
+      owner: fullGoal?.ownerManager || null,
+      ownerManagerId: fullGoal?.ownerManagerId || null,
+      ownerManager: fullGoal?.ownerManager || null,
+    });
   } catch (err) {
     next(err);
   }
@@ -622,14 +708,16 @@ export async function listGoals(req, res, next) {
       where.OR = [
         { employeeId: employeeId },
         { assignments: { some: { employeeId: employeeId } } },
+        { ownerManagerId: employeeId },
       ];
     } else {
       // No employeeId passed OR employeeId === 'all' OR scope === 'team'
       if (req.user.role === 'EMPLOYEE' && !isElevated) {
-        // Regular employee can only ever see their own goals
+        // Regular employee can only ever see their own goals or goals they own
         where.OR = [
           { employeeId: req.user.id },
           { assignments: { some: { employeeId: req.user.id } } },
+          { ownerManagerId: req.user.id },
         ];
       } else if (req.user.role === 'MANAGER') {
         // Manager can see:
@@ -672,6 +760,7 @@ export async function listGoals(req, res, next) {
         const managerOrConditions = [
           { employeeId: { in: allowedUserIds } },
           { assignments: { some: { employeeId: { in: allowedUserIds } } } },
+          { ownerManagerId: req.user.id },
           { createdById: req.user.id },
           { createdBy: req.user.name }, // legacy rows without createdById
           {
@@ -768,6 +857,9 @@ export async function listGoals(req, res, next) {
           createdByUser: {
             select: { id: true, name: true, role: true },
           },
+          ownerManager: {
+            select: { id: true, name: true, email: true, department: true, designation: true, role: true },
+          },
           assignments: {
             include: {
               employee: {
@@ -804,6 +896,10 @@ export async function listGoals(req, res, next) {
     res.json({
       items: items.map((g) => ({
         ...g,
+        ownerId: g.ownerManagerId || null,
+        owner: g.ownerManager || null,
+        ownerManagerId: g.ownerManagerId || null,
+        ownerManager: g.ownerManager || null,
         weightSummary: summaries[g.id] || null,
         tasks: (g.tasks || []).map((t) => ({ ...t, timing: taskTiming(t) })),
       })),
@@ -838,6 +934,9 @@ export async function getGoalById(req, res, next) {
         },
         createdByUser: {
           select: { id: true, name: true, role: true },
+        },
+        ownerManager: {
+          select: { id: true, name: true, email: true, department: true, designation: true, role: true },
         },
         assignments: {
           include: {
@@ -880,6 +979,10 @@ export async function getGoalById(req, res, next) {
 
     res.json({
       ...goal,
+      ownerId: goal.ownerManagerId || null,
+      owner: goal.ownerManager || null,
+      ownerManagerId: goal.ownerManagerId || null,
+      ownerManager: goal.ownerManager || null,
       weightSummary,
       tasks: (goal.tasks || []).map((t) => ({ ...t, timing: taskTiming(t) })),
     });
@@ -997,6 +1100,27 @@ export async function updateGoal(req, res, next) {
     // Status changes must go through dedicated workflow action endpoints.
     const { status: _ignoredStatus, addEmployeeIds, ...safeData } = parsed.data;
 
+    let resolvedOwner = null;
+    const requestedOwnerId = safeData.ownerId || safeData.ownerManagerId || req.body?.ownerId || req.body?.ownerManagerId;
+    if (requestedOwnerId !== undefined && requestedOwnerId !== null) {
+      if (typeof requestedOwnerId !== 'string' || !requestedOwnerId.trim()) {
+        return res.status(400).json({ error: 'Goal Owner cannot be empty' });
+      }
+      resolvedOwner = await prisma.tenantUser.findFirst({
+        where: {
+          id: requestedOwnerId.trim(),
+          tenantId: req.tenantId,
+          status: 'ACTIVE',
+          isDeleted: false,
+          role: { not: 'PLATFORM_OWNER' },
+        },
+        select: { id: true, name: true, email: true, role: true, department: true, designation: true },
+      });
+      if (!resolvedOwner) {
+        return res.status(400).json({ error: 'Selected goal owner not found or not active in this organization' });
+      }
+    }
+
     const effectiveStart = safeData.startDate !== undefined ? safeData.startDate : existing.startDate;
     const effectiveDue = safeData.dueDate !== undefined ? safeData.dueDate : (safeData.targetDate !== undefined ? safeData.targetDate : (existing.dueDate || existing.targetDate));
     if (effectiveStart && effectiveDue) {
@@ -1022,10 +1146,12 @@ export async function updateGoal(req, res, next) {
         ...(safeData.dueDate ? { dueDate: new Date(safeData.dueDate) } : {}),
         ...(safeData.attachments ? { attachments: safeData.attachments } : {}),
         ...(safeData.specialNotes !== undefined ? { specialNotes: safeData.specialNotes } : {}),
+        ...(resolvedOwner ? { ownerManagerId: resolvedOwner.id } : {}),
       },
       include: {
         employee: true,
         createdByUser: { select: { id: true, name: true, role: true } },
+        ownerManager: { select: { id: true, name: true, email: true, department: true, designation: true, role: true } },
         assignments: {
           include: {
             employee: { select: { id: true, name: true, email: true, department: true, designation: true, role: true, managerId: true } },
@@ -1182,6 +1308,7 @@ export async function updateGoal(req, res, next) {
       include: {
         employee: true,
         createdByUser: { select: { id: true, name: true, role: true } },
+        ownerManager: { select: { id: true, name: true, email: true, department: true, designation: true, role: true } },
         assignments: {
           include: {
             employee: { select: { id: true, name: true, email: true, department: true, designation: true, role: true, managerId: true } },
@@ -1195,7 +1322,34 @@ export async function updateGoal(req, res, next) {
       },
     });
 
-    res.json(finalGoal);
+    if (resolvedOwner && resolvedOwner.id !== existing.ownerManagerId) {
+      await goalService.logAudit({
+        goalId: id,
+        performedById: req.user.id,
+        action: 'GOAL_UPDATED',
+        details: `${req.user.name} changed Goal Owner to "${resolvedOwner.name}".`,
+      });
+
+      if (resolvedOwner.id !== req.user.id) {
+        await goalService.notify({
+          tenantId: req.tenantId,
+          recipientId: resolvedOwner.id,
+          type: 'goal_update',
+          title: `Assigned as Goal Owner: "${finalGoal?.title || updated.title}"`,
+          body: `${req.user.name} designated you as the Goal Owner for "${finalGoal?.title || updated.title}".`,
+          entityType: 'goal',
+          entityId: id,
+        });
+      }
+    }
+
+    res.json({
+      ...finalGoal,
+      ownerId: finalGoal?.ownerManagerId || null,
+      owner: finalGoal?.ownerManager || null,
+      ownerManagerId: finalGoal?.ownerManagerId || null,
+      ownerManager: finalGoal?.ownerManager || null,
+    });
   } catch (err) {
     next(err);
   }

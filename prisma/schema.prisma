@@ -898,6 +898,7 @@ model Goal {
   @@index([tenantId])
   @@index([employeeId])
   @@index([createdById])
+  @@index([ownerManagerId])
   @@index([tenantId, isHandoverGoal, status])
   @@map("goals")
 }
