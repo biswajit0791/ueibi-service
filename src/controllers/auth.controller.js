@@ -21,7 +21,7 @@ export async function login(req, res, next) {
     const normalizedEmail = cleanEmail.toLowerCase();
 
     // 1. Case-insensitive lookup in TenantUser
-    let user = await prisma.tenantUser.findFirst({
+    const user = await prisma.tenantUser.findFirst({
       where: {
         email: { equals: normalizedEmail, mode: 'insensitive' },
       },
@@ -33,124 +33,12 @@ export async function login(req, res, next) {
       },
     });
 
-    // 1b. Alias fallback for defigo -> 4usoftware
-    if (!user && normalizedEmail.endsWith('@defigo.com')) {
-      const aliasEmail = normalizedEmail.replace('@defigo.com', '@4usoftware.com');
-      user = await prisma.tenantUser.findFirst({
-        where: {
-          email: { equals: aliasEmail, mode: 'insensitive' },
-        },
-        include: {
-          tenant: true,
-          bankDetails: true,
-          workHistory: true,
-          educations: true,
-        },
-      });
-    }
-
-    // 2. If not found in TenantUser, check CompanyRegistration
-    if (!user) {
-      const reg = await prisma.companyRegistration.findFirst({
-        where: {
-          OR: [
-            { email: { equals: normalizedEmail, mode: 'insensitive' } },
-            { hrEmail: { equals: normalizedEmail, mode: 'insensitive' } },
-            { financeEmail: { equals: normalizedEmail, mode: 'insensitive' } },
-          ],
-        },
-        include: { tenant: true },
-      });
-
-      if (reg) {
-        console.log(`[AUTH] Found CompanyRegistration for "${cleanEmail}" (status: ${reg.status})`);
-        const regPasswordMatch = await bcrypt.compare(password, reg.passwordHash);
-        if (regPasswordMatch) {
-          // Provision or locate tenant
-          let tenant = reg.tenant;
-          if (!tenant) {
-            tenant = await prisma.tenant.findFirst({
-              where: {
-                OR: [
-                  { registrationId: reg.id },
-                  { domainName: reg.domainName },
-                ],
-              },
-            });
-          }
-          if (!tenant) {
-            tenant = await prisma.tenant.create({
-              data: {
-                companyName: reg.companyName,
-                domainName: reg.domainName,
-                tenantCode: reg.tenantCode || reg.companyName.replace(/[^a-zA-Z0-9]/g, '').slice(0, 4).toUpperCase(),
-                licenseLimit: reg.licenseQuantity || 50,
-                registrationId: reg.id,
-              },
-            });
-          }
-
-          // Determine role based on email in registration
-          let role = 'HR';
-          if (reg.email.toLowerCase() === normalizedEmail) {
-            role = 'SUPER_ADMIN';
-          } else if (reg.financeEmail && reg.financeEmail.toLowerCase() === normalizedEmail) {
-            role = 'FINANCE';
-          }
-
-          user = await prisma.tenantUser.create({
-            data: {
-              tenantId: tenant.id,
-              email: normalizedEmail,
-              passwordHash: reg.passwordHash,
-              name: reg.fullName || 'User',
-              role,
-              status: 'ACTIVE',
-              mustChangePassword: false,
-              designation: reg.designation || 'Manager',
-            },
-            include: {
-              tenant: true,
-              bankDetails: true,
-              workHistory: true,
-              educations: true,
-            },
-          });
-          console.log(`[AUTH] Auto-provisioned TenantUser: ${user.email} (${user.role}) in "${tenant.companyName}"`);
-        }
-      }
-    }
-
     if (!user) {
       console.warn(`[AUTH] 401: User "${cleanEmail}" not found in database`);
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
-    let match = await bcrypt.compare(password, user.passwordHash);
-
-    // Fallback: If password did not match user.passwordHash, check if password matches CompanyRegistration
-    if (!match) {
-      const reg = await prisma.companyRegistration.findFirst({
-        where: {
-          OR: [
-            { email: { equals: normalizedEmail, mode: 'insensitive' } },
-            { hrEmail: { equals: normalizedEmail, mode: 'insensitive' } },
-          ],
-        },
-      });
-      if (reg && reg.passwordHash) {
-        const regMatch = await bcrypt.compare(password, reg.passwordHash);
-        if (regMatch) {
-          match = true;
-          // Sync updated passwordHash to TenantUser
-          await prisma.tenantUser.update({
-            where: { id: user.id },
-            data: { passwordHash: reg.passwordHash },
-          }).catch(() => { });
-        }
-      }
-    }
-
+    const match = await bcrypt.compare(password, user.passwordHash);
     if (!match) {
       console.warn(`[AUTH] 401: Password mismatch for user "${cleanEmail}"`);
       return res.status(401).json({ error: 'Invalid email or password' });

@@ -985,7 +985,7 @@ export async function seedThreeCompanies() {
             isVerified: true,
             verificationStatus: 'VERIFIED',
             empType: 'PERMANENT',
-            passwordHash,
+            passwordHash: existingUser.passwordHash || passwordHash,
           },
         });
         emailToUserId.set(cleanEmail, updated.id);
