@@ -196,16 +196,14 @@ export async function createMilestone(req, res, next) {
     const taskDue = task.dueDate ? new Date(task.dueDate) : null;
     const isTaskOverdue = taskDue && taskDue < today;
 
-    if (!isTaskOverdue && dueMidnight < today) {
-      return res.status(400).json({ error: 'Milestone checkpoint due date cannot be in the past' });
-    }
-
     if (task.startDate) {
       const taskStart = new Date(task.startDate);
       taskStart.setHours(0, 0, 0, 0);
       if (dueMidnight < taskStart) {
         return res.status(400).json({ error: "Milestone checkpoint due date cannot be earlier than the task's start date" });
       }
+    } else if (!isTaskOverdue && dueMidnight < today) {
+      return res.status(400).json({ error: 'Milestone checkpoint due date cannot be in the past' });
     }
 
     if (due > new Date(task.dueDate)) {
@@ -215,21 +213,6 @@ export async function createMilestone(req, res, next) {
     const existingCount = await prisma.taskMilestone.count({ where: { taskId } });
     if (existingCount >= MAX_MILESTONES_PER_TASK) {
       return res.status(400).json({ error: `A task may have at most ${MAX_MILESTONES_PER_TASK} milestones` });
-    }
-
-    // Ensure not earlier than prior milestone
-    const lastMilestone = await prisma.taskMilestone.findFirst({
-      where: { taskId },
-      orderBy: { order: 'desc' },
-    });
-    if (lastMilestone && lastMilestone.dueDate) {
-      const lastDue = new Date(lastMilestone.dueDate);
-      lastDue.setHours(0, 0, 0, 0);
-      if (dueMidnight < lastDue) {
-        return res.status(400).json({
-          error: `Milestone checkpoint due date cannot be earlier than Checkpoint 0${lastMilestone.order} (${lastDue.toISOString().slice(0, 10)})`,
-        });
-      }
     }
 
     const milestone = await prisma.taskMilestone.create({
@@ -522,50 +505,18 @@ export async function updateMilestone(req, res, next) {
         const taskDue = task.dueDate ? new Date(task.dueDate) : null;
         const isTaskOverdue = taskDue && taskDue < today;
 
-        if (!isTaskOverdue && dueMidnight < today) {
-          return res.status(400).json({ error: 'Milestone checkpoint due date cannot be in the past' });
-        }
-
         if (task.startDate) {
           const taskStart = new Date(task.startDate);
           taskStart.setHours(0, 0, 0, 0);
           if (dueMidnight < taskStart) {
             return res.status(400).json({ error: "Milestone checkpoint due date cannot be earlier than the task's start date" });
           }
+        } else if (!isTaskOverdue && dueMidnight < today) {
+          return res.status(400).json({ error: 'Milestone checkpoint due date cannot be in the past' });
         }
 
         if (task.dueDate && due > new Date(task.dueDate)) {
           return res.status(400).json({ error: "Milestone due date cannot be later than the task's own due date" });
-        }
-
-        // Ensure not earlier than previous milestone
-        const prevMilestone = await prisma.taskMilestone.findFirst({
-          where: { taskId, order: { lt: milestone.order } },
-          orderBy: { order: 'desc' },
-        });
-        if (prevMilestone && prevMilestone.dueDate) {
-          const prevDue = new Date(prevMilestone.dueDate);
-          prevDue.setHours(0, 0, 0, 0);
-          if (dueMidnight < prevDue) {
-            return res.status(400).json({
-              error: `Milestone checkpoint due date cannot be earlier than Station 0${prevMilestone.order} (${prevDue.toISOString().slice(0, 10)})`,
-            });
-          }
-        }
-
-        // Ensure not later than next milestone
-        const nextMilestone = await prisma.taskMilestone.findFirst({
-          where: { taskId, order: { gt: milestone.order } },
-          orderBy: { order: 'asc' },
-        });
-        if (nextMilestone && nextMilestone.dueDate) {
-          const nextDue = new Date(nextMilestone.dueDate);
-          nextDue.setHours(0, 0, 0, 0);
-          if (dueMidnight > nextDue) {
-            return res.status(400).json({
-              error: `Milestone checkpoint due date cannot be later than Station 0${nextMilestone.order} (${nextDue.toISOString().slice(0, 10)})`,
-            });
-          }
         }
 
         data.dueDate = due;
@@ -623,16 +574,14 @@ export async function updateMilestone(req, res, next) {
         const taskDue = task.dueDate ? new Date(task.dueDate) : null;
         const isTaskOverdue = taskDue && taskDue < today;
 
-        if (!isTaskOverdue && proposedMidnight < today) {
-          return res.status(400).json({ error: 'Proposed completion date cannot be in the past' });
-        }
-
         if (task.startDate) {
           const taskStart = new Date(task.startDate);
           taskStart.setHours(0, 0, 0, 0);
           if (proposedMidnight < taskStart) {
             return res.status(400).json({ error: "Proposed completion date cannot be earlier than the task's start date" });
           }
+        } else if (!isTaskOverdue && proposedMidnight < today) {
+          return res.status(400).json({ error: 'Proposed completion date cannot be in the past' });
         }
 
         if (task.dueDate && proposed > new Date(task.dueDate)) {
