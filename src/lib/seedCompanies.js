@@ -1,3 +1,5 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import bcrypt from 'bcryptjs';
 import { prisma } from './prisma.js';
 
@@ -1039,10 +1041,17 @@ export async function seedThreeCompanies() {
   console.log('======================================================\n');
 }
 
-// Auto-execute when run directly: `node src/lib/seedCompanies.js`
-seedThreeCompanies()
-  .catch((e) => {
-    console.error('❌ Error seeding companies:', e);
-    process.exit(1);
-  })
-  .finally(() => prisma.$disconnect());
+// Auto-execute ONLY when run directly: `node src/lib/seedCompanies.js`
+const isDirectRun =
+  Boolean(process.argv[1]) &&
+  path.resolve(process.argv[1]).replace(/\.js$/, '') ===
+    fileURLToPath(import.meta.url).replace(/\.js$/, '');
+
+if (isDirectRun) {
+  seedThreeCompanies()
+    .catch((e) => {
+      console.error('❌ Error seeding companies:', e);
+      process.exit(1);
+    })
+    .finally(() => prisma.$disconnect());
+}
