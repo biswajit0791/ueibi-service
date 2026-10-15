@@ -1036,6 +1036,13 @@ export async function seedThreeCompanies() {
 
   console.log('======================================================');
   console.log(`🎉 Seeding complete! Tenants: 3, Total Users processed: 96.`);
-  console.log('🔑 All accounts ready for direct login with password: "Test@123".');
   console.log('======================================================\n');
 }
+
+// Auto-execute when run directly: `node src/lib/seedCompanies.js`
+seedThreeCompanies()
+  .catch((e) => {
+    console.error('❌ Error seeding companies:', e);
+    process.exit(1);
+  })
+  .finally(() => prisma.$disconnect());
