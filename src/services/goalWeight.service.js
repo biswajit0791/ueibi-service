@@ -142,12 +142,10 @@ export async function assertGoalUnlocked(goalId, client = prisma) {
   if (!goalId) return null;
   const summary = await goalWeightSummary(goalId, client);
   if (!summary) return null;
-  if (summary.locked) {
+  if (summary.awaitingApproval) {
     throw {
       status: 409,
-      // Two different reasons for the same refusal, and the UI wording differs:
-      // one asks the employee to fix weights, the other to wait for a manager.
-      code: summary.awaitingApproval ? 'GOAL_AWAITING_APPROVAL' : 'GOAL_WEIGHT_INCOMPLETE',
+      code: 'GOAL_AWAITING_APPROVAL',
       message: summary.reason,
       weightSummary: summary,
     };
