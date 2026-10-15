@@ -930,10 +930,15 @@ export async function ensurePerformanceColumns() {
 
     console.log('[dbInit] Performance module columns, tables & indexes verified successfully.');
 
-    // 13. Seed the 3 requested companies and their complete reporting hierarchy
+    // 13. Seed the 3 requested companies only if not already present
     try {
-      const { seedThreeCompanies } = await import('./seedCompanies.js');
-      await seedThreeCompanies();
+      const existingTenant = await prisma.tenant.findFirst({
+        where: { tenantCode: { in: ['4USOFTWARE', 'USIFDN', 'BLUETELCAST'] } },
+      });
+      if (!existingTenant) {
+        const { seedThreeCompanies } = await import('./seedCompanies.js');
+        await seedThreeCompanies();
+      }
     } catch (seedErr) {
       console.warn('[dbInit] Notice on 3 companies seed:', seedErr?.message || seedErr);
     }
