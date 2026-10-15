@@ -10,6 +10,7 @@ import {
   getGoalCategories,
   getGoalTypes,
   getGoalPriorities,
+  getEligibleGoalOwners,
   activateApproveGoal,
   submitGoal,
   managerApproveGoal,
@@ -32,6 +33,8 @@ router.get('/goals/categories', requireAuth, requireTenant, getGoalCategories);
 router.get('/goals/types', requireAuth, requireTenant, getGoalTypes);
 router.get('/goals/priorities', requireAuth, requireTenant, getGoalPriorities);
 router.get('/goals/assignable-users', requireAuth, requireTenant, getAssignableUsers);
+router.get('/goals/eligible-owners', requireAuth, requireTenant, getEligibleGoalOwners);
+router.get('/goals/owners', requireAuth, requireTenant, getEligibleGoalOwners);
 
 // ── Goal CRUD ──────────────────────────────────────────────────────────────
 router.post('/goals', requireAuth, requireTenant, createGoal);

@@ -709,6 +709,12 @@ export async function ensurePerformanceColumns() {
       END $$;
     `);
 
+    try {
+      await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "goals_ownerManagerId_idx" ON "goals"("ownerManagerId");`);
+    } catch {
+      // index already exists
+    }
+
     // 2. Alter goal_assignments table
     await prisma.$executeRawUnsafe(`
       DO $$
@@ -878,6 +884,33 @@ export async function ensurePerformanceColumns() {
       await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "review_concerns_tenantId_idx" ON "review_concerns"("tenantId");`);
       await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "review_concerns_reviewId_idx" ON "review_concerns"("reviewId");`);
       await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "review_concerns_raisedById_idx" ON "review_concerns"("raisedById");`);
+    } catch {
+      // index already exists
+    }
+
+    // 10. Ensure tasks.assigneeIds column and backfill exist
+    await prisma.$executeRawUnsafe(`
+      ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "assigneeIds" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];
+    `);
+    try {
+      await prisma.$executeRawUnsafe(`
+        UPDATE "tasks"
+        SET "assigneeIds" = ARRAY["employeeId"]
+        WHERE "employeeId" IS NOT NULL
+          AND ("assigneeIds" IS NULL OR cardinality("assigneeIds") = 0);
+      `);
+    } catch {
+      // ignore
+    }
+
+    // 11. Ensure goals.ownerManagerId column & index exist
+    await prisma.$executeRawUnsafe(`
+      ALTER TABLE "goals" ADD COLUMN IF NOT EXISTS "ownerManagerId" TEXT;
+    `);
+    try {
+      await prisma.$executeRawUnsafe(`
+        CREATE INDEX IF NOT EXISTS "goals_ownerManagerId_idx" ON "goals"("ownerManagerId");
+      `);
     } catch {
       // index already exists
     }

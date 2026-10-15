@@ -232,6 +232,7 @@ export class GoalService {
     if (hasRole(user.role, ELEVATED_ROLES)) return true;
 
     if (goal.employeeId === user.id) return true;
+    if (goal.ownerManagerId && goal.ownerManagerId === user.id) return true;
     if (goal.createdById && goal.createdById === user.id) return true;
     if (!goal.createdById && goal.createdBy && goal.createdBy === user.name) return true;
 

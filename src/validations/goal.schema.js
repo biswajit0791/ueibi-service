@@ -23,6 +23,8 @@ export const createGoalSchema = z.object({
   specialNotes: z.string().max(2000, "Special notes cannot exceed 2000 characters").nullable().optional(),
   employeeId: z.string().optional(),
   employeeIds: z.array(z.string().min(1, "Employee ID cannot be empty")).max(200).optional(),
+  ownerId: z.string().min(1, "Goal Owner is required").optional(),
+  ownerManagerId: z.string().min(1).optional(),
   /**
    * approvalMode is only meaningful when a manager assigns a goal to another employee.
    *
@@ -77,6 +79,8 @@ export const updateGoalSchema = z.object({
   dueDate: z.string().nullable().optional(),
   attachments: z.array(z.string().max(1024)).max(20, "A goal can have at most 20 attachments").optional(),
   specialNotes: z.string().max(2000, "Special notes cannot exceed 2000 characters").nullable().optional(),
+  ownerId: z.string().min(1, "Goal Owner cannot be empty").optional(),
+  ownerManagerId: z.string().min(1).optional(),
   // IDs of employees to ADD to this goal (elevated roles only; never removes existing assignees)
   addEmployeeIds: z.array(z.string().min(1)).max(200).optional(),
 }).refine((data) => {
