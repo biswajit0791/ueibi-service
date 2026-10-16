@@ -4101,6 +4101,33 @@ const options = {
           },
         },
       },
+      '/goals/escalations/sweep': {
+        post: {
+          tags: ['Goals'],
+          summary: 'Trigger SLA check and role hierarchy escalation sweep for overdue manager reviews',
+          description: 'Scans for goal submissions in PENDING_MANAGER_REVIEW exceeding the 48-hour SLA and automatically escalates them up the role hierarchy to senior managers and HR, dispatching branded emails and in-app alerts.',
+          operationId: 'triggerGoalEscalationSweep',
+          security: [{ userCookie: [] }],
+          responses: {
+            200: {
+              description: 'Escalation sweep summary',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      success: { type: 'boolean', example: true },
+                      scanned: { type: 'integer', example: 5 },
+                      escalated: { type: 'integer', example: 2 },
+                    },
+                  },
+                },
+              },
+            },
+            403: { description: 'Forbidden: only elevated roles (HR/Admin) can trigger escalation sweeps' },
+          },
+        },
+      },
       '/goals/{id}/comments': {
         get: {
           tags: ['Goals'],
