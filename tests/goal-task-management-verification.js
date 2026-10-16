@@ -260,6 +260,45 @@ async function runVerification() {
       const taskMonitored = resMonitored.data;
       if (taskMonitored?.id) createdTaskIds.push(taskMonitored.id);
       assert(Number(taskMonitored?.weight) === 25, 'Monitored goal task carries designated weight');
+
+      // --------------------------------------------------------------------------
+      // 6b. TASK ASSIGNMENT RESTRICTION (GOAL ASSIGNEE ONLY)
+      // --------------------------------------------------------------------------
+      console.log('\n--- 6b. Task Assignment Restriction: Goal Assignee Only ---');
+      // Attempt to assign task under goalSame to employeeUser who is NOT assigned to goalSame
+      const reqInvalidAssignee = {
+        tenantId: tenant.id,
+        user: managerUser,
+        body: {
+          title: 'Test: Task Assigned to Non-Goal Assignee',
+          goalId: goalSame.id,
+          weight: 10,
+          employeeId: employeeUser.id,
+          startDate: '2026-10-15',
+          dueDate: '2026-11-15',
+        },
+      };
+      const resInvalidAssignee = createMockRes();
+      await createTask(reqInvalidAssignee, resInvalidAssignee);
+      assert(resInvalidAssignee.statusCode === 400, 'Task assignment to employee not assigned to parent Goal is rejected with HTTP 400');
+      assert(resInvalidAssignee.data?.message?.includes('parent Goal'), 'Rejection message cites parent Goal assignee restriction');
+
+      // Attempt by elevated role (HR/Admin) to assign task to non-goal assignee
+      const reqElevatedInvalid = {
+        tenantId: tenant.id,
+        user: elevatedUser,
+        body: {
+          title: 'Test: Elevated Role Assigning to Non-Goal Assignee',
+          goalId: goalSame.id,
+          weight: 10,
+          employeeId: employeeUser.id,
+          startDate: '2026-10-15',
+          dueDate: '2026-11-15',
+        },
+      };
+      const resElevatedInvalid = createMockRes();
+      await createTask(reqElevatedInvalid, resElevatedInvalid);
+      assert(resElevatedInvalid.statusCode === 400, 'Elevated role cannot bypass Goal Assignee restriction (rejected with 400)');
     }
 
     // --------------------------------------------------------------------------

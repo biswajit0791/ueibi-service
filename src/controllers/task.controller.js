@@ -118,10 +118,43 @@ function sendWeightError(res, e) {
   return true;
 }
 
+// ─── Helper: check if employee is assigned to a goal ───────────────────────
+export async function isUserGoalAssignee(goalId, employeeId, tenantId) {
+  if (!goalId || !employeeId) return false;
+  const goal = await prisma.goal.findFirst({
+    where: { id: goalId, tenantId },
+    select: {
+      id: true,
+      employeeId: true,
+      assignments: {
+        where: { employeeId },
+        select: { id: true },
+        take: 1,
+      },
+    },
+  });
+  if (!goal) return false;
+  if (goal.employeeId === employeeId) return true;
+  return Boolean(goal.assignments && goal.assignments.length > 0);
+}
+
 // ─── Helper: resolve & authorise target employee ───────────────────────────
 // Returns the TenantUser record that will own the task.
 // Verifies the employee belongs to the SAME tenant as the requesting user.
 export async function resolveTargetEmployee(requestingUser, tenantId, employeeId, parentTask = null, goalId = null) {
+  const targetId = employeeId || requestingUser.id;
+
+  // Task Assignment Restriction: A task can only be assigned to an employee who is already assigned to the parent Goal.
+  if (goalId && !parentTask) {
+    const isGoalAssignee = await isUserGoalAssignee(goalId, targetId, tenantId);
+    if (!isGoalAssignee) {
+      throw {
+        status: 400,
+        message: 'A task can only be assigned to an employee who is already assigned to the parent Goal.',
+      };
+    }
+  }
+
   // If no employeeId supplied → default to the requesting user themselves
   if (!employeeId) {
     return { id: requestingUser.id };
@@ -510,19 +543,18 @@ export async function createTask(req, res, next) {
     for (const targetId of targetEmployeeIds) {
       let target;
       try {
-        target = await resolveTargetEmployee(req.user, tenantId, targetId, parentTask, goalId);
+        target = await resolveTargetEmployee(req.user, tenantId, targetId, parentTask, resolvedGoalId);
       } catch (e) {
         return res.status(e.status || 500).json({ success: false, message: e.message });
       }
 
-      if (resolvedGoal && target.id === req.user.id && !hasRole(req.user.role, ELEVATED_ROLES)) {
-        const onGoal = resolvedGoal.employeeId === req.user.id
-          || resolvedGoal.createdById === req.user.id
-          || (await prisma.goalAssignment.findFirst({
-              where: { goalId: resolvedGoal.id, employeeId: req.user.id }, select: { id: true },
-            })) !== null;
-        if (!onGoal) {
-          return res.status(403).json({ success: false, message: 'You are not assigned to this goal' });
+      if (resolvedGoalId) {
+        const isGoalAssignee = await isUserGoalAssignee(resolvedGoalId, target.id, tenantId);
+        if (!isGoalAssignee) {
+          return res.status(400).json({
+            success: false,
+            message: 'A task can only be assigned to an employee who is already assigned to the parent Goal.',
+          });
         }
       }
       targets.push(target);
@@ -851,7 +883,8 @@ export async function updateTask(req, res, next) {
         if (existing.isDependencyOf) {
           existingParent = await prisma.task.findFirst({ where: { id: existing.isDependencyOf, tenantId } });
         }
-        await resolveTargetEmployee(req.user, tenantId, employeeId, existingParent, existing.goalId);
+        const effectiveGoalForReassign = isStandalone ? null : (goalId !== undefined ? goalId : existing.goalId);
+        await resolveTargetEmployee(req.user, tenantId, employeeId, existingParent, effectiveGoalForReassign);
       } catch (e) {
         return res.status(e.status || 500).json({ success: false, message: e.message });
       }
@@ -946,6 +979,26 @@ export async function updateTask(req, res, next) {
     const effectiveIsPrivate = isPrivate !== undefined ? isPrivate : existing.isPrivate;
     const effectiveIsStandalone = isStandalone !== undefined ? isStandalone : existing.isStandalone;
     const isUnmonitoredOrPrivate = Boolean(effectiveIsPrivate || effectiveIsStandalone || (!targetGoalId && !existing.isMilestoneTracked));
+
+    // ── Task Assignment Restriction: A task can only be assigned to an employee who is already assigned to the parent Goal ──
+    const effectiveParentGoalId = effectiveIsStandalone ? null : targetGoalId;
+    if (effectiveParentGoalId) {
+      const effectiveAssigneeIds = resolvedAssigneeIds !== undefined
+        ? resolvedAssigneeIds
+        : (employeeId !== undefined ? [employeeId] : [existing.employeeId]);
+
+      for (const targetEmpId of effectiveAssigneeIds) {
+        if (targetEmpId) {
+          const isGoalAssignee = await isUserGoalAssignee(effectiveParentGoalId, targetEmpId, tenantId);
+          if (!isGoalAssignee) {
+            return res.status(400).json({
+              success: false,
+              message: 'A task can only be assigned to an employee who is already assigned to the parent Goal.',
+            });
+          }
+        }
+      }
+    }
 
     let finalWeight = undefined;
     if (isUnmonitoredOrPrivate) {
