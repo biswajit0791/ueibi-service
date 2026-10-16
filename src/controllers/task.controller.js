@@ -13,6 +13,15 @@ import { timingUpdates, isWorkStarted, taskTiming } from '../lib/taskTiming.js';
 import { visibleTaskWhere } from '../services/taskVisibility.service.js';
 import { assertTaskDatesFitMilestones } from '../lib/dateValidation.js';
 
+function formatZodIssues(issues, fallback = 'Validation failed') {
+  if (!Array.isArray(issues) || issues.length === 0) return fallback;
+  const messages = issues.map((i) => {
+    const p = Array.isArray(i.path) && i.path.length ? i.path.join('.') : '';
+    return p ? `${p}: ${i.message}` : i.message;
+  });
+  return messages.join('; ') || fallback;
+}
+
 // ─── Helper: actual start / completion dates ───────────────────────────────
 //
 // These are normally stamped automatically as a task moves, which is what
@@ -292,7 +301,8 @@ export async function createTask(req, res, next) {
 
     const parsed = createTaskSchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ success: false, error: 'Validation failed', details: parsed.error.issues });
+      const formatted = formatZodIssues(parsed.error.issues, 'Validation failed');
+      return res.status(400).json({ success: false, error: formatted, message: formatted, details: parsed.error.issues });
     }
     const {
       title, priority, startDate, dueDate, financialYear,
@@ -688,7 +698,8 @@ export async function listTasks(req, res, next) {
   try {
     const parsedQuery = listTasksQuerySchema.safeParse(req.query);
     if (!parsedQuery.success) {
-      return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
+      const formatted = formatZodIssues(parsedQuery.error.issues, 'Validation failed');
+      return res.status(400).json({ success: false, error: formatted, message: formatted, details: parsedQuery.error.issues });
     }
 
     // The visibility rule now lives in one service, because the sub-task board
@@ -718,7 +729,8 @@ export async function updateTaskStatus(req, res, next) {
     const { id } = parsedParams.data;
     const parsed = updateTaskStatusSchema.safeParse(req.body || {});
     if (!parsed.success) {
-      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+      const formatted = formatZodIssues(parsed.error.issues, 'Validation failed');
+      return res.status(400).json({ success: false, error: formatted, message: formatted, details: parsed.error.issues });
     }
     const { status, progress } = parsed.data;
     const tenantId = req.tenantId;
@@ -844,7 +856,8 @@ export async function updateTask(req, res, next) {
     const tenantId = req.tenantId;
     const parsed = updateTaskSchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ success: false, error: 'Validation failed', details: parsed.error.issues });
+      const formatted = formatZodIssues(parsed.error.issues, 'Validation failed');
+      return res.status(400).json({ success: false, error: formatted, message: formatted, details: parsed.error.issues });
     }
     const {
       title, priority, startDate, dueDate, financialYear,
