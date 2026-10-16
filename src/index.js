@@ -34,6 +34,8 @@ server.listen(env.port, async () => {
       await ensureAppraisalColumns();
       const { startMilestoneEscalationSchedule } = await import('./services/milestoneEscalation.service.js');
       startMilestoneEscalationSchedule();
+      const { startGoalEscalationSchedule } = await import('./services/goalEscalation.service.js');
+      startGoalEscalationSchedule();
       return true;
     } catch (err) {
       console.error(' ❌ PostgreSQL: Connection FAILED -', err.message);

@@ -18,6 +18,7 @@ import {
   hrApproveGoal,
   hrRejectGoal,
   resubmitGoal,
+  triggerGoalEscalationSweep,
 } from '../controllers/goal.controller.js';
 import {
   getMyGoals,
@@ -68,6 +69,7 @@ router.post('/goals/:id/reject', requireAuth, requireTenant, managerRejectGoal);
 router.post('/goals/:id/hr-approve', requireAuth, requireTenant, hrApproveGoal);
 router.post('/goals/:id/hr-reject', requireAuth, requireTenant, hrRejectGoal);
 router.post('/goals/:id/resubmit', requireAuth, requireTenant, resubmitGoal);
+router.post('/goals/escalations/sweep', requireAuth, requireTenant, triggerGoalEscalationSweep);
 
 // ── Goal Activity & Audit ──────────────────────────────────────────────────
 // (comments + audit routes live in activity.routes.js — they used to be
