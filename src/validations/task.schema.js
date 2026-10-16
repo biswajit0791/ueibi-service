@@ -206,6 +206,10 @@ export const taskCommentAttachmentQuerySchema = z.object({
   download: z.enum(['true', 'false']).optional(),
 });
 
+export const managerTaskRatingSchema = z.object({
+  rating: z.coerce.number().int().min(1).max(5),
+  notes: z.string().trim().max(1000).nullable().optional(),
+}).strict();
 
 /**
  * A manager's adjustment to the credit earned for a task.

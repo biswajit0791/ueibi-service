@@ -3039,6 +3039,36 @@ const options = {
           },
         },
       },
+      '/tasks/{id}/manager-rating': {
+        patch: {
+          tags: ['Tasks'],
+          summary: 'Rate a completed task as its goal owner',
+          operationId: 'rateGoalTask',
+          security: [{ userCookie: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['rating'],
+                  properties: {
+                    rating: { type: 'integer', minimum: 1, maximum: 5 },
+                    notes: { type: 'string', maxLength: 1000, nullable: true },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: 'Task rating saved' },
+            400: { description: 'Invalid rating or task' },
+            403: { description: 'Only the goal owner may rate this task' },
+            409: { description: 'Task or goal is not ready for rating' },
+          },
+        },
+      },
       '/tasks/{id}/comments': {
         get: {
           tags: ['Tasks'],

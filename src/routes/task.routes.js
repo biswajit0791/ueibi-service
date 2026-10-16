@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { createTask, listTasks, updateTaskStatus, updateTask, deleteTask } from '../controllers/task.controller.js';
 import { getTeamWeightage, setTaskFinalWeight, getTeamWeightageSummary } from '../controllers/taskWeightage.controller.js';
+import { rateGoalTask } from '../controllers/taskRating.controller.js';
 import {
   listMilestones, createMilestone, updateMilestone, deleteMilestone, listOverdueMilestones,
   dispatchMilestoneAlertController, getMilestoneLiveStatusSvg,
@@ -15,6 +16,7 @@ router.get('/tasks', requireAuth, requireTenant, listTasks);
 router.patch('/tasks/:id/status', requireAuth, requireTenant, updateTaskStatus);
 router.patch('/tasks/:id', requireAuth, requireTenant, updateTask);
 router.put('/tasks/:id', requireAuth, requireTenant, updateTask);
+router.patch('/tasks/:id/manager-rating', requireAuth, requireTenant, rateGoalTask);
 router.delete('/tasks/:id', requireAuth, requireTenant, deleteTask);
 
 // ── Weightage ledger ───────────────────────────────────────────────────────

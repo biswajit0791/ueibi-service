@@ -674,10 +674,10 @@ export async function ensureDynamicLeaveSystem() {
  * Ensures performance module columns and tables exist idempotently:
  * - goals: ownerManagerId, parentGoalId, managerRating, managerRatingNotes, closedAt, closedById
  * - goal_assignments: managerRating, finalScore
- * - tasks: holdStartedAt, holdReleasedAt, totalHoldDays, onHoldReason, createdOnBehalfOf, requiresApproval, approvedById, approvedAt
+ * - tasks: hold tracking, task approvals, and goal-owner task rating fields
  * - task_milestones: description, progress, extensionDaysRequested, extensionReason
  * - HrSignoffStatus enum: SHARED, CONCERN_RAISED, FINALISED
- * - performance_reviews: workScore, averageManagerRating, hrRating, selfSummary, resultsSharedAt, resultsSharedById, finalisedAt, finalisedById
+ * - performance_reviews: workScore, averageManagerRating, managerTaskRatingSnapshot, hrRating, selfSummary, resultsSharedAt, resultsSharedById, finalisedAt, finalisedById
  * - checkpoint_escalation_levels table
  * - followers table
  * - review_concerns table
@@ -756,6 +756,22 @@ export async function ensurePerformanceColumns() {
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tasks' AND column_name = 'approvedAt') THEN
           ALTER TABLE "tasks" ADD COLUMN "approvedAt" TIMESTAMP(3);
         END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tasks' AND column_name = 'managerRating') THEN
+          ALTER TABLE "tasks" ADD COLUMN "managerRating" DOUBLE PRECISION;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tasks' AND column_name = 'managerRatingNotes') THEN
+          ALTER TABLE "tasks" ADD COLUMN "managerRatingNotes" TEXT;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tasks' AND column_name = 'managerRatedById') THEN
+          ALTER TABLE "tasks" ADD COLUMN "managerRatedById" TEXT;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tasks' AND column_name = 'managerRatedAt') THEN
+          ALTER TABLE "tasks" ADD COLUMN "managerRatedAt" TIMESTAMP(3);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'tasks_managerRatedById_fkey') THEN
+          ALTER TABLE "tasks" ADD CONSTRAINT "tasks_managerRatedById_fkey"
+            FOREIGN KEY ("managerRatedById") REFERENCES "tenant_users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+        END IF;
       END $$;
     `);
 
@@ -803,6 +819,9 @@ export async function ensurePerformanceColumns() {
         END IF;
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'performance_reviews' AND column_name = 'averageManagerRating') THEN
           ALTER TABLE "performance_reviews" ADD COLUMN "averageManagerRating" DOUBLE PRECISION;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'performance_reviews' AND column_name = 'managerTaskRatingSnapshot') THEN
+          ALTER TABLE "performance_reviews" ADD COLUMN "managerTaskRatingSnapshot" JSONB;
         END IF;
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'performance_reviews' AND column_name = 'hrRating') THEN
           ALTER TABLE "performance_reviews" ADD COLUMN "hrRating" DOUBLE PRECISION;
@@ -946,6 +965,5 @@ export async function ensurePerformanceColumns() {
     console.warn('[dbInit] Notice on performance module columns init:', err?.message || err);
   }
 }
-
 
 

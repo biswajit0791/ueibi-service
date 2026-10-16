@@ -600,11 +600,8 @@ export async function createTask(req, res, next) {
       targets.push(target);
     }
 
-    // 7. Create ONE task record inside serialisable transaction.
-    //    The task carries resolvedWeight (single weightage) and links all target assignees
-    //    in assigneeIds, with the primary assignee in employeeId.
+    // 7. Create one task record for its single assigned employee.
     let createdTask;
-    const allTargetIds = targets.map((t) => t.id);
     const primaryTarget = targets[0];
     try {
       createdTask = await withWeightGuard(resolvedGoalId, async (tx) => {
@@ -628,7 +625,7 @@ export async function createTask(req, res, next) {
             createdOnBehalfOf: Boolean(req.body.createdOnBehalfOf),
             requiresApproval: Boolean(req.body.requiresApproval),
             onHoldReason: req.body.onHoldReason || null,
-            assigneeIds: allTargetIds,
+            assigneeIds: [primaryTarget.id],
             // A task created already in progress has actually started now,
             // unless the caller recorded when it really began.
             ...actualDates.data,
