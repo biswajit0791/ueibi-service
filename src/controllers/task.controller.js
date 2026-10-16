@@ -296,11 +296,23 @@ export async function createTask(req, res, next) {
     }
     const {
       title, priority, startDate, dueDate, financialYear,
-      tags, goalId, isPrivate, isStandalone, weight,
+      tags, goalId, isPrivate, isStandalone, workflowType, taskMode, weight,
       description, employeeId, employeeIds, dependency, isDependencyOf,
       status, progress, actualStartDate, actualCompletionDate,
       isMilestoneTracked,
     } = parsed.data;
+
+    // Normal vs Special Task Workflow Security & Validation
+    const isNormalWorkflow = workflowType === 'normal' || taskMode === 'normal';
+    if (isNormalWorkflow && (isStandalone === true || isPrivate === true)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Special task flags (standalone or private) cannot be configured through the normal task creation workflow.',
+      });
+    }
+
+    const effectiveIsStandalone = isNormalWorkflow ? false : Boolean(isStandalone);
+    const effectiveIsPrivate = isNormalWorkflow ? false : Boolean(isPrivate);
 
     // 2b. Milestone tracking is an opt-in for critical work only, and only a
     //     MANAGER or above may turn it on — matches who is allowed to add the
@@ -413,10 +425,28 @@ export async function createTask(req, res, next) {
       });
     }
 
+    // Special Task Security & Ownership Check
+    if (effectiveIsPrivate && targetEmployeeIds[0] !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        message: 'Private tasks can only be created for yourself.',
+      });
+    }
+
+    if (effectiveIsStandalone) {
+      const callerRole = String(req.user.role || '').toUpperCase();
+      if (callerRole === 'EMPLOYEE' && targetEmployeeIds[0] !== req.user.id) {
+        return res.status(403).json({
+          success: false,
+          message: 'Employees can only create standalone tasks for themselves.',
+        });
+      }
+    }
+
     // 5. Validate goal tenant scope (if goalId provided)
     let resolvedGoal = null;
     let resolvedGoalId = null;
-    if (!isStandalone && goalId) {
+    if (!effectiveIsStandalone && goalId) {
       try {
         resolvedGoal = await resolveGoal(goalId, tenantId);
         resolvedGoalId = resolvedGoal?.id || null;
@@ -444,7 +474,7 @@ export async function createTask(req, res, next) {
 
     // 5b. Weightage: Removed for private tasks and unmonitored tasks (Req 8)
     // A task is monitored if it is linked to a goal OR milestone tracked.
-    const isUnmonitoredOrPrivate = Boolean(isPrivate || isStandalone || (!resolvedGoalId && !isMilestoneTracked));
+    const isUnmonitoredOrPrivate = Boolean(effectiveIsPrivate || effectiveIsStandalone || (!resolvedGoalId && !isMilestoneTracked));
     let resolvedWeight;
 
     if (isUnmonitoredOrPrivate) {
@@ -578,8 +608,8 @@ export async function createTask(req, res, next) {
             dueDate: dueDate ? new Date(dueDate) : undefined,
             financialYear: financialYear || null,
             tags: tags || null,
-            isPrivate: isPrivate ?? false,
-            isStandalone: isStandalone ?? false,
+            isPrivate: effectiveIsPrivate,
+            isStandalone: effectiveIsStandalone,
             weight: resolvedWeight,
             description: description || null,
             dependency: dependency || null,
@@ -818,11 +848,19 @@ export async function updateTask(req, res, next) {
     }
     const {
       title, priority, startDate, dueDate, financialYear,
-      tags, goalId, isPrivate, isStandalone, weight,
+      tags, goalId, isPrivate, isStandalone, workflowType, taskMode, weight,
       description, status, progress, dependency, isDependencyOf, employeeId,
       employeeIds, assigneeIds,
       actualStartDate, actualCompletionDate,
     } = parsed.data;
+
+    const isNormalWorkflow = workflowType === 'normal' || taskMode === 'normal';
+    if (isNormalWorkflow && (isStandalone === true || isPrivate === true)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Special task flags (standalone or private) cannot be configured through the normal task workflow.',
+      });
+    }
 
     const resolvedAssigneeIds = Array.isArray(assigneeIds)
       ? assigneeIds
@@ -842,6 +880,16 @@ export async function updateTask(req, res, next) {
       return null;
     });
     if (!existing) return;
+
+    if (isPrivate === true) {
+      const targetEmp = employeeId !== undefined ? employeeId : existing.employeeId;
+      if (targetEmp !== req.user.id && !hasRole(req.user.role, ELEVATED_ROLES)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Private tasks can only be owned by yourself.',
+        });
+      }
+    }
 
     // Date validation on update against effective combined dates
     const effectiveStartDate = startDate !== undefined ? startDate : existing.startDate;

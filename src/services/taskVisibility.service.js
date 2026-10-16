@@ -79,6 +79,17 @@ export async function visibleTaskWhere({ user, tenantId, employeeId, fy }) {
       { assigneeIds: { hasSome: allowedIdList } },
       { isDependencyOf: { in: visibleParents.map((t) => t.id) } },
     ];
+    // Private tasks of other team members must be excluded from manager queries
+    where.AND = [
+      ...(where.AND || []),
+      {
+        OR: [
+          { isPrivate: false },
+          { employeeId: user.id },
+          { assigneeIds: { has: user.id } },
+        ],
+      },
+    ];
     return { where };
   }
 
