@@ -258,6 +258,7 @@ model TenantUser {
   assignedGoalRecords        GoalAssignment[]         @relation("AssignedGoals")
   tasks                      Task[]
   tasksApproved              Task[]                   @relation("TaskApprovedBy")
+  tasksManagerRated          Task[]                   @relation("TaskManagerRater")
   assignedEscalations        CheckpointEscalationLevel[] @relation("EscalationAssignedTo")
   userFollowers              Follower[]               @relation("UserFollowers")
   hrSharedReviews            PerformanceReview[]      @relation("HrSharedBy")
@@ -966,6 +967,11 @@ model Task {
   weightAdjustedBy    TenantUser? @relation("TaskWeightAdjustedBy", fields: [weightAdjustedById], references: [id], onDelete: SetNull)
   weightAdjustedAt    DateTime?
   weightAdjustReason  String?     @db.Text
+  managerRating       Float?
+  managerRatingNotes  String?     @db.Text
+  managerRatedById    String?
+  managerRatedBy      TenantUser? @relation("TaskManagerRater", fields: [managerRatedById], references: [id], onDelete: SetNull)
+  managerRatedAt      DateTime?
   employeeId     String
   employee       TenantUser     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   assigneeIds    String[]       @default([])
@@ -1084,7 +1090,7 @@ model TaskAuditLog {
   task          Task       @relation(fields: [taskId], references: [id], onDelete: Cascade)
   performedById String
   performedBy   TenantUser @relation("TaskAuditPerformer", fields: [performedById], references: [id])
-  action        String // created | status_changed | edited | progress_update | dependency_created | escalated | approved | deleted
+  action        String // created | status_changed | edited | progress_update | dependency_created | escalated | approved | manager_rated | deleted
   details       String?    @db.Text
   previousValue Json?
   createdAt     DateTime   @default(now())
@@ -1495,6 +1501,7 @@ model PerformanceReview {
   hrSignedOffAt       DateTime?
   workScore            Float?
   averageManagerRating Float?
+  managerTaskRatingSnapshot Json?
   hrRating             Float?
   resultsSharedAt      DateTime?
   resultsSharedById    String?

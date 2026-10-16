@@ -873,6 +873,74 @@ export async function updateParameter(req, res, next) {
 // PHASE 3: SELF ASSESSMENT (EMPLOYEE)
 // ─────────────────────────────────────────────────────────────────────────────
 
+const TASK_RATING_FREQUENCIES = new Set(['MONTHLY', 'QUARTERLY']);
+
+async function getManagerTaskRatingSummary(tenantId, employeeId, cycle) {
+  const frequency = String(cycle?.frequency || '').toUpperCase();
+  if (!TASK_RATING_FREQUENCIES.has(frequency)) return null;
+
+  const startDate = new Date(cycle.startDate);
+  const endDate = new Date(cycle.endDate);
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+    throw new Error(`Appraisal cycle ${cycle.id} has invalid dates`);
+  }
+
+  const tasks = await prisma.task.findMany({
+    where: {
+      tenantId,
+      employeeId,
+      goalId: { not: null },
+      managerRating: { not: null },
+      AND: [
+        { OR: [{ status: { in: ['done', 'completed'] } }, { progress: 100 }] },
+        {
+          OR: [
+            { actualCompletionDate: { gte: startDate, lte: endDate } },
+            {
+              actualCompletionDate: null,
+              managerRatedAt: { gte: startDate, lte: endDate },
+            },
+          ],
+        },
+      ],
+    },
+    select: {
+      id: true,
+      title: true,
+      goalId: true,
+      managerRating: true,
+      managerRatingNotes: true,
+      managerRatedAt: true,
+      managerRatedBy: { select: { id: true, name: true } },
+      goal: { select: { title: true } },
+    },
+    orderBy: [{ managerRatedAt: 'asc' }, { createdAt: 'asc' }],
+  });
+
+  const ratedTasks = tasks.map((task) => ({
+    taskId: task.id,
+    taskTitle: task.title,
+    goalId: task.goalId,
+    goalTitle: task.goal?.title || 'Goal',
+    rating: Number(task.managerRating),
+    notes: task.managerRatingNotes,
+    ratedAt: task.managerRatedAt,
+    ratedBy: task.managerRatedBy?.name || null,
+  }));
+  const averageRating = ratedTasks.length > 0
+    ? Number((ratedTasks.reduce((sum, task) => sum + task.rating, 0) / ratedTasks.length).toFixed(2))
+    : null;
+
+  return {
+    frequency,
+    cycleId: cycle.id,
+    cycleName: cycle.name,
+    averageRating,
+    taskCount: ratedTasks.length,
+    tasks: ratedTasks,
+  };
+}
+
 export async function getMyReview(req, res, next) {
   try {
     const parsedQuery = activeCycleQuerySchema.safeParse(req.query);
@@ -909,9 +977,14 @@ export async function getMyReview(req, res, next) {
       where: { cycleId, isActive: true },
       orderBy: { order: 'asc' },
     });
+    const managerTaskRatingSummary = await getManagerTaskRatingSummary(
+      req.tenantId,
+      req.user.id,
+      activeCycle,
+    );
 
     res.json({
-      review,
+      review: { ...review, managerTaskRatingSummary },
       activeParameters,
       cycle: activeCycle,
     });
@@ -936,7 +1009,7 @@ export async function updateSelfAssessment(req, res, next) {
 
     const review = await prisma.performanceReview.findUnique({
       where: { id },
-      include: { employee: true },
+      include: { employee: true, cycle: true },
     });
 
     if (!review || review.employee.tenantId !== req.tenantId) {
@@ -950,6 +1023,10 @@ export async function updateSelfAssessment(req, res, next) {
     if (SELF_LOCKED_STATUSES.includes(review.status) || review.hrSignoffStatus === 'RELEASED') {
       return res.status(409).json({ error: 'Your self-assessment is locked because it has already been reviewed.' });
     }
+
+    const taskRatingSummary = submit
+      ? await getManagerTaskRatingSummary(req.tenantId, review.employeeId, review.cycle)
+      : null;
 
     // Upsert scores if provided
     let totalScore = 0;
@@ -990,6 +1067,13 @@ export async function updateSelfAssessment(req, res, next) {
         ...(selfAccomplishments !== undefined && { selfAccomplishments }),
         ...(selfWeaknesses !== undefined && { selfWeaknesses }),
         ...(scoreCount > 0 && { selfRating: parseFloat(avgRating) }),
+        ...(taskRatingSummary && {
+          managerTaskRatingSnapshot: {
+            ...taskRatingSummary,
+            snapshotAt: new Date().toISOString(),
+          },
+          averageManagerRating: taskRatingSummary.averageRating,
+        }),
         ...(submit && {
           status: 'SUBMITTED',
           selfSubmittedAt: new Date(),
@@ -1088,7 +1172,18 @@ export async function getMyGoals(req, res, next) {
           where: { employeeId: targetEmpId },
         },
         tasks: {
-          select: { id: true, title: true, status: true, priority: true, dueDate: true, employeeId: true },
+          select: {
+            id: true,
+            title: true,
+            status: true,
+            priority: true,
+            dueDate: true,
+            employeeId: true,
+            managerRating: true,
+            managerRatingNotes: true,
+            managerRatedAt: true,
+            managerRatedBy: { select: { id: true, name: true } },
+          },
         },
         employee: {
           select: { id: true, name: true, email: true, department: true, designation: true },
@@ -2444,6 +2539,10 @@ export async function submitSelfRating(req, res, next) {
       return res.status(409).json({ error: 'Your self-assessment is locked because it has already been reviewed.' });
     }
 
+    const taskRatingSummary = submit
+      ? await getManagerTaskRatingSummary(req.tenantId, req.user.id, activeCycle)
+      : null;
+
     let totalScore = 0;
     let scoreCount = 0;
 
@@ -2484,6 +2583,13 @@ export async function submitSelfRating(req, res, next) {
         ...(selfAccomplishments !== undefined && { selfAccomplishments }),
         ...(selfWeaknesses !== undefined && { selfWeaknesses }),
         ...(finalRating !== undefined && finalRating !== null && { selfRating: finalRating }),
+        ...(taskRatingSummary && {
+          managerTaskRatingSnapshot: {
+            ...taskRatingSummary,
+            snapshotAt: new Date().toISOString(),
+          },
+          averageManagerRating: taskRatingSummary.averageRating,
+        }),
         ...(submit && {
           status: 'SUBMITTED',
           selfSubmittedAt: new Date(),
@@ -2735,19 +2841,23 @@ export async function shareReviewResults(req, res, next) {
     // Calculate averageManagerRating automatically if not manually provided
     let calculatedAvgManagerRating = manualAvgRating !== undefined ? Number(manualAvgRating) : review.averageManagerRating;
     if (calculatedAvgManagerRating === null || calculatedAvgManagerRating === undefined) {
-      const goalsWithRating = await prisma.goal.findMany({
-        where: {
-          tenantId: req.tenantId,
-          employeeId: review.employeeId,
-          managerRating: { not: null },
-        },
-        select: { managerRating: true },
-      });
-      if (goalsWithRating.length > 0) {
-        const sum = goalsWithRating.reduce((acc, g) => acc + (g.managerRating || 0), 0);
-        calculatedAvgManagerRating = Number((sum / goalsWithRating.length).toFixed(1));
-      } else if (review.managerRating) {
-        calculatedAvgManagerRating = Number(review.managerRating);
+      if (TASK_RATING_FREQUENCIES.has(String(review.reviewType || '').toUpperCase())) {
+        calculatedAvgManagerRating = review.managerTaskRatingSnapshot?.averageRating ?? null;
+      } else {
+        const goalsWithRating = await prisma.goal.findMany({
+          where: {
+            tenantId: req.tenantId,
+            employeeId: review.employeeId,
+            managerRating: { not: null },
+          },
+          select: { managerRating: true },
+        });
+        if (goalsWithRating.length > 0) {
+          const sum = goalsWithRating.reduce((acc, g) => acc + (g.managerRating || 0), 0);
+          calculatedAvgManagerRating = Number((sum / goalsWithRating.length).toFixed(1));
+        } else if (review.managerRating) {
+          calculatedAvgManagerRating = Number(review.managerRating);
+        }
       }
     }
 
@@ -3073,5 +3183,3 @@ export async function finaliseReview(req, res, next) {
     next(err);
   }
 }
-
-
