@@ -783,6 +783,26 @@ export class GoalService {
     const reviewedEmpIds = this.resolveReviewTargets(goal, targetEmployeeId, reviewable, 'manager review');
     const newStatus = isApprove ? GOAL_STATUS.PENDING_HR_REVIEW : GOAL_STATUS.CHANGES_REQUESTED;
 
+    if (isApprove) {
+      const completedTasks = goal.tasks.filter((task) => {
+        if (!reviewedEmpIds.includes(task.employeeId) || task.isStandalone || task.isPrivate) return false;
+        const taskStatus = String(task.status || '').toLowerCase();
+        return ['done', 'completed'].includes(taskStatus) || Number(task.progress) >= 100;
+      });
+      const unratedTasks = completedTasks.filter((task) =>
+        task.managerRating === null
+        || task.managerRating === undefined
+        || task.managerRatedById !== goal.ownerManagerId
+      );
+
+      if (unratedTasks.length > 0) {
+        throw {
+          status: 409,
+          message: `Rate all ${unratedTasks.length} completed task${unratedTasks.length === 1 ? '' : 's'} as the goal owner before approving.`,
+        };
+      }
+    }
+
     if (reviewedEmpIds.length > 0) {
       try {
         const assignmentUpdateData = { status: newStatus };
