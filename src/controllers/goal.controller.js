@@ -1777,3 +1777,26 @@ export async function resubmitGoal(req, res, next) {
   }
 }
 
+/**
+ * POST /goals/escalations/sweep
+ *
+ * Triggers an immediate SLA check & role hierarchy escalation sweep for overdue manager reviews.
+ * Accessible to elevated roles (HR/Admin/Super Admin/CMD).
+ */
+export async function triggerGoalEscalationSweep(req, res, next) {
+  try {
+    const isElevated = hasRole(req.user.role, ELEVATED_ROLES);
+    if (!isElevated) {
+      return res.status(403).json({ error: 'Access forbidden: only elevated roles (HR/Admin) can trigger escalation sweeps' });
+    }
+    const { checkOverdueGoalApprovalsAndEscalate } = await import('../services/goalEscalation.service.js');
+    const result = await checkOverdueGoalApprovalsAndEscalate();
+    res.json({ success: true, ...result });
+  } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    next(err);
+  }
+}
+

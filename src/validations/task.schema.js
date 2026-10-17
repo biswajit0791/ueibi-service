@@ -3,8 +3,8 @@ import { TASK_STATUSES } from '../lib/workflowStatus.js';
 
 const taskStatusSchema = z.enum(TASK_STATUSES);
 const weightSchema = z.preprocess(
-  (v) => (v !== undefined && v !== null && v !== '' ? Number(v) : v),
-  z.number().int().min(1, 'Weight must be at least 1').max(100, 'Weight cannot exceed 100').nullable().optional()
+  (v) => (v === undefined || v === null || v === '' ? undefined : Number(v)),
+  z.number().int().min(0, 'Weight cannot be negative').max(100, 'Weight cannot exceed 100').nullable().optional()
 );
 /**
  * Task completion, 0-100.
@@ -16,7 +16,7 @@ const weightSchema = z.preprocess(
  */
 const progressSchema = z.preprocess(
   (v) => {
-    if (v === undefined || v === null || v === '') return v;
+    if (v === undefined || v === null || v === '') return undefined;
     const n = Number(v);
     return Number.isNaN(n) ? n : Math.round(Math.min(100, Math.max(0, n)));
   },
@@ -25,6 +25,7 @@ const progressSchema = z.preprocess(
 
 export const dependencySchema = z.preprocess(
   (val) => {
+    if (val === null || val === undefined || val === '') return null;
     if (typeof val === 'string') {
       try {
         return JSON.parse(val);
@@ -55,7 +56,7 @@ export const dependencySchema = z.preprocess(
     escalated: z.boolean().nullable().optional(),
     isManuallyHeldByOwnManager: z.boolean().nullable().optional(),
     manualHoldRequested: z.boolean().nullable().optional(),
-  }).passthrough()
+  }).passthrough().nullable().optional()
 );
 
 export const createTaskSchema = z.object({
