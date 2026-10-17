@@ -5,8 +5,6 @@ import { taskIdParamSchema, managerTaskRatingSchema } from '../validations/task.
 const RATEABLE_GOAL_STATUSES = new Set([
   'PENDING_MANAGER_REVIEW',
   'SUBMITTED',
-  'UNDER_REVIEW',
-  'PENDING_HR_REVIEW',
 ]);
 
 export async function rateGoalTask(req, res, next) {
