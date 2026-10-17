@@ -634,18 +634,13 @@ export class GoalService {
     );
     const newStatus = requiresManagerReview ? GOAL_STATUS.PENDING_MANAGER_REVIEW : GOAL_STATUS.PENDING_HR_REVIEW;
 
-    // Update assignment status independently
-    try {
-      await prisma.goalAssignment.updateMany({
-        where: { goalId, employeeId: targetEmpId },
-        data: {
-          status: newStatus,
-          progress: 100,
-        },
-      });
-    } catch (err) {
-      console.warn('[GoalService] Notice updating goal assignment on submit:', err.message);
-    }
+    await prisma.goalAssignment.updateMany({
+      where: { goalId, employeeId: targetEmpId },
+      data: {
+        status: newStatus,
+        progress: 100,
+      },
+    });
 
     // Only this assignee submitted. Roll the parent up rather than declaring the
     // whole goal submitted on their behalf.
@@ -792,7 +787,6 @@ export class GoalService {
       const unratedTasks = completedTasks.filter((task) =>
         task.managerRating === null
         || task.managerRating === undefined
-        || task.managerRatedById !== goal.ownerManagerId
       );
 
       if (unratedTasks.length > 0) {
@@ -803,19 +797,27 @@ export class GoalService {
       }
     }
 
+    if (isApprove && reviewedEmpIds.length > 0) {
+      await prisma.task.updateMany({
+        where: {
+          goalId,
+          employeeId: { in: reviewedEmpIds },
+          progress: 100,
+          status: { in: ['todo', 'in_progress', 'in_review', 'completed'] },
+        },
+        data: { status: 'done' },
+      });
+    }
+
     if (reviewedEmpIds.length > 0) {
-      try {
-        const assignmentUpdateData = { status: newStatus };
-        if (rating !== undefined && rating !== null) {
-          assignmentUpdateData.managerRating = Number(rating);
-        }
-        await prisma.goalAssignment.updateMany({
-          where: { goalId, employeeId: { in: reviewedEmpIds } },
-          data: assignmentUpdateData,
-        });
-      } catch (err) {
-        console.warn('[GoalService] Notice updating goal assignment on manager review:', err.message);
+      const assignmentUpdateData = { status: newStatus };
+      if (rating !== undefined && rating !== null) {
+        assignmentUpdateData.managerRating = Number(rating);
       }
+      await prisma.goalAssignment.updateMany({
+        where: { goalId, employeeId: { in: reviewedEmpIds } },
+        data: assignmentUpdateData,
+      });
     }
 
     const parentData = await this.rolledUpParentData(goalId, newStatus, goal.progress);
@@ -940,18 +942,26 @@ export class GoalService {
     const newStatus = isApprove ? GOAL_STATUS.COMPLETED : GOAL_STATUS.CHANGES_REQUESTED;
 
     if (reviewedEmpIds.length > 0) {
-      try {
-        const assignmentData = isApprove ? { status: newStatus, progress: 100 } : { status: newStatus };
-        if (isApprove && rating !== undefined && rating !== null) {
-          assignmentData.finalScore = Number(rating);
-        }
-        await prisma.goalAssignment.updateMany({
-          where: { goalId, employeeId: { in: reviewedEmpIds } },
-          data: assignmentData,
+      if (isApprove) {
+        await prisma.task.updateMany({
+          where: {
+            goalId,
+            employeeId: { in: reviewedEmpIds },
+            progress: 100,
+            status: { in: ['todo', 'in_progress', 'in_review', 'completed'] },
+          },
+          data: { status: 'done' },
         });
-      } catch (err) {
-        console.warn('[GoalService] Notice updating goal assignment on HR review:', err.message);
       }
+
+      const assignmentData = isApprove ? { status: newStatus, progress: 100 } : { status: newStatus };
+      if (isApprove && rating !== undefined && rating !== null) {
+        assignmentData.finalScore = Number(rating);
+      }
+      await prisma.goalAssignment.updateMany({
+        where: { goalId, employeeId: { in: reviewedEmpIds } },
+        data: assignmentData,
+      });
     }
 
     // The goal only becomes COMPLETED once every assignee is signed off; an
@@ -1077,15 +1087,10 @@ export class GoalService {
       ? GOAL_STATUS.PENDING_APPROVAL
       : (hasManager ? GOAL_STATUS.PENDING_MANAGER_REVIEW : GOAL_STATUS.PENDING_HR_REVIEW);
 
-    // Update assignment status independently
-    try {
-      await prisma.goalAssignment.updateMany({
-        where: { goalId, employeeId: user.id },
-        data: { status: newStatus },
-      });
-    } catch (err) {
-      console.warn('[GoalService] Notice updating goal assignment on resubmit:', err.message);
-    }
+    await prisma.goalAssignment.updateMany({
+      where: { goalId, employeeId: user.id },
+      data: { status: newStatus },
+    });
 
     const parentData = await this.rolledUpParentData(goalId, newStatus, goal.progress);
 
