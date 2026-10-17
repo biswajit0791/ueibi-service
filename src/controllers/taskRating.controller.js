@@ -5,6 +5,8 @@ import { taskIdParamSchema, managerTaskRatingSchema } from '../validations/task.
 const RATEABLE_GOAL_STATUSES = new Set([
   'PENDING_MANAGER_REVIEW',
   'SUBMITTED',
+  'ACTIVE',
+  'UNDER_REVIEW',
 ]);
 
 export async function rateGoalTask(req, res, next) {
@@ -32,8 +34,15 @@ export async function rateGoalTask(req, res, next) {
     if (!task.goal || task.isStandalone || task.isPrivate) {
       return res.status(400).json({ error: 'Only tasks linked to a goal can be rated' });
     }
-    if (task.goal.ownerManagerId !== req.user.id) {
-      return res.status(403).json({ error: 'Only this goal’s owner can rate its tasks' });
+    const userRole = String(req.user.role || '').toUpperCase();
+    const isElevated = ['MANAGER', 'HR', 'ADMIN', 'SUPER_ADMIN', 'CMD', 'DIRECTOR', 'LEADERSHIP'].includes(userRole);
+    const isGoalOwner = Boolean(
+      (task.goal.ownerManagerId && task.goal.ownerManagerId === req.user.id) ||
+      (task.goal.ownerId && task.goal.ownerId === req.user.id) ||
+      (!task.goal.ownerManagerId && !task.goal.ownerId && isElevated)
+    );
+    if (!isGoalOwner) {
+      return res.status(403).json({ error: 'Only this goal’s owner or manager can rate its tasks' });
     }
     if (task.employeeId === req.user.id) {
       return res.status(403).json({ error: 'You cannot rate your own task' });
@@ -47,12 +56,20 @@ export async function rateGoalTask(req, res, next) {
     const reviewStatus = String(assignment?.status || task.goal.status || '').toUpperCase();
     if (!RATEABLE_GOAL_STATUSES.has(reviewStatus)) {
       return res.status(409).json({
-        error: 'Task ratings are available after the completed goal is submitted for manager review',
+        error: 'Task ratings are available for completed tasks while the goal is active or under manager review',
       });
     }
 
     const { rating, notes } = parsedBody.data;
     const updated = await prisma.$transaction(async (tx) => {
+      // If legacy goal had no ownerManagerId, backfill it so future checks align
+      if (!task.goal.ownerManagerId) {
+        await tx.goal.update({
+          where: { id: task.goal.id },
+          data: { ownerManagerId: req.user.id },
+        });
+      }
+
       const ratedTask = await tx.task.update({
         where: { id: task.id },
         data: {

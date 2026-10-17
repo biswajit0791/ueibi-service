@@ -2482,12 +2482,23 @@ export async function getReviewById(req, res, next) {
       ? (hrScores.reduce((acc, s) => acc + s.hrScore, 0) / hrScores.length).toFixed(1)
       : null;
 
+    let taskRatingSummary = review.managerTaskRatingSnapshot || null;
+    if (!taskRatingSummary && review.cycle) {
+      try {
+        taskRatingSummary = await getManagerTaskRatingSummary(req.tenantId, review.employeeId, review.cycle);
+      } catch (_) {
+        taskRatingSummary = null;
+      }
+    }
+
     res.json({
       review: {
         ...review,
         averageSelfScore: avgSelf,
         averageManagerScore: avgMgr,
         averageHrScore: avgHr,
+        managerTaskRatingSummary: taskRatingSummary,
+        managerTaskRatingSnapshot: taskRatingSummary || review.managerTaskRatingSnapshot,
       },
     });
   } catch (err) {

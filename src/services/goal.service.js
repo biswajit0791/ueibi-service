@@ -850,13 +850,13 @@ export class GoalService {
       const unratedTasks = completedTasks.filter((task) =>
         task.managerRating === null
         || task.managerRating === undefined
-        || task.managerRatedById !== goal.ownerManagerId
+        || (goal.ownerManagerId && task.managerRatedById && task.managerRatedById !== goal.ownerManagerId && task.managerRatedById !== user.id)
       );
 
       if (unratedTasks.length > 0) {
         throw {
           status: 409,
-          message: `Rate all ${unratedTasks.length} completed task${unratedTasks.length === 1 ? '' : 's'} as the goal owner before approving.`,
+          message: `Rate all ${unratedTasks.length} completed task${unratedTasks.length === 1 ? '' : 's'} before approving.`,
         };
       }
     }
