@@ -649,7 +649,7 @@ export async function createTask(req, res, next) {
     // 8. Side effects, once the row is safely committed.
     let goalProgress = 0;
     if (resolvedGoalId) {
-      for (const empId of allTargetIds) {
+      for (const empId of targetEmployeeIds) {
         goalProgress = await recalculateGoalProgress(resolvedGoalId, empId);
       }
     }
