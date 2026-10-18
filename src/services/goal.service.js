@@ -802,8 +802,10 @@ export class GoalService {
 
     // If caller is NOT elevated, they cannot self-approve their own assignment.
     // Filter caller out so managers can approve their downline assignees on shared team goals.
+    // A MANAGER is the exception: their own submission is forwarded to HR by them.
+    const isCallerManager = String(user.role || '').toUpperCase() === 'MANAGER';
     let reviewedEmpIds = rawTargets;
-    if (!isElevated && rawTargets.includes(user.id)) {
+    if (!isElevated && !isCallerManager && rawTargets.includes(user.id)) {
       if (rawTargets.length === 1 && rawTargets[0] === user.id) {
         throw { status: 403, message: 'You cannot review your own goal submission as manager. An elevated role or your reporting manager must review it.' };
       }
@@ -816,13 +818,12 @@ export class GoalService {
 
     // Check manager authorization for the employees being reviewed
     if (!isElevated && !createdByCaller) {
-      const isCallerManager = String(user.role || '').toUpperCase() === 'MANAGER';
       let anyAuthorized = false;
 
       for (const targetEmpId of reviewedEmpIds) {
         const isAssignedByCaller = goal.assignments?.some((a) => a.employeeId === targetEmpId && a.assignedById === user.id);
         const isReportingManager = await this.isSubordinate(user.id, targetEmpId, tenantId);
-        const isManagerReviewingOther = isCallerManager && targetEmpId !== user.id;
+        const isManagerReviewingOther = isCallerManager;
 
         if (isAssignedByCaller || isReportingManager || isManagerReviewingOther) {
           anyAuthorized = true;
@@ -839,6 +840,8 @@ export class GoalService {
     if (isApprove) {
       const completedTasks = goal.tasks.filter((task) => {
         if (!reviewedEmpIds.includes(task.employeeId) || task.isStandalone || task.isPrivate) return false;
+        // Nobody can rate their own task, so a self-review has nothing to rate.
+        if (task.employeeId === user.id) return false;
         const taskStatus = String(task.status || '').toLowerCase();
         return ['done', 'completed'].includes(taskStatus) || Number(task.progress) >= 100;
       });
