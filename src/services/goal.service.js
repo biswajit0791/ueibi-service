@@ -806,13 +806,12 @@ export class GoalService {
       || (!goal.createdById && goal.createdBy && goal.createdBy === user.name);
 
     // If caller is NOT elevated, they cannot self-approve their own assignment.
-    // Filter caller out so managers can approve their downline assignees on shared team goals.
-    // A MANAGER is the exception: their own submission is forwarded to HR by them.
-    const isCallerManager = String(user.role || '').toUpperCase() === 'MANAGER';
+    // Filter caller out so managers can approve their downline assignees on shared team goals,
+    // while their own assignment requires sign-off from their reporting manager or HR/Admin.
     let reviewedEmpIds = rawTargets;
-    if (!isElevated && !isCallerManager && rawTargets.includes(user.id)) {
+    if (!isElevated && rawTargets.includes(user.id)) {
       if (rawTargets.length === 1 && rawTargets[0] === user.id) {
-        throw { status: 403, message: 'You cannot review your own goal submission as manager. An elevated role or your reporting manager must review it.' };
+        throw { status: 403, message: 'You cannot review or approve your own goal submission. An elevated role (HR/Admin) or your reporting manager must review it.' };
       }
       reviewedEmpIds = rawTargets.filter((id) => id !== user.id);
     }
