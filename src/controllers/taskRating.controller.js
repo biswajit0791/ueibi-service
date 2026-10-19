@@ -7,6 +7,7 @@ const RATEABLE_GOAL_STATUSES = new Set([
   'SUBMITTED',
   'ACTIVE',
   'UNDER_REVIEW',
+  'COMPLETED',
 ]);
 
 export async function rateGoalTask(req, res, next) {
@@ -36,13 +37,13 @@ export async function rateGoalTask(req, res, next) {
     }
     const userRole = String(req.user.role || '').toUpperCase();
     const isElevated = ['MANAGER', 'HR', 'ADMIN', 'SUPER_ADMIN', 'CMD', 'DIRECTOR', 'LEADERSHIP'].includes(userRole);
-    const isGoalOwner = Boolean(
+    const isGoalOwnerOrManager = Boolean(
       (task.goal.ownerManagerId && task.goal.ownerManagerId === req.user.id) ||
       (task.goal.ownerId && task.goal.ownerId === req.user.id) ||
-      (!task.goal.ownerManagerId && !task.goal.ownerId && isElevated)
+      isElevated
     );
-    if (!isGoalOwner) {
-      return res.status(403).json({ error: 'Only this goal’s owner or manager can rate its tasks' });
+    if (!isGoalOwnerOrManager) {
+      return res.status(403).json({ error: 'Only a manager, goal owner, or HR can rate tasks' });
     }
     if (task.employeeId === req.user.id) {
       return res.status(403).json({ error: 'You cannot rate your own task' });

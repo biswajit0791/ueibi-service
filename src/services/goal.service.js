@@ -579,9 +579,19 @@ export class GoalService {
     const userAssignment = goal.assignments?.find(a => a.employeeId === user.id);
     const isAssignee = goal.employeeId === user.id || Boolean(userAssignment);
     const isElevated = hasRole(user.role, ELEVATED_ROLES);
+    const isGoalOwner = Boolean(
+      (goal.ownerManagerId && goal.ownerManagerId === user.id) ||
+      (goal.ownerId && goal.ownerId === user.id)
+    );
+    const isManagerRole = String(user.role || '').toUpperCase() === 'MANAGER';
+    let isManagerOfAssignee = false;
+    if (isManagerRole) {
+      if (goal.employeeId && await this.isSubordinate(user.id, goal.employeeId, tenantId)) isManagerOfAssignee = true;
+      if (userAssignment?.employeeId && await this.isSubordinate(user.id, userAssignment.employeeId, tenantId)) isManagerOfAssignee = true;
+    }
 
-    if (!isAssignee && !isElevated) {
-      throw { status: 403, message: 'Access forbidden: only the goal assignee can submit this goal for review' };
+    if (!isAssignee && !isElevated && !isGoalOwner && !isManagerRole && !isManagerOfAssignee) {
+      throw { status: 403, message: 'Access forbidden: only the goal assignee, goal owner, or manager can submit this goal for review' };
     }
 
     // PENDING_APPROVAL goals cannot be submitted — must be activated first
@@ -622,18 +632,13 @@ export class GoalService {
     }
 
     const targetUser = userAssignment?.employee || goal.assignments?.find(a => a.employeeId === targetEmpId)?.employee || goal.employee;
-    const hasManager = Boolean(targetUser?.managerId);
     const tenantManagers = await prisma.tenantUser.findMany({
       where: { tenantId, role: 'MANAGER', status: 'ACTIVE', isDeleted: false },
       select: { id: true, name: true },
     });
 
-    // AUTO_APPROVE goals skip manager review entirely — go straight to HR
-    const isAutoApprove = goal.approvalMode === 'AUTO_APPROVE';
-    const requiresManagerReview = !isAutoApprove && (
-      hasManager || (tenantManagers.length > 0 && String(user.role || '').toUpperCase() !== 'MANAGER')
-    );
-    const newStatus = requiresManagerReview ? GOAL_STATUS.PENDING_MANAGER_REVIEW : GOAL_STATUS.PENDING_HR_REVIEW;
+    // All completed employee submissions route to Level 1: PENDING_MANAGER_REVIEW
+    const newStatus = GOAL_STATUS.PENDING_MANAGER_REVIEW;
 
     await prisma.goalAssignment.updateMany({
       where: { goalId, employeeId: targetEmpId },
@@ -835,7 +840,7 @@ export class GoalService {
         throw { status: 403, message: 'Access forbidden: you are not authorized to review this goal as manager' };
       }
     }
-    const newStatus = isApprove ? GOAL_STATUS.PENDING_HR_REVIEW : GOAL_STATUS.CHANGES_REQUESTED;
+    const newStatus = isApprove ? GOAL_STATUS.COMPLETED : GOAL_STATUS.CHANGES_REQUESTED;
 
     if (isApprove) {
       const completedTasks = goal.tasks.filter((task) => {
@@ -846,9 +851,7 @@ export class GoalService {
         return ['done', 'completed'].includes(taskStatus) || Number(task.progress) >= 100;
       });
       const unratedTasks = completedTasks.filter((task) =>
-        task.managerRating === null
-        || task.managerRating === undefined
-        || (goal.ownerManagerId && task.managerRatedById && task.managerRatedById !== goal.ownerManagerId && task.managerRatedById !== user.id)
+        task.managerRating === null || task.managerRating === undefined
       );
 
       if (unratedTasks.length > 0) {
@@ -872,7 +875,9 @@ export class GoalService {
     }
 
     if (reviewedEmpIds.length > 0) {
-      const assignmentUpdateData = { status: newStatus };
+      const assignmentUpdateData = isApprove
+        ? { status: newStatus, progress: 100 }
+        : { status: newStatus };
       if (rating !== undefined && rating !== null) {
         assignmentUpdateData.managerRating = Number(rating);
       }
@@ -882,12 +887,16 @@ export class GoalService {
       });
     }
 
-    const parentData = await this.rolledUpParentData(goalId, newStatus, goal.progress);
+    const parentData = await this.rolledUpParentData(goalId, newStatus, isApprove ? 100 : goal.progress);
 
     const goalUpdateData = {
       ...parentData,
       specialNotes: comment ? `Manager Note: ${comment}` : goal.specialNotes,
     };
+    if (isApprove) {
+      goalUpdateData.closedAt = new Date();
+      goalUpdateData.closedById = user.id;
+    }
     if (rating !== undefined && rating !== null) {
       goalUpdateData.managerRating = Number(rating);
     }
@@ -918,7 +927,7 @@ export class GoalService {
       performedById: user.id,
       action: isApprove ? 'MANAGER_APPROVED' : 'CHANGES_REQUESTED',
       details: isApprove
-        ? `Manager ${user.name} approved goal.${comment ? ` Remark: "${comment}"` : ''}${rating ? ` Rating: ${rating}/5` : ''}`
+        ? `Manager ${user.name} approved and completed goal.${comment ? ` Remark: "${comment}"` : ''}${rating ? ` Rating: ${rating}/5` : ''}`
         : `Manager ${user.name} requested changes. Reason: "${comment}"`,
       previousValue: { status: goal.status },
     });
@@ -929,9 +938,9 @@ export class GoalService {
         tenantId,
         recipientId: empId,
         type: 'goal_update',
-        title: isApprove ? `Manager Approved: "${goal.title}"` : `Revisions Requested: "${goal.title}"`,
+        title: isApprove ? `Goal Approved & Completed: "${goal.title}"` : `Revisions Requested: "${goal.title}"`,
         body: isApprove
-          ? `Manager ${user.name} approved your goal. It is now awaiting final HR sign-off.`
+          ? `Manager ${user.name} approved your goal and marked it COMPLETED.`
           : `Manager ${user.name} requested revisions: "${comment || 'Please update tasks'}"`,
         entityType: 'goal',
         entityId: goal.id,
@@ -954,7 +963,7 @@ export class GoalService {
       }
     }
 
-    // If Manager Approved → notify HR
+    // If Manager Approved → notify HR for supervisory governance oversight
     if (isApprove) {
       const nameFor = (id) =>
         goal.assignments?.find((a) => a.employeeId === id)?.employee?.name
@@ -972,8 +981,8 @@ export class GoalService {
           tenantId,
           recipientId: hr.id,
           type: 'goal_update',
-          title: `Action Required: HR Final Approval for "${goal.title}"`,
-          body: `Manager ${user.name} approved ${reviewedNames}. Please provide final sign-off.`,
+          title: `Goal Approved by Manager: "${goal.title}"`,
+          body: `Manager ${user.name} approved ${reviewedNames}. Elevated roles have supervisory governance to review or request revisions if needed.`,
           entityType: 'goal',
           entityId: goal.id,
         });
@@ -1015,8 +1024,11 @@ export class GoalService {
       throw { status: 403, message: 'Access forbidden: HR authorization required for final sign-off' };
     }
 
-    const reviewedEmpIds = this.resolveReviewTargets(goal, targetEmployeeId, HR_REVIEWABLE, 'HR sign-off');
     const isApprove = action === 'APPROVE';
+    const reviewableStatuses = isApprove
+      ? ['PENDING_HR_REVIEW', 'PENDING_MANAGER_REVIEW', 'SUBMITTED', 'ACTIVE']
+      : ['PENDING_HR_REVIEW', 'PENDING_MANAGER_REVIEW', 'SUBMITTED', 'COMPLETED'];
+    const reviewedEmpIds = this.resolveReviewTargets(goal, targetEmployeeId, reviewableStatuses, isApprove ? 'HR approval' : 'HR revision request');
     const newStatus = isApprove ? GOAL_STATUS.COMPLETED : GOAL_STATUS.CHANGES_REQUESTED;
 
     if (reviewedEmpIds.length > 0) {
@@ -1053,6 +1065,9 @@ export class GoalService {
     if (isApprove) {
       goalUpdateData.closedAt = new Date();
       goalUpdateData.closedById = user.id;
+    } else {
+      goalUpdateData.closedAt = null;
+      goalUpdateData.closedById = null;
     }
 
     const updated = await prisma.goal.update({
@@ -1073,13 +1088,14 @@ export class GoalService {
       },
     });
 
+    const isDirectManagerBypass = isApprove && (goal.status === GOAL_STATUS.PENDING_MANAGER_REVIEW || goal.status === 'SUBMITTED');
     await this.logAudit({
       goalId,
       performedById: user.id,
       action: isApprove ? 'HR_APPROVED' : 'HR_CHANGES_REQUESTED',
       details: isApprove
-        ? `HR Partner ${user.name} signed off ${reviewedEmpIds.length} assignee(s).${comment ? ` Remarks: "${comment}"` : ''}`
-        : `HR Partner ${user.name} requested changes from ${reviewedEmpIds.length} assignee(s). Reason: "${comment}"`,
+        ? `HR Partner ${user.name} approved ${reviewedEmpIds.length} assignee(s)${isDirectManagerBypass ? ' (Direct Approval - Bypassed Manager Review)' : ''}.${comment ? ` Remarks: "${comment}"` : ''}`
+        : `HR Partner ${user.name} requested changes / vetoed ${reviewedEmpIds.length} assignee(s). Reason: "${comment}"`,
       previousValue: { status: goal.status },
     });
 
@@ -1179,7 +1195,7 @@ export class GoalService {
 
     const newStatus = neverActivated
       ? GOAL_STATUS.PENDING_APPROVAL
-      : (hasManager ? GOAL_STATUS.PENDING_MANAGER_REVIEW : GOAL_STATUS.PENDING_HR_REVIEW);
+      : GOAL_STATUS.PENDING_MANAGER_REVIEW;
 
     await prisma.goalAssignment.updateMany({
       where: { goalId, employeeId: user.id },
