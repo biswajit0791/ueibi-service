@@ -805,6 +805,7 @@ export class GoalService {
     const rawTargets = this.resolveReviewTargets(goal, targetEmployeeId, reviewable, 'manager review');
 
     const isElevated = hasRole(user.role, ELEVATED_ROLES);
+    const isCallerManager = String(user.role || '').toUpperCase() === 'MANAGER';
     const createdByCaller = (goal.createdById && goal.createdById === user.id)
       || (!goal.createdById && goal.createdBy && goal.createdBy === user.name);
 
