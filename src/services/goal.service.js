@@ -680,15 +680,16 @@ export class GoalService {
     });
 
     // Notify Manager or HR
-    if (hasManager && targetUser.managerId) {
+    const managerIdToNotify = targetUser?.managerId || goal.ownerManagerId;
+    if (managerIdToNotify && managerIdToNotify !== user.id) {
       const managerUser = await prisma.tenantUser.findUnique({
-        where: { id: targetUser.managerId },
+        where: { id: managerIdToNotify },
         select: { id: true, name: true, email: true },
       });
 
       await this.notify({
         tenantId,
-        recipientId: targetUser.managerId,
+        recipientId: managerIdToNotify,
         type: 'goal_update',
         title: `Goal Submitted for Review: "${goal.title}"`,
         body: `${user.name} has completed all tasks and submitted "${goal.title}" for your review.`,
@@ -704,55 +705,57 @@ export class GoalService {
           managerUser,
         }).catch((err) => console.warn('[GoalService] Email notification notice:', err.message));
       }
-    } else if (requiresManagerReview && tenantManagers.length > 0) {
-      for (const mgr of tenantManagers) {
-        if (mgr.id === user.id) continue;
-        await this.notify({
-          tenantId,
-          recipientId: mgr.id,
-          type: 'goal_update',
-          title: `Goal Submitted for Manager Review: "${goal.title}"`,
-          body: `${user.name} has completed tasks and submitted "${goal.title}" for manager review.`,
-          entityType: 'goal',
-          entityId: goal.id,
-        });
+    } else {
+      const eligibleManagers = (tenantManagers || []).filter((m) => m.id !== user.id);
+      if (eligibleManagers.length > 0 && String(user.role || '').toUpperCase() !== 'MANAGER') {
+        for (const mgr of eligibleManagers) {
+          await this.notify({
+            tenantId,
+            recipientId: mgr.id,
+            type: 'goal_update',
+            title: `Goal Submitted for Manager Review: "${goal.title}"`,
+            body: `${user.name} has completed tasks and submitted "${goal.title}" for manager review.`,
+            entityType: 'goal',
+            entityId: goal.id,
+          });
 
-        const mgrUser = await prisma.tenantUser.findUnique({
-          where: { id: mgr.id },
+          const mgrUser = await prisma.tenantUser.findUnique({
+            where: { id: mgr.id },
+            select: { id: true, name: true, email: true },
+          });
+          if (mgrUser?.email) {
+            sendGoalSubmissionEmail({
+              tenantId,
+              goal,
+              submitterUser: user,
+              managerUser: mgrUser,
+            }).catch((err) => console.warn('[GoalService] Email notification notice:', err.message));
+          }
+        }
+      } else {
+        const hrUsers = await prisma.tenantUser.findMany({
+          where: { tenantId, role: { in: HR_ROLES } },
           select: { id: true, name: true, email: true },
         });
-        if (mgrUser?.email) {
-          sendGoalSubmissionEmail({
+        for (const hr of hrUsers) {
+          await this.notify({
             tenantId,
-            goal,
-            submitterUser: user,
-            managerUser: mgrUser,
-          }).catch((err) => console.warn('[GoalService] Email notification notice:', err.message));
-        }
-      }
-    } else {
-      const hrUsers = await prisma.tenantUser.findMany({
-        where: { tenantId, role: { in: HR_ROLES } },
-        select: { id: true, name: true, email: true },
-      });
-      for (const hr of hrUsers) {
-        await this.notify({
-          tenantId,
-          recipientId: hr.id,
-          type: 'goal_update',
-          title: `Goal Submitted for HR Review: "${goal.title}"`,
-          body: `${user.name} submitted "${goal.title}" for final review.`,
-          entityType: 'goal',
-          entityId: goal.id,
-        });
+            recipientId: hr.id,
+            type: 'goal_update',
+            title: `Goal Submitted for HR Review: "${goal.title}"`,
+            body: `${user.name} submitted "${goal.title}" for review.`,
+            entityType: 'goal',
+            entityId: goal.id,
+          });
 
-        if (hr.email) {
-          sendGoalSubmissionEmail({
-            tenantId,
-            goal,
-            submitterUser: user,
-            managerUser: hr,
-          }).catch((err) => console.warn('[GoalService] Email notification notice:', err.message));
+          if (hr.email) {
+            sendGoalSubmissionEmail({
+              tenantId,
+              goal,
+              submitterUser: user,
+              managerUser: hr,
+            }).catch((err) => console.warn('[GoalService] Email notification notice:', err.message));
+          }
         }
       }
     }
