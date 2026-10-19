@@ -845,7 +845,7 @@ export class GoalService {
     }
     const newStatus = isApprove ? GOAL_STATUS.COMPLETED : GOAL_STATUS.CHANGES_REQUESTED;
 
-    if (isApprove) {
+    if (isApprove && !isElevated) {
       const completedTasks = goal.tasks.filter((task) => {
         if (!reviewedEmpIds.includes(task.employeeId) || task.isStandalone || task.isPrivate) return false;
         // Nobody can rate their own task, so a self-review has nothing to rate.
