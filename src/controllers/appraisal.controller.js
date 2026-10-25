@@ -2201,11 +2201,16 @@ export async function updateHrAuditReview(req, res, next) {
 
     const review = await prisma.performanceReview.findUnique({
       where: { id },
-      include: { employee: true },
+      include: { employee: true, cycle: { select: { frequency: true } } },
     });
 
     if (!review || review.employee.tenantId !== req.tenantId) {
       return res.status(404).json({ error: 'Performance review not found' });
+    }
+
+    // Hikes are decided only on the annual review; monthly/quarterly are tracking reviews
+    if (hikePercentage !== undefined && hikePercentage !== null && review.cycle?.frequency !== 'ANNUAL') {
+      return res.status(400).json({ error: 'Hike percentage can only be set on the annual appraisal review.' });
     }
 
     // A user cannot perform an audit and final sign-off on their own appraisal
@@ -2767,6 +2772,7 @@ export async function updateReview(req, res, next) {
       },
       include: {
         employee: true,
+        cycle: { select: { frequency: true } },
       },
     });
 
@@ -2813,7 +2819,12 @@ export async function updateReview(req, res, next) {
     }
 
     if (isElevated) {
-      if (hikePercentage !== undefined) dataToUpdate.hikePercentage = Number(hikePercentage);
+      if (hikePercentage !== undefined) {
+        if (review.cycle?.frequency !== 'ANNUAL') {
+          return res.status(400).json({ error: 'Hike percentage can only be set on the annual appraisal review.' });
+        }
+        dataToUpdate.hikePercentage = Number(hikePercentage);
+      }
       if (status !== undefined) dataToUpdate.status = status;
     } else if (isOwner && (status === 'DRAFT' || status === 'SUBMITTED') && !SELF_LOCKED_STATUSES.includes(review.status)) {
       // Owner may only move between DRAFT and SUBMITTED, and only before a review has started.
