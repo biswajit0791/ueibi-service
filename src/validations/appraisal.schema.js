@@ -262,6 +262,12 @@ export const cycleSummaryQuerySchema = z.object({
   department: z.string().max(200).optional(),
 });
 
+export const appraisalTrackerQuerySchema = z.object({
+  frequency: z.enum(['QUARTERLY', 'MONTHLY']).optional().default('MONTHLY'),
+  fiscalYearStartYear: z.coerce.number().int().min(2000).max(2100),
+  department: z.string().max(200).optional(),
+});
+
 export const activeCycleQuerySchema = z.object({
   frequency: z.enum(['ANNUAL', 'QUARTERLY', 'MONTHLY']).optional(),
   period: z.string().max(100).optional(),

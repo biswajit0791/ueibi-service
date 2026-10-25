@@ -4,6 +4,8 @@ import { emitToUser } from '../lib/socket.js';
 import { goalService } from '../services/goal.service.js';
 import { buildTeamScopeWhere, buildExplicitReportsWhere } from '../services/teamScope.service.js';
 import { computeCycleRollup } from '../services/reportAggregation.service.js';
+import { getCompanySettings } from '../services/companySettings.service.js';
+import { APPRAISAL_MONTH_NAMES, getFiscalYearPeriods, getPeriodMetadata } from '../lib/appraisalPeriods.js';
 import { ELEVATED_ROLES, HR_ROLES, MANAGER_OR_ELEVATED_ROLES, SUPER_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
 
 async function pushNotification({ tenantId, recipientId, type, title, body, entityType, entityId }) {
@@ -106,6 +108,7 @@ import {
   cmdPeerFeedbackQuerySchema,
   hrAuditQuerySchema,
   cycleSummaryQuerySchema,
+  appraisalTrackerQuerySchema,
 } from '../validations/appraisal.schema.js';
 
 const DEFAULT_PARAMETERS = [
@@ -116,107 +119,7 @@ const DEFAULT_PARAMETERS = [
   { name: 'Teamwork & Collaboration', order: 5 },
 ];
 
-const MONTH_NAMES = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December'
-];
-
-/**
- * Dynamically computes start date, end date, period name, and due date based on live date or explicit year/month
- */
-export function getPeriodMetadata(frequency = 'MONTHLY', targetDate = new Date(), customPeriodName = null, explicitYear = null, explicitMonth = null) {
-  const date = targetDate instanceof Date ? targetDate : new Date(targetDate);
-  let year = explicitYear ? parseInt(explicitYear, 10) : date.getFullYear();
-  let monthIndex = date.getMonth();
-  let monthName = MONTH_NAMES[monthIndex];
-
-  if (explicitMonth !== null && explicitMonth !== undefined) {
-    if (typeof explicitMonth === 'number' || (!isNaN(explicitMonth) && !isNaN(parseInt(explicitMonth, 10)))) {
-      const num = parseInt(explicitMonth, 10);
-      monthIndex = Math.max(0, Math.min(11, num - 1));
-      monthName = MONTH_NAMES[monthIndex];
-    } else if (typeof explicitMonth === 'string') {
-      const trimmed = explicitMonth.trim();
-      const idx = MONTH_NAMES.findIndex(m => m.toLowerCase() === trimmed.toLowerCase());
-      if (idx !== -1) {
-        monthIndex = idx;
-        monthName = MONTH_NAMES[idx];
-      }
-    }
-  }
-
-  if (!explicitMonth && customPeriodName && typeof customPeriodName === 'string') {
-    const matchedMonth = MONTH_NAMES.findIndex(m => customPeriodName.toLowerCase().includes(m.toLowerCase()));
-    if (matchedMonth !== -1) {
-      monthIndex = matchedMonth;
-      monthName = MONTH_NAMES[matchedMonth];
-      const yearMatch = customPeriodName.match(/\b(20\d\d)\b/);
-      if (yearMatch && !explicitYear) {
-        year = parseInt(yearMatch[1], 10);
-      }
-    }
-  }
-
-  const freq = (frequency || 'MONTHLY').toUpperCase();
-
-  if (freq === 'MONTHLY') {
-    const name = `${monthName} ${year}`;
-    const startDate = new Date(Date.UTC(year, monthIndex, 1, 0, 0, 0));
-    const endDate = new Date(Date.UTC(year, monthIndex + 1, 0, 23, 59, 59));
-    return {
-      name,
-      frequency: 'MONTHLY',
-      year,
-      month: monthName,
-      monthNumber: monthIndex + 1,
-      startDate,
-      endDate,
-      periodLabel: `${monthName} (${year})`,
-      dueDate: endDate,
-    };
-  }
-
-  if (freq === 'QUARTERLY') {
-    let quarter = Math.floor(monthIndex / 3) + 1;
-    if (explicitMonth && typeof explicitMonth === 'string' && /Q([1-4])/i.test(explicitMonth)) {
-      const qMatch = explicitMonth.match(/Q([1-4])/i);
-      if (qMatch) quarter = parseInt(qMatch[1], 10);
-    }
-    const qStartMonth = (quarter - 1) * 3;
-    const startDate = new Date(Date.UTC(year, qStartMonth, 1, 0, 0, 0));
-    const endDate = new Date(Date.UTC(year, qStartMonth + 3, 0, 23, 59, 59));
-    return {
-      name: `Q${quarter} ${year}`,
-      frequency: 'QUARTERLY',
-      year,
-      month: `Q${quarter}`,
-      monthNumber: quarter,
-      startDate,
-      endDate,
-      periodLabel: `Quarterly (Q${quarter} ${year})`,
-      dueDate: endDate,
-    };
-  }
-
-  // ANNUAL (Fiscal year April 1 - March 31)
-  const isPostApril = monthIndex >= 3;
-  const fyStartYear = isPostApril ? year : year - 1;
-  const fyEndYear = fyStartYear + 1;
-  const name = `FY ${fyStartYear}-${fyEndYear}`;
-  const startDate = new Date(Date.UTC(fyStartYear, 3, 1, 0, 0, 0));
-  const endDate = new Date(Date.UTC(fyEndYear, 2, 31, 23, 59, 59));
-  return {
-    name,
-    frequency: 'ANNUAL',
-    year: fyStartYear,
-    month: 'Annual',
-    monthNumber: null,
-    startDate,
-    endDate,
-    periodLabel: `Annual (${name})`,
-    dueDate: endDate,
-  };
-}
+export { getPeriodMetadata };
 
 /**
  * Helper to ensure an active cycle exists with default parameters and realistic dynamic dates
@@ -242,7 +145,8 @@ async function ensureActiveCycle(tenantId, options = {}) {
     if (foundById) return foundById;
   }
 
-  const period = getPeriodMetadata(frequency, targetDate, periodName, year, month);
+  const settings = await getCompanySettings(tenantId);
+  const period = getPeriodMetadata(frequency, targetDate, periodName, year, month, settings);
 
   // First try finding an exact cycle matching tenant, frequency, and name (e.g. "March 2031" or "September 2050")
   let cycle = await prisma.appraisalCycle.findFirst({
@@ -314,7 +218,7 @@ async function ensureActiveCycle(tenantId, options = {}) {
   return {
     ...cycle,
     year: cycle.year || period.year || sDate.getFullYear(),
-    month: cycle.month || period.month || MONTH_NAMES[sDate.getMonth()],
+    month: cycle.month || period.month || APPRAISAL_MONTH_NAMES[sDate.getMonth()],
     monthNumber: cycle.monthNumber || period.monthNumber || (sDate.getMonth() + 1),
   };
 }
@@ -344,7 +248,8 @@ export async function createCycle(req, res, next) {
       status = 'ACTIVE',
     } = parsed.data;
 
-    const period = getPeriodMetadata(frequency, new Date(), name, year, month);
+    const settings = await getCompanySettings(req.tenantId);
+    const period = getPeriodMetadata(frequency, new Date(), name, year, month, settings);
 
     const cycleName = name || period.name;
     const cycleStartDate = startDate ? new Date(startDate) : period.startDate;
@@ -480,7 +385,7 @@ export async function listCycles(req, res, next) {
     let mappedCycles = cycles.map((c) => {
       const sDate = new Date(c.startDate);
       const computedYear = c.year || sDate.getFullYear();
-      const computedMonth = c.month || MONTH_NAMES[sDate.getMonth()];
+      const computedMonth = c.month || APPRAISAL_MONTH_NAMES[sDate.getMonth()];
       const computedMonthNum = c.monthNumber || (sDate.getMonth() + 1);
       const computedCreatedById = c.createdById;
 
@@ -564,6 +469,9 @@ export async function getActiveCycle(req, res, next) {
         frequency: true,
         startDate: true,
         endDate: true,
+        year: true,
+        month: true,
+        monthNumber: true,
         status: true,
       },
       orderBy: [{ startDate: 'desc' }, { createdAt: 'desc' }],
@@ -573,15 +481,16 @@ export async function getActiveCycle(req, res, next) {
       const sDate = new Date(c.startDate);
       return {
         ...c,
-        year: sDate.getFullYear(),
-        month: MONTH_NAMES[sDate.getMonth()],
+        year: c.year || sDate.getFullYear(),
+        month: c.month || APPRAISAL_MONTH_NAMES[sDate.getMonth()],
       };
     });
 
     const now = new Date();
-    const currentMonthMeta = getPeriodMetadata('MONTHLY', now);
-    const currentQuarterMeta = getPeriodMetadata('QUARTERLY', now);
-    const currentAnnualMeta = getPeriodMetadata('ANNUAL', now);
+    const settings = await getCompanySettings(req.tenantId);
+    const currentMonthMeta = getPeriodMetadata('MONTHLY', now, null, null, null, settings);
+    const currentQuarterMeta = getPeriodMetadata('QUARTERLY', now, null, null, null, settings);
+    const currentAnnualMeta = getPeriodMetadata('ANNUAL', now, null, null, null, settings);
 
     res.json({
       cycle: {
@@ -602,6 +511,8 @@ export async function getActiveCycle(req, res, next) {
         quarterly: currentQuarterMeta,
         annual: currentAnnualMeta,
       },
+      fiscalYearStartMonth: settings.financialYearStartMonth || 4,
+      fiscalYearStartDay: settings.financialYearStartDay || 1,
     });
   } catch (err) {
     next(err);
@@ -697,6 +608,132 @@ export async function getCycleSummary(req, res, next) {
       cycleId: id,
       cycleName: cycle.name,
       ...rollup,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getAppraisalPeriodTracker(req, res, next) {
+  try {
+    const parsed = appraisalTrackerQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    }
+
+    const { frequency, fiscalYearStartYear, department } = parsed.data;
+    const settings = await getCompanySettings(req.tenantId);
+    const periods = getFiscalYearPeriods(frequency, fiscalYearStartYear, settings);
+    const cycleNames = periods.map((period) => period.name);
+
+    await Promise.all(periods.map((period) => ensureActiveCycle(req.tenantId, {
+      frequency,
+      year: frequency === 'MONTHLY' ? period.year : period.fiscalYearStartYear,
+      month: period.month,
+      periodName: period.name,
+    })));
+
+    const [employees, cycles] = await Promise.all([
+      prisma.tenantUser.findMany({
+        where: {
+          tenantId: req.tenantId,
+          status: 'ACTIVE',
+          isDeleted: false,
+          ...(department ? { department } : {}),
+        },
+        select: { id: true, name: true, email: true, department: true, designation: true },
+        orderBy: { name: 'asc' },
+      }),
+      prisma.appraisalCycle.findMany({
+        where: {
+          tenantId: req.tenantId,
+          frequency,
+          name: { in: cycleNames },
+        },
+        select: { id: true, name: true, status: true },
+      }),
+    ]);
+
+    const cycleByName = new Map(cycles.map((cycle) => [cycle.name, cycle]));
+    const cycleIds = cycles.map((cycle) => cycle.id);
+    const reviews = cycleIds.length
+      ? await prisma.performanceReview.findMany({
+        where: { cycleId: { in: cycleIds } },
+        select: {
+          id: true,
+          cycleId: true,
+          employeeId: true,
+          status: true,
+          hrSignoffStatus: true,
+          selfSubmittedAt: true,
+          managerSubmittedAt: true,
+        },
+      })
+      : [];
+    const reviewByPeriodAndEmployee = new Map(
+      reviews.map((review) => [`${review.cycleId}:${review.employeeId}`, review]),
+    );
+
+    const trackerPeriods = periods.map((period) => {
+      const cycle = cycleByName.get(period.name) || null;
+      const employeesForPeriod = employees.map((employee) => {
+        const review = cycle
+          ? reviewByPeriodAndEmployee.get(`${cycle.id}:${employee.id}`) || null
+          : null;
+        let trackingStatus = 'NOT_STARTED';
+        if (review?.status === 'DRAFT') trackingStatus = 'DRAFT';
+        if (review?.status === 'SUBMITTED') trackingStatus = 'PENDING_MANAGER_REVIEW';
+        if (review?.status === 'MANAGER_REVIEWED') trackingStatus = 'PENDING_HR_REVIEW';
+        if (review?.status === 'COMPLETED') {
+          trackingStatus = review.hrSignoffStatus === 'FINALISED'
+            ? 'FINALISED'
+            : review.hrSignoffStatus === 'RELEASED'
+              ? 'RELEASED'
+              : 'PENDING_HR_REVIEW';
+        }
+
+        return {
+          ...employee,
+          reviewId: review?.id || null,
+          status: trackingStatus,
+          reviewStatus: review?.status || null,
+          hrSignoffStatus: review?.hrSignoffStatus || null,
+          selfSubmittedAt: review?.selfSubmittedAt || null,
+          managerSubmittedAt: review?.managerSubmittedAt || null,
+        };
+      });
+      const completed = employeesForPeriod.filter((employee) =>
+        ['COMPLETED', 'RELEASED', 'FINALISED'].includes(employee.status)).length;
+
+      return {
+        ...period,
+        cycleId: cycle?.id || null,
+        cycleStatus: cycle?.status || null,
+        totalEmployees: employees.length,
+        submittedCount: employeesForPeriod.filter((employee) =>
+          employee.status !== 'NOT_STARTED' && employee.status !== 'DRAFT').length,
+        draftCount: employeesForPeriod.filter((employee) => employee.status === 'DRAFT').length,
+        pendingManagerCount: employeesForPeriod.filter((employee) =>
+          employee.status === 'PENDING_MANAGER_REVIEW').length,
+        pendingHrCount: employeesForPeriod.filter((employee) =>
+          employee.status === 'PENDING_HR_REVIEW').length,
+        notStartedCount: employeesForPeriod.filter((employee) =>
+          employee.status === 'NOT_STARTED').length,
+        completionRate: employees.length > 0
+          ? Number(((completed / employees.length) * 100).toFixed(1))
+          : 0,
+        employees: employeesForPeriod,
+      };
+    });
+
+    res.json({
+      frequency,
+      fiscalYearStartYear,
+      fiscalYear: periods[0]?.fiscalYear,
+      financialYearStartMonth: settings.financialYearStartMonth || 4,
+      financialYearStartDay: settings.financialYearStartDay || 1,
+      totalEmployees: employees.length,
+      periods: trackerPeriods,
     });
   } catch (err) {
     next(err);
@@ -2137,7 +2174,12 @@ export async function getHrAuditReview(req, res, next) {
       orderBy: { order: 'asc' },
     });
 
-    res.json({ review, employee, activeParameters });
+    const managerTaskRatingSummary = await getManagerTaskRatingSummary(req.tenantId, employeeId, activeCycle);
+    res.json({
+      review: { ...review, managerTaskRatingSummary },
+      employee,
+      activeParameters,
+    });
   } catch (err) {
     next(err);
   }
