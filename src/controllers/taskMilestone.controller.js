@@ -98,6 +98,25 @@ export async function getEscalationChainForEmployee(tenantId, employeeId) {
   }));
 }
 
+/** A milestone's own assignee may belong to a team that has no access to the
+ *  parent task. Falls back to "assigned to a milestone on this task" so they
+ *  can still see and work their milestone (and only that). */
+async function loadTaskForMilestoneActor(taskId, user, tenantId) {
+  try {
+    return await loadTaskForUser(taskId, user, tenantId);
+  } catch (err) {
+    if (err?.status !== 403) throw err;
+    const owned = await prisma.taskMilestone.findFirst({
+      where: { taskId, assigneeId: user.id, tenantId },
+      select: { id: true },
+    });
+    if (!owned) throw err;
+    const task = await prisma.task.findFirst({ where: { id: taskId, tenantId } });
+    if (!task) throw { status: 404, message: 'Task not found' };
+    return task;
+  }
+}
+
 async function loadMilestoneOrThrow(taskId, milestoneId) {
   const milestone = await prisma.taskMilestone.findFirst({
     where: { id: milestoneId, taskId },
@@ -158,7 +177,7 @@ async function maybeUnlockTask(taskId) {
 export async function listMilestones(req, res, next) {
   try {
     const { id: taskId } = req.params;
-    await loadTaskForUser(taskId, req.user, req.tenantId);
+    await loadTaskForMilestoneActor(taskId, req.user, req.tenantId);
 
     const items = await prisma.taskMilestone.findMany({
       where: { taskId },
@@ -275,6 +294,15 @@ export async function createMilestone(req, res, next) {
       taskId, performedById: req.user.id, action: 'milestone_created',
       details: `${req.user.name} added milestone ${milestone.order}: "${milestone.title}".`,
     });
+
+    if (milestone.assigneeId && milestone.assigneeId !== req.user.id) {
+      await pushNotification({
+        tenantId, recipientId: milestone.assigneeId, type: 'task_update',
+        title: `Milestone assigned to you on "${task.title}"`,
+        body: `${req.user.name} assigned you milestone "${milestone.title}", due ${due.toISOString().slice(0, 10)}.`,
+        entityType: 'milestone', entityId: milestone.id,
+      });
+    }
 
     if (task.employeeId !== req.user.id) {
       await pushNotification({
@@ -437,7 +465,7 @@ export async function updateMilestone(req, res, next) {
   try {
     const { id: taskId, mid } = req.params;
     const tenantId = req.tenantId;
-    const task = await loadTaskForUser(taskId, req.user, tenantId);
+    const task = await loadTaskForMilestoneActor(taskId, req.user, tenantId);
     const milestone = await loadMilestoneOrThrow(taskId, mid);
 
     const parsed = updateMilestoneSchema.safeParse(req.body);
@@ -459,7 +487,8 @@ export async function updateMilestone(req, res, next) {
     } = parsed.data;
 
     const isManager = hasRole(req.user.role, MANAGER_OR_ELEVATED_ROLES);
-    const isAssignee = task.employeeId === req.user.id;
+    // The task owner, or the one member this milestone was assigned to.
+    const isAssignee = task.employeeId === req.user.id || milestone.assigneeId === req.user.id;
     const data = {};
     const auditLines = [];
 
@@ -866,6 +895,31 @@ export async function listOverdueMilestones(req, res, next) {
       watcherEmails: m.watcherEmails,
     }));
 
+    res.json({ items, total: items.length });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ─── GET /api/milestones/assigned-to-me ────────────────────────────────────
+// Milestones the caller owns, whichever team the parent task belongs to, so
+// they surface on the caller's own task board.
+export async function listMyAssignedMilestones(req, res, next) {
+  try {
+    const rows = await prisma.taskMilestone.findMany({
+      where: { tenantId: req.tenantId, assigneeId: req.user.id },
+      include: {
+        ...MILESTONE_INCLUDE,
+        task: {
+          select: {
+            id: true, title: true, status: true, priority: true, dueDate: true, goalId: true,
+            employee: { select: { id: true, name: true, designation: true } },
+          },
+        },
+      },
+      orderBy: [{ dueDate: 'asc' }, { order: 'asc' }],
+    });
+    const items = rows.filter((m) => m.task);
     res.json({ items, total: items.length });
   } catch (err) {
     next(err);
