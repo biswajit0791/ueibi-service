@@ -13,6 +13,8 @@ export const createMilestoneSchema = z.object({
   dueDate: z.string({ required_error: 'Checkpoint due date is required' }),
   progress: z.number().int().min(0).max(100).optional().default(0),
   watcherEmails: watcherEmailsBaseSchema.optional().default([]),
+  // One member (from any team) who owns this checkpoint.
+  assigneeId: z.string().trim().min(1).nullable().optional(),
 });
 
 // One endpoint, several distinct actions — see taskMilestone.controller.js for
@@ -24,6 +26,7 @@ export const updateMilestoneSchema = z.object({
   dueDate: z.string().optional(),
   progress: z.number().int().min(0).max(100).optional(),
   watcherEmails: watcherEmailsBaseSchema.optional(),
+  assigneeId: z.string().trim().min(1).nullable().optional(),
   // Employee proposes a new completion date or extension days.
   proposedCompletionDate: z.string().nullable().optional(),
   extensionDaysRequested: z.number().int().min(1).max(90).nullable().optional(),

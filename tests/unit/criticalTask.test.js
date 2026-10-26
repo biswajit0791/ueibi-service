@@ -1,7 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  canAssignOutsideGoal,
   isCriticalPriority,
   validateMilestoneDrafts,
   MIN_CRITICAL_MILESTONES,
@@ -17,15 +16,25 @@ test('limits are 1 to 4', () => {
   assert.equal(MAX_CRITICAL_MILESTONES, 4);
 });
 
-test('only critical priority may assign outside the goal, and only for manager or above', () => {
-  assert.equal(canAssignOutsideGoal('critical', 'MANAGER'), true);
-  assert.equal(canAssignOutsideGoal('CRITICAL', 'hr'), true);
-  assert.equal(canAssignOutsideGoal('critical', 'EMPLOYEE'), false);
-  assert.equal(canAssignOutsideGoal('critical', undefined), false);
+test('detects critical priority case-insensitively', () => {
+  assert.equal(isCriticalPriority('critical'), true);
+  assert.equal(isCriticalPriority('CRITICAL'), true);
   assert.equal(isCriticalPriority('high'), false);
-  assert.equal(canAssignOutsideGoal('high', 'ADMIN'), false);
-  assert.equal(canAssignOutsideGoal(undefined, 'ADMIN'), false);
-  assert.equal(canAssignOutsideGoal(null, 'ADMIN'), false);
+  assert.equal(isCriticalPriority(undefined), false);
+});
+
+test('each milestone keeps its own single assignee (any team)', () => {
+  const r = validateMilestoneDrafts([
+    { ...box(1), assigneeId: 'emp-a' },
+    { ...box(2), assigneeId: 'emp-b' },
+    box(3),
+  ], task);
+  assert.deepEqual(r.items.map((m) => m.assigneeId), ['emp-a', 'emp-b', null]);
+});
+
+test('an assignee must be a single id, not a list', () => {
+  const r = validateMilestoneDrafts([{ ...box(1), assigneeId: ['a', 'b'] }], task);
+  assert.match(r.error, /^Milestone 1:/);
 });
 
 test('rejects zero milestones and non-arrays', () => {
