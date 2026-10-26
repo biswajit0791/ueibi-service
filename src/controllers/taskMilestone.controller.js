@@ -18,7 +18,7 @@ import { prisma } from '../lib/prisma.js';
 import { loadTaskForUser } from '../services/taskAccess.service.js';
 import { visibleTaskWhere } from '../services/taskVisibility.service.js';
 import { logTaskAudit, pushNotification } from './taskActivity.controller.js';
-import { emitToUser } from '../lib/socket.js';
+import { emitToUser, emitToTenant } from '../lib/socket.js';
 import { sendMail } from '../lib/mailer.js';
 import { env } from '../config/env.js';
 import { MANAGER_OR_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
@@ -30,6 +30,12 @@ import {
 import {
   buildModernMilestoneEmailHtml,
 } from '../services/milestoneEscalation.service.js';
+import { assertGoalUnlocked } from '../services/goalWeight.service.js';
+import { goalService } from '../services/goal.service.js';
+import { isWorkStarted, timingUpdates } from '../lib/taskTiming.js';
+import {
+  REVIEW_STATUS, isGoalActive, reviewFieldsForTransition, completeGoalIfAllApproved,
+} from '../services/taskReview.service.js';
 
 export const MILESTONE_INCLUDE = {
   proposedBy: { select: { id: true, name: true } },
@@ -111,6 +117,64 @@ async function maybeUnlockTask(taskId) {
     performedById: task.employeeId,
     action: 'milestones_approved',
     details: 'All milestones approved — task unlocked and moved to To Do.',
+  });
+}
+
+/** Task statuses that milestone work moves on to in_progress by itself. */
+const MILESTONE_STARTABLE_STATUSES = ['todo', 'pending_approval', 'rejected', 'done'];
+
+/**
+ * The task follows its milestones: progress is their average, any milestone
+ * work puts it In Progress, and the last milestone done completes it (and,
+ * when the goal owner is the one finishing it, approves it as well).
+ */
+async function syncTaskFromMilestones(taskId, actor, tenantId) {
+  const task = await prisma.task.findUnique({ where: { id: taskId } });
+  const milestones = await prisma.taskMilestone.findMany({ where: { taskId } });
+  if (!task || milestones.length === 0) return;
+
+  const pct = (m) => (m.status === 'DONE' ? 100 : Math.min(100, Math.max(0, Number(m.progress) || 0)));
+  const allDone = milestones.every((m) => m.status === 'DONE');
+  const anyWork = milestones.some((m) => pct(m) > 0);
+  const average = Math.round(milestones.reduce((sum, m) => sum + pct(m), 0) / milestones.length);
+
+  let status = task.status;
+  if (allDone) status = 'done';
+  else if (anyWork && MILESTONE_STARTABLE_STATUSES.includes(task.status)) status = 'in_progress';
+  const progress = allDone ? 100 : Math.min(average, 99);
+  if (status === task.status && progress === task.progress) return;
+
+  const next = { status, progress };
+  const goal = task.goalId
+    ? await prisma.goal.findUnique({ where: { id: task.goalId }, select: { ownerManagerId: true } })
+    : null;
+  const reviewFields = reviewFieldsForTransition({ existing: task, next, goal, actorId: actor.id });
+
+  const updated = await prisma.task.update({
+    where: { id: taskId },
+    data: { ...next, ...timingUpdates(task, next), ...reviewFields },
+  });
+
+  let goalProgress = 0;
+  if (updated.goalId) {
+    goalProgress = await goalService.recalculateProgress(updated.goalId, updated.employeeId);
+    if (reviewFields.reviewStatus === REVIEW_STATUS.APPROVED) {
+      await completeGoalIfAllApproved({ goalId: updated.goalId, tenantId, actor });
+    }
+  }
+
+  if (status !== task.status) {
+    await logTaskAudit({
+      taskId,
+      performedById: actor.id,
+      action: 'status_changed',
+      details: status === 'done'
+        ? 'All milestones complete — task marked DONE.'
+        : `Milestone work started — status updated to ${status.toUpperCase().replace('_', ' ')}.`,
+    });
+  }
+  emitToTenant(tenantId, 'task_updated', {
+    action: 'update', task: updated, goalId: updated.goalId, goalProgress,
   });
 }
 
@@ -566,6 +630,15 @@ export async function updateMilestone(req, res, next) {
       if (!['PENDING_APPROVAL', 'RESCHEDULE_REQUESTED'].includes(milestone.status)) {
         return res.status(409).json({ error: 'This milestone has already been decided' });
       }
+      if (approve && task.goalId) {
+        const goal = await prisma.goal.findUnique({ where: { id: task.goalId }, select: { status: true } });
+        if (!isGoalActive(goal)) {
+          return res.status(409).json({
+            code: 'GOAL_NOT_ACTIVE',
+            error: 'Milestones can only be approved once the goal is active. Activate the goal first.',
+          });
+        }
+      }
       if (approve) {
         // Accepting a pending proposal or extension locks it in as the new dueDate.
         const proposed = data.proposedCompletionDate !== undefined
@@ -638,6 +711,18 @@ export async function updateMilestone(req, res, next) {
       return res.status(400).json({ error: 'No recognised update supplied' });
     }
 
+    // Milestone work is task work: the same weight gate applies before it
+    // can start a task that has not started yet.
+    const startsWork = (data.progress > 0 || data.isDone === true) && !isWorkStarted(task);
+    if (startsWork && task.goalId && !task.isStandalone) {
+      try {
+        await assertGoalUnlocked(task.goalId);
+      } catch (e) {
+        if (!e.code) throw e;
+        return res.status(e.status || 409).json({ code: e.code, error: e.message, weightSummary: e.weightSummary });
+      }
+    }
+
     const updated = await prisma.taskMilestone.update({
       where: { id: mid },
       data,
@@ -651,6 +736,9 @@ export async function updateMilestone(req, res, next) {
 
     if (updated.status === 'APPROVED' || updated.status === 'DONE') {
       await maybeUnlockTask(taskId);
+    }
+    if (data.progress !== undefined || data.isDone !== undefined) {
+      await syncTaskFromMilestones(taskId, req.user, tenantId);
     }
 
     // ── Milestone Completion: Broadcast to ALL stakeholders ─────────────
