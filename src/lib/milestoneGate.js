@@ -12,9 +12,8 @@
  * goal is active and its execution is unlocked, and frozen for the assignee
  * until the manager has approved it (when the company requires approval).
  *
- * This is deliberately stricter than plain tasks, whose gate only waits for
- * goal approval (see assertGoalUnlocked): a milestone is a dated commitment
- * against the goal's plan, and that plan is not final until it totals 100%.
+ * Plain tasks follow the same goal rules (see assertGoalUnlocked); this adds
+ * the milestone's own approval on top.
  */
 
 export const MILESTONE_GATE = {

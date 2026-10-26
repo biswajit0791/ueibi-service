@@ -664,11 +664,13 @@ export async function createTask(req, res, next) {
       }
       if (summary && !summary.exempt) {
         const projected = summary.totalWeight + resolvedWeight;
-        if (projected > 100) {
-          const reason = `Task weights for this goal would total ${projected}%, which exceeds 100%.`;
+        if (projected !== 100) {
+          const reason = projected > 100
+            ? `Task weights for this goal would total ${projected}%, which exceeds 100%.`
+            : `Task weights would total ${projected}%. A goal must be fully planned at 100% before work can be recorded against it.`;
           return res.status(409).json({
             success: false,
-            code: 'GOAL_WEIGHT_EXCEEDED',
+            code: projected > 100 ? 'GOAL_WEIGHT_EXCEEDED' : 'GOAL_WEIGHT_INCOMPLETE',
             error: reason,
             message: reason,
             weightSummary: { ...summary, projectedTotal: projected },
