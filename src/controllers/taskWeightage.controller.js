@@ -13,7 +13,7 @@ import { prisma } from '../lib/prisma.js';
 import { loadTaskForUser } from '../services/taskAccess.service.js';
 import { visibleTaskWhere } from '../services/taskVisibility.service.js';
 import {
-  weightageFor, weightageRow, completedWeightOf, WEIGHTAGE_TASK_SELECT,
+  weightageFor, weightageRow, completedWeightOf, summariseByEmployee, WEIGHTAGE_TASK_SELECT,
   financialYearFilter, dateRangeFilter,
 } from '../services/taskWeightage.service.js';
 import { logTaskAudit } from './taskActivity.controller.js';
@@ -194,24 +194,7 @@ export async function getTeamWeightageSummary(req, res, next) {
       select: WEIGHTAGE_TASK_SELECT,
     });
 
-    const byEmployee = {};
-    for (const task of tasks) {
-      const row = weightageRow(task);
-      const bucket = (byEmployee[row.employeeId] ||= {
-        employeeId: row.employeeId,
-        employeeName: row.employeeName,
-        taskCount: 0, plannedWeight: 0, completedWeight: 0, finalWeight: 0,
-        delayedCount: 0, adjustedCount: 0, adjustmentDelta: 0,
-      });
-      bucket.taskCount += 1;
-      bucket.plannedWeight += row.plannedWeight;
-      bucket.completedWeight += row.completedWeight;
-      bucket.finalWeight += row.finalWeight;
-      if (row.isDelayed) bucket.delayedCount += 1;
-      if (row.isAdjusted) { bucket.adjustedCount += 1; bucket.adjustmentDelta += row.adjustmentDelta ?? 0; }
-    }
-
-    res.json({ items: Object.values(byEmployee) });
+    res.json({ items: summariseByEmployee(tasks) });
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });
     next(err);
