@@ -28,7 +28,7 @@ const TASK_SELECT = {
   startDate: true, dueDate: true,
   actualStartDate: true, actualCompletionDate: true,
   isDependencyOf: true, isStandalone: true, financialYear: true,
-  managerFinalWeight: true, weightAdjustedAt: true, weightAdjustReason: true,
+  managerFinalWeight: true, managerRating: true, weightAdjustedAt: true, weightAdjustReason: true,
   weightAdjustedBy: { select: { id: true, name: true } },
   goal: { select: { id: true, title: true } },
   employee: { select: { id: true, name: true } },
@@ -120,6 +120,10 @@ export function weightageRow(task, now = new Date()) {
 
     plannedWeight,
     completedWeight,
+    // The goal owner's 0-5 rating; null until the goal is completed and rated.
+    managerRating: task.managerRating ?? null,
+    // Filled in by withGoalWeightage() once the whole set of rows is known.
+    goalWeightage: null,
     // Null until a manager actually intervenes — an untouched task is not the
     // same as one deliberately left at its earned value.
     managerFinalWeight: adjusted ? Number(task.managerFinalWeight) : null,
@@ -142,6 +146,28 @@ export function weightageRow(task, now = new Date()) {
   };
 }
 
+/**
+ * Goal weightage on a 0-100% scale: a goal's share of the member's total
+ * planned work, i.e. the sum of their task weights in that goal divided by the
+ * sum across every goal in the same result set. Tasks outside any goal get null.
+ */
+export function withGoalWeightage(rows) {
+  const perGoal = new Map();
+  let total = 0;
+  for (const r of rows) {
+    if (!r.goalId) continue;
+    const w = Number(r.plannedWeight || 0);
+    perGoal.set(r.goalId, (perGoal.get(r.goalId) || 0) + w);
+    total += w;
+  }
+  return rows.map((r) => ({
+    ...r,
+    goalWeightage: r.goalId && total > 0
+      ? Math.round(((perGoal.get(r.goalId) || 0) / total) * 1000) / 10
+      : (r.goalId ? 0 : null),
+  }));
+}
+
 /** The ledger for a set of tasks, with totals. */
 export async function weightageFor({ tenantId, employeeId, fy, from, to, page, limit, client = prisma }) {
   const fyWhere = financialYearFilter(fy);
@@ -160,7 +186,7 @@ export async function weightageFor({ tenantId, employeeId, fy, from, to, page, l
     select: TASK_SELECT,
   });
 
-  const allRows = tasks.map((t) => weightageRow(t));
+  const allRows = withGoalWeightage(tasks.map((t) => weightageRow(t)));
   // Totals are computed across EVERY matching row, never just the page on
   // screen. A header that changed as you paged would be worse than useless.
   const sum = (key) => allRows.reduce((acc, r) => acc + Number(r[key] || 0), 0);

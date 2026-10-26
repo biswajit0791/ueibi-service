@@ -3,7 +3,7 @@ import { createTask, listTasks, updateTaskStatus, updateTask, deleteTask } from 
 import { getTeamWeightage, setTaskFinalWeight, getTeamWeightageSummary } from '../controllers/taskWeightage.controller.js';
 import { rateGoalTask } from '../controllers/taskRating.controller.js';
 import {
-  listMilestones, createMilestone, updateMilestone, deleteMilestone, listOverdueMilestones,
+  listMilestones, createMilestone, updateMilestone, deleteMilestone, listOverdueMilestones, listMyAssignedMilestones,
   dispatchMilestoneAlertController, getMilestoneLiveStatusSvg,
 } from '../controllers/taskMilestone.controller.js';
 import { requireAuth } from '../middleware/auth.js';
@@ -37,6 +37,7 @@ router.patch('/tasks/:id/final-weight', requireAuth, requireTenant, setTaskFinal
 // Registered before '/tasks/:id/milestones/:mid' is irrelevant — different
 // path — but it shares that endpoint's visibility rule.
 router.get('/milestones/overdue', requireAuth, requireTenant, listOverdueMilestones);
+router.get('/milestones/assigned-to-me', requireAuth, requireTenant, listMyAssignedMilestones);
 router.get('/tasks/:id/milestones', requireAuth, requireTenant, listMilestones);
 router.post('/tasks/:id/milestones', requireAuth, requireTenant, createMilestone);
 router.patch('/tasks/:id/milestones/:mid', requireAuth, requireTenant, updateMilestone);

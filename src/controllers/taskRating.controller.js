@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma.js';
 import { emitToTenant } from '../lib/socket.js';
 import { taskIdParamSchema, managerTaskRatingSchema } from '../validations/task.schema.js';
+import { goalRatingGate } from '../lib/goalRating.js';
 
 const RATEABLE_GOAL_STATUSES = new Set([
   'PENDING_MANAGER_REVIEW',
@@ -51,6 +52,17 @@ export async function rateGoalTask(req, res, next) {
     const taskStatus = String(task.status || '').toLowerCase();
     if (!['done', 'completed'].includes(taskStatus) && Number(task.progress) < 100) {
       return res.status(409).json({ error: 'A task can only be rated after it is completed' });
+    }
+
+    const goalTasks = await prisma.task.findMany({
+      where: { goalId: task.goal.id, tenantId: req.tenantId },
+      select: { status: true },
+    });
+    const gate = goalRatingGate(goalTasks);
+    if (!gate.ready) {
+      return res.status(409).json({
+        error: `Tasks can be rated only after the goal is completed. ${gate.remaining} of ${gate.total} task(s) are still open.`,
+      });
     }
 
     const assignment = task.goal.assignments.find((row) => row.employeeId === task.employeeId);

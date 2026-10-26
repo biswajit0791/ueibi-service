@@ -2,6 +2,7 @@ import { prisma } from '../lib/prisma.js';
 import { emitToTenant, emitToUser } from '../lib/socket.js';
 import { ELEVATED_ROLES, HR_ROLES, MANAGER_OR_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
 import { sendGoalSubmissionEmail, sendGoalReviewResultEmail } from './goalEscalation.service.js';
+import { goalRatingGate } from '../lib/goalRating.js';
 
 export const GOAL_CATEGORIES = [
   'Technical Skills',
@@ -857,7 +858,9 @@ export class GoalService {
         task.managerRating === null || task.managerRating === undefined
       );
 
-      if (unratedTasks.length > 0) {
+      // Ratings only open once every task of the goal is done, so they cannot
+      // block an approval while some tasks are still open.
+      if (unratedTasks.length > 0 && goalRatingGate(goal.tasks).ready) {
         throw {
           status: 409,
           message: `Rate all ${unratedTasks.length} completed task${unratedTasks.length === 1 ? '' : 's'} before approving.`,
