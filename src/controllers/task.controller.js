@@ -13,7 +13,7 @@ import { timingUpdates, isWorkStarted, taskTiming } from '../lib/taskTiming.js';
 import { visibleTaskWhere } from '../services/taskVisibility.service.js';
 import { assertTaskDatesFitMilestones } from '../lib/dateValidation.js';
 import { validateMilestoneDrafts, validateMilestonesComplete } from '../lib/criticalTask.js';
-import { assertWatcherEmailsAllowed, assertMilestoneAssigneesValid } from './taskMilestone.controller.js';
+import { assertWatcherEmailsAllowed, assertMilestoneAssigneesValid, milestoneWorkBlock } from './taskMilestone.controller.js';
 import { withDefaultMilestoneWatcher } from '../services/milestoneWatcher.service.js';
 import { REVIEW_STATUS, reviewFieldsForTransition, completeGoalIfAllApproved } from '../services/taskReview.service.js';
 
@@ -664,11 +664,13 @@ export async function createTask(req, res, next) {
       }
       if (summary && !summary.exempt) {
         const projected = summary.totalWeight + resolvedWeight;
-        if (projected > 100) {
-          const reason = `Task weights for this goal would total ${projected}%, which exceeds 100%.`;
+        if (projected !== 100) {
+          const reason = projected > 100
+            ? `Task weights for this goal would total ${projected}%, which exceeds 100%.`
+            : `Task weights would total ${projected}%. A goal must be fully planned at 100% before work can be recorded against it.`;
           return res.status(409).json({
             success: false,
-            code: 'GOAL_WEIGHT_EXCEEDED',
+            code: projected > 100 ? 'GOAL_WEIGHT_EXCEEDED' : 'GOAL_WEIGHT_INCOMPLETE',
             error: reason,
             message: reason,
             weightSummary: { ...summary, projectedTotal: projected },
@@ -708,6 +710,18 @@ export async function createTask(req, res, next) {
       ...milestone,
       watcherEmails: await withDefaultMilestoneWatcher(tenantId, primaryTarget.id, milestone.watcherEmails),
     })));
+    // New milestones await approval, so none may start part-done unless the
+    // milestone gate would already let work be recorded on it.
+    if (milestoneDrafts.some((m) => Number(m.progress || 0) > 0)) {
+      const blocked = await milestoneWorkBlock({
+        goalId: resolvedGoalId, isStandalone: effectiveIsStandalone, tenantId,
+        milestone: { status: 'PENDING_APPROVAL' },
+      });
+      if (blocked) {
+        return res.status(409).json({ success: false, code: blocked.code, error: blocked.message, message: blocked.message });
+      }
+    }
+
     // A milestone-tracked task waits at pending_approval until its milestones
     // are approved (same rule createMilestone applies to a lone milestone).
     const initialStatus = milestoneDrafts.length > 0 && effStatus === 'todo' && effProgress === 0
