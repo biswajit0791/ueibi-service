@@ -1,3 +1,5 @@
+import path from 'node:path';
+import fs from 'node:fs';
 import { prisma } from '../lib/prisma.js';
 import {
   createGoalSchema,
@@ -27,6 +29,48 @@ async function checkIsSubordinate(managerId, targetId, tenantId) {
 }
 
 // ── Metadata Endpoints ─────────────────────────────────────────────────────
+
+const ALLOWED_GOAL_ATTACHMENT_EXTENSIONS = new Set([
+  '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.jpg', '.jpeg', '.png', '.webp'
+]);
+const MAX_TOTAL_ATTACHMENT_SIZE = 25 * 1024 * 1024; // 25 MB
+
+function validateGoalAttachments(attachments) {
+  if (!attachments || !Array.isArray(attachments) || attachments.length === 0) {
+    return null;
+  }
+
+  // 1. Validate file extensions
+  for (const att of attachments) {
+    if (typeof att !== 'string') continue;
+    const ext = path.extname(att).toLowerCase();
+    if (ext && !ALLOWED_GOAL_ATTACHMENT_EXTENSIONS.has(ext)) {
+      return `Unsupported attachment file format "${att}". Supported formats: PDF, Word (.doc, .docx), Excel (.xls, .xlsx), Images (JPG, JPEG, PNG, WEBP).`;
+    }
+  }
+
+  // 2. Validate total size of physical attachment files in upload directory if present
+  const uploadDir = path.resolve(process.env.UPLOAD_DIR || './uploads');
+  let totalBytes = 0;
+  for (const att of attachments) {
+    if (typeof att !== 'string') continue;
+    const baseName = path.basename(att);
+    const fullPath = path.join(uploadDir, baseName);
+    try {
+      if (fs.existsSync(fullPath)) {
+        totalBytes += fs.statSync(fullPath).size;
+      }
+    } catch {
+      // ignore stat errors
+    }
+  }
+
+  if (totalBytes > MAX_TOTAL_ATTACHMENT_SIZE) {
+    return `Total attachment size (${(totalBytes / (1024 * 1024)).toFixed(2)} MB) exceeds the 25 MB limit.`;
+  }
+
+  return null;
+}
 
 // These three now read the tenant's own master lists instead of a hardcoded
 // constant. The RESPONSE SHAPE IS UNCHANGED on purpose — GoalForm.jsx and any
@@ -343,7 +387,6 @@ export async function createGoal(req, res, next) {
       title,
       description,
       category,
-      goalType,
       priority,
       financialYear,
       quarter,
@@ -361,6 +404,11 @@ export async function createGoal(req, res, next) {
 
     if (!title || !title.trim()) {
       return res.status(400).json({ error: 'Goal title is required' });
+    }
+
+    const attachmentError = validateGoalAttachments(attachments);
+    if (attachmentError) {
+      return res.status(400).json({ error: attachmentError });
     }
 
     // ── Validate Goal Owner ──────────────────────────────────────────────────
@@ -571,7 +619,6 @@ export async function createGoal(req, res, next) {
         title: title.trim(),
         description: description || null,
         category: category || 'General',
-        goalType: goalType || 'General',
         priority: priority || 'medium',
         financialYear: financialYear || dateCheck.fy?.label || getCurrentFinancialYear(),
         quarter: quarter || getCurrentQuarter(),
@@ -1249,13 +1296,19 @@ export async function updateGoal(req, res, next) {
       });
     }
 
+    if (safeData.attachments) {
+      const attachmentError = validateGoalAttachments(safeData.attachments);
+      if (attachmentError) {
+        return res.status(400).json({ error: attachmentError });
+      }
+    }
+
     const updated = await prisma.goal.update({
       where: { id },
       data: {
         ...(safeData.title ? { title: safeData.title.trim() } : {}),
         ...(safeData.description !== undefined ? { description: safeData.description } : {}),
         ...(safeData.category ? { category: safeData.category } : {}),
-        ...(safeData.goalType ? { goalType: safeData.goalType } : {}),
         ...(safeData.priority ? { priority: safeData.priority } : {}),
         ...(safeData.financialYear ? { financialYear: safeData.financialYear } : {}),
         ...(safeData.quarter ? { quarter: safeData.quarter } : {}),
