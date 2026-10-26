@@ -13,7 +13,8 @@ import { timingUpdates, isWorkStarted, taskTiming } from '../lib/taskTiming.js';
 import { visibleTaskWhere } from '../services/taskVisibility.service.js';
 import { assertTaskDatesFitMilestones } from '../lib/dateValidation.js';
 import { validateMilestoneDrafts } from '../lib/criticalTask.js';
-import { assertWatcherEmailsAllowed, assertMilestoneAssigneesValid, getEscalationChainForEmployee } from './taskMilestone.controller.js';
+import { assertWatcherEmailsAllowed, assertMilestoneAssigneesValid } from './taskMilestone.controller.js';
+import { withDefaultMilestoneWatcher } from '../services/milestoneWatcher.service.js';
 
 function formatZodIssues(issues, fallback = 'Validation failed') {
   if (!Array.isArray(issues) || issues.length === 0) return fallback;
@@ -647,6 +648,10 @@ export async function createTask(req, res, next) {
     // 7. Create one task record for its single assigned employee.
     let createdTask;
     const primaryTarget = targets[0];
+    milestoneDrafts = await Promise.all(milestoneDrafts.map(async (milestone) => ({
+      ...milestone,
+      watcherEmails: await withDefaultMilestoneWatcher(tenantId, primaryTarget.id, milestone.watcherEmails),
+    })));
     // A milestone-tracked task waits at pending_approval until its milestones
     // are approved (same rule createMilestone applies to a lone milestone).
     const initialStatus = milestoneDrafts.length > 0 && effStatus === 'todo' && effProgress === 0
@@ -713,25 +718,6 @@ export async function createTask(req, res, next) {
     } catch (e) {
       if (sendWeightError(res, e)) return;
       return res.status(e.status || 500).json({ success: false, message: e.message || 'Could not create the task' });
-    }
-
-    // Reporting-chain escalation levels for each milestone, as createMilestone does.
-    if (createdMilestones.length > 0) {
-      try {
-        const chainLevels = await getEscalationChainForEmployee(tenantId, primaryTarget.id);
-        if (chainLevels.length > 0) {
-          await prisma.checkpointEscalationLevel.createMany({
-            data: createdMilestones.flatMap((m) => chainLevels.map((lvl) => ({
-              milestoneId: m.id,
-              levelNumber: lvl.levelNumber,
-              roleOrTitle: lvl.roleOrTitle,
-              userId: lvl.userId,
-            }))),
-          });
-        }
-      } catch (e) {
-        console.error('Failed to attach escalation levels to milestones:', e);
-      }
     }
 
     // 8. Side effects, once the row is safely committed.

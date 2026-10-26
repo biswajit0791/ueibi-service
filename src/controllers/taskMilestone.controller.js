@@ -11,7 +11,8 @@
  * milestone is exactly as visible/editable as the task it belongs to, with
  * two additional role gates layered on top:
  *   - only MANAGER+ may create/edit/delete a milestone
- *   - only the task's own assignee may propose a date or tick one done
+ *   - only the task owner or milestone's assigned employee may update progress
+ *     or propose a date
  */
 import { prisma } from '../lib/prisma.js';
 import { loadTaskForUser } from '../services/taskAccess.service.js';
@@ -22,12 +23,11 @@ import { sendMail } from '../lib/mailer.js';
 import { env } from '../config/env.js';
 import { MANAGER_OR_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
 import { getCompanySettings, findDisallowedWatcherEmails } from '../services/companySettings.service.js';
+import { withDefaultMilestoneWatcher } from '../services/milestoneWatcher.service.js';
 import {
   createMilestoneSchema, updateMilestoneSchema, MAX_MILESTONES_PER_TASK,
 } from '../validations/taskMilestone.schema.js';
 import {
-  dispatchMilestoneWatcherAlert,
-  sendMilestoneTestEmail,
   buildModernMilestoneEmailHtml,
 } from '../services/milestoneEscalation.service.js';
 
@@ -37,66 +37,7 @@ export const MILESTONE_INCLUDE = {
   completedBy: { select: { id: true, name: true } },
   createdBy: { select: { id: true, name: true } },
   assignee: { select: { id: true, name: true, email: true, designation: true, role: true } },
-  escalationLevels: {
-    include: {
-      user: {
-        select: { id: true, name: true, email: true, designation: true, role: true },
-      },
-    },
-    orderBy: { levelNumber: 'asc' },
-  },
 };
-
-export async function getEscalationChainForEmployee(tenantId, employeeId) {
-  const employee = await prisma.tenantUser.findFirst({
-    where: { id: employeeId, tenantId, isDeleted: false },
-    select: { id: true, managerId: true },
-  });
-  if (!employee) return [];
-
-  const chain = [];
-  const visited = new Set([employee.id]);
-  let currentManagerId = employee.managerId;
-
-  while (currentManagerId && !visited.has(currentManagerId)) {
-    visited.add(currentManagerId);
-    const mgr = await prisma.tenantUser.findFirst({
-      where: { id: currentManagerId, tenantId, isDeleted: false },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        designation: true,
-        managerId: true,
-      },
-    });
-    if (!mgr) break;
-    chain.push(mgr);
-    currentManagerId = mgr.managerId;
-  }
-
-  if (chain.length < 3) {
-    const cxo = await prisma.tenantUser.findFirst({
-      where: {
-        tenantId,
-        isDeleted: false,
-        role: { in: ['CMD', 'SUPER_ADMIN', 'ADMIN'] },
-        id: { notIn: [employeeId, ...chain.map(c => c.id)] },
-      },
-      select: { id: true, name: true, email: true, role: true, designation: true },
-    });
-    if (cxo) chain.push(cxo);
-  }
-
-  const roleTitles = ['Direct Manager', 'General Manager', 'CXO / COO'];
-  return chain.slice(0, 3).map((u, idx) => ({
-    levelNumber: idx + 1,
-    roleOrTitle: u.designation || roleTitles[idx] || `Escalation Level ${idx + 1}`,
-    userId: u.id,
-    user: u,
-  }));
-}
 
 /** A milestone's own assignee may belong to a team that has no access to the
  *  parent task. Falls back to "assigned to a milestone on this task" so they
@@ -212,8 +153,10 @@ export async function createMilestone(req, res, next) {
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
-    const { title, description, dueDate, progress, watcherEmails, assigneeId } = parsed.data;
+    const { title, description, dueDate, progress, assigneeId } = parsed.data;
+    let { watcherEmails } = parsed.data;
     await assertWatcherEmailsAllowed(tenantId, watcherEmails);
+    watcherEmails = await withDefaultMilestoneWatcher(tenantId, task.employeeId, watcherEmails);
     await assertMilestoneAssigneesValid(tenantId, [assigneeId]);
 
     const due = new Date(dueDate);
@@ -264,19 +207,6 @@ export async function createMilestone(req, res, next) {
         createdById: req.user.id,
       },
     });
-
-    // Populate dynamic reporting hierarchy escalation levels
-    const chainLevels = await getEscalationChainForEmployee(tenantId, task.employeeId);
-    if (chainLevels.length > 0) {
-      await prisma.checkpointEscalationLevel.createMany({
-        data: chainLevels.map((lvl) => ({
-          milestoneId: milestone.id,
-          levelNumber: lvl.levelNumber,
-          roleOrTitle: lvl.roleOrTitle,
-          userId: lvl.userId,
-        })),
-      });
-    }
 
     const milestoneWithDetails = await prisma.taskMilestone.findUnique({
       where: { id: milestone.id },
@@ -348,16 +278,7 @@ async function broadcastMilestoneCompleted({ tenantId, task, milestone, actorUse
       if (emp?.managerId) recipientUserIds.add(emp.managerId);
     }
 
-    // 4. Escalation hierarchy managers (L1, L2, L3)
-    const escalationLevels = await prisma.checkpointEscalationLevel.findMany({
-      where: { milestoneId: milestone.id },
-      select: { userId: true },
-    });
-    for (const lvl of escalationLevels) {
-      if (lvl.userId) recipientUserIds.add(lvl.userId);
-    }
-
-    // 5. Followers of the task and its parent goal
+    // 4. Followers of the task and its parent goal
     const entityIds = [task.id, task.goalId].filter(Boolean);
     const followers = await prisma.follower.findMany({
       where: { tenantId, entityId: { in: entityIds } },
@@ -367,7 +288,7 @@ async function broadcastMilestoneCompleted({ tenantId, task, milestone, actorUse
       if (f.userId) recipientUserIds.add(f.userId);
     }
 
-    // 6. Milestone Watchers who are tenant users
+    // 5. Milestone Watchers who are tenant users
     if (milestone.watcherEmails && milestone.watcherEmails.length > 0) {
       const watcherUsers = await prisma.tenantUser.findMany({
         where: {
@@ -409,19 +330,11 @@ async function broadcastMilestoneCompleted({ tenantId, task, milestone, actorUse
       }
     }
 
-    // Gather all email recipients (watchers + involved users)
+    // Completion emails are sent only to watchers; in-app updates above still
+    // reach the task owner, manager, creator, and followers.
     const emailsToNotify = new Set(
       (milestone.watcherEmails || []).map((e) => e.toLowerCase())
     );
-    if (recipientUserIds.size > 0) {
-      const users = await prisma.tenantUser.findMany({
-        where: { id: { in: [...recipientUserIds] }, isDeleted: false },
-        select: { email: true },
-      });
-      for (const u of users) {
-        if (u.email) emailsToNotify.add(u.email.toLowerCase());
-      }
-    }
 
     // Prepare full task milestone context for rich HTML email
     const allTaskMilestones = await prisma.taskMilestone.findMany({
@@ -540,7 +453,7 @@ export async function updateMilestone(req, res, next) {
       }
       if (watcherEmails !== undefined) {
         await assertWatcherEmailsAllowed(tenantId, watcherEmails);
-        data.watcherEmails = watcherEmails;
+        data.watcherEmails = await withDefaultMilestoneWatcher(tenantId, task.employeeId, watcherEmails);
       }
       if (dueDate !== undefined) {
         const due = new Date(dueDate);
@@ -937,26 +850,6 @@ function xmlEscape(str) {
     .replace(/'/g, '&apos;');
 }
 
-// ─── POST /api/tasks/:id/milestones/:mid/dispatch-alert ────────────────────
-export async function dispatchMilestoneAlertController(req, res, next) {
-  try {
-    const { id: taskId, mid: milestoneId } = req.params;
-    const task = await prisma.task.findUnique({ where: { id: taskId } });
-    if (!task || task.tenantId !== req.tenantId) {
-      return res.status(404).json({ error: 'Task not found' });
-    }
-
-    const result = await dispatchMilestoneWatcherAlert(milestoneId);
-    res.json(result);
-  } catch (err) {
-    if (err.status) return res.status(err.status).json({ error: err.message });
-    next(err);
-  }
-}
-
-// Backwards compatibility alias
-export const testMilestoneEscalation = dispatchMilestoneAlertController;
-
 // ─── GET /api/tasks/:id/milestones/:mid/live-status.svg ───────────────────
 // Dynamic live telemetry image stream for email clients. Returns real-time SVG status
 // with zero cache headers so every time the email is opened, it renders live!
@@ -1136,4 +1029,3 @@ export async function getMilestoneLiveStatusSvg(req, res, next) {
     next(err);
   }
 }
-

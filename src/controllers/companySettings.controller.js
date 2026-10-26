@@ -12,6 +12,12 @@ function presentSettings(settings) {
   return {
     milestoneWatcherDomains: settings.milestoneWatcherDomains,
     milestoneRequireApproval: settings.milestoneRequireApproval,
+    milestoneAlertEnabled: settings.milestoneAlertEnabled,
+    milestoneAlertDaysBefore: settings.milestoneAlertDaysBefore,
+    milestoneAlertFrequencyDays: settings.milestoneAlertFrequencyDays,
+    milestoneAlertOnlyNoProgress: settings.milestoneAlertOnlyNoProgress,
+    milestoneAlertSubject: settings.milestoneAlertSubject,
+    milestoneAlertBody: settings.milestoneAlertBody,
     theme: settings.theme ?? null,
     financialYearStartMonth: settings.financialYearStartMonth || 4,
     financialYearStartDay: settings.financialYearStartDay || 1,
@@ -62,6 +68,12 @@ export async function patchSettings(req, res, next) {
     const {
       milestoneWatcherDomains,
       milestoneRequireApproval,
+      milestoneAlertEnabled,
+      milestoneAlertDaysBefore,
+      milestoneAlertFrequencyDays,
+      milestoneAlertOnlyNoProgress,
+      milestoneAlertSubject,
+      milestoneAlertBody,
       theme,
       financialYearStartMonth,
       financialYearStartDay,
@@ -74,6 +86,12 @@ export async function patchSettings(req, res, next) {
     const updated = await updateCompanySettings(req.tenantId, {
       milestoneWatcherDomains: milestoneWatcherDomains?.map(normaliseDomain),
       milestoneRequireApproval,
+      milestoneAlertEnabled,
+      milestoneAlertDaysBefore,
+      milestoneAlertFrequencyDays,
+      milestoneAlertOnlyNoProgress,
+      milestoneAlertSubject,
+      milestoneAlertBody,
       financialYearStartMonth,
       financialYearStartDay,
       theme: theme === undefined || theme === null
@@ -104,6 +122,7 @@ export async function getWatcherCandidates(req, res, next) {
         role: true,
         department: true,
         designation: true,
+        managerId: true,
       },
       orderBy: { name: 'asc' },
     });

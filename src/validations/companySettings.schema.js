@@ -83,6 +83,12 @@ export const themeSchema = z.object({
 export const updateCompanySettingsSchema = z.object({
   milestoneWatcherDomains: z.array(domainSchema).max(25, 'At most 25 domains').optional(),
   milestoneRequireApproval: z.boolean().optional(),
+  milestoneAlertEnabled: z.boolean().optional(),
+  milestoneAlertDaysBefore: z.number().int().min(0).max(30).optional(),
+  milestoneAlertFrequencyDays: z.number().int().min(1).max(30).optional(),
+  milestoneAlertOnlyNoProgress: z.boolean().optional(),
+  milestoneAlertSubject: z.string().trim().min(1).max(250).optional(),
+  milestoneAlertBody: z.string().trim().min(1).max(5000).optional(),
   // null resets to the default look.
   theme: themeSchema.nullable().optional(),
   financialYearStartMonth: z.number().int().min(1).max(12).optional(),
