@@ -299,6 +299,88 @@ async function runVerification() {
       const resElevatedInvalid = createMockRes();
       await createTask(reqElevatedInvalid, resElevatedInvalid);
       assert(resElevatedInvalid.statusCode === 400, 'Elevated role cannot bypass Goal Assignee restriction (rejected with 400)');
+
+      // --------------------------------------------------------------------------
+      // 6c. TASK CREATION SOURCE ENFORCEMENT
+      // --------------------------------------------------------------------------
+      console.log('\n--- 6c. Task Creation Source Enforcement ---');
+      // Case 1: source === 'goal' without goalId should be rejected
+      const reqGoalSourceNoId = {
+        tenantId: tenant.id,
+        user: managerUser,
+        body: {
+          title: 'Test: Goal Source Missing Goal ID',
+          source: 'goal',
+          employeeId: managerUser.id,
+          startDate: '2026-10-15',
+          dueDate: '2026-11-15',
+        },
+      };
+      const resGoalSourceNoId = createMockRes();
+      await createTask(reqGoalSourceNoId, resGoalSourceNoId);
+      assert(resGoalSourceNoId.statusCode === 400, 'source === "goal" without goalId is rejected with 400');
+      assert(resGoalSourceNoId.data?.message?.includes('valid goal ID'), 'Rejection message cites requirement for valid goal ID');
+
+      // Case 2: source === 'goal' with standalone / private should be rejected
+      const reqGoalSourceStandalone = {
+        tenantId: tenant.id,
+        user: managerUser,
+        body: {
+          title: 'Test: Goal Source Standalone Prohibited',
+          source: 'goal',
+          goalId: goalSame.id,
+          isStandalone: true,
+          employeeId: managerUser.id,
+          startDate: '2026-10-15',
+          dueDate: '2026-11-15',
+        },
+      };
+      const resGoalSourceStandalone = createMockRes();
+      await createTask(reqGoalSourceStandalone, resGoalSourceStandalone);
+      assert(resGoalSourceStandalone.statusCode === 400, 'source === "goal" with isStandalone=true is rejected with 400');
+
+      // Case 3: source === 'goal' with valid goalId succeeds and correctly associates with that goal
+      const reqGoalSourceValid = {
+        tenantId: tenant.id,
+        user: managerUser,
+        body: {
+          title: 'Test: Valid Goal Source Task',
+          source: 'goal',
+          goalId: goalSame.id,
+          weight: 15,
+          employeeId: managerUser.id,
+          startDate: '2026-10-15',
+          dueDate: '2026-11-15',
+        },
+      };
+      const resGoalSourceValid = createMockRes();
+      await createTask(reqGoalSourceValid, resGoalSourceValid);
+      assert(resGoalSourceValid.statusCode === 200 || resGoalSourceValid.statusCode === 201, 'Valid goal source task created successfully');
+      if (resGoalSourceValid.data?.id) {
+        createdTaskIds.push(resGoalSourceValid.data.id);
+        assert(resGoalSourceValid.data.goalId === goalSame.id, 'Task is correctly associated with the goal ID in the backend');
+      }
+
+      // Case 4: source === 'taskboard' without goalId succeeds as standalone/unlinked
+      const reqTaskboardNoGoal = {
+        tenantId: tenant.id,
+        user: managerUser,
+        body: {
+          title: 'Test: Taskboard Source Unlinked Task',
+          source: 'taskboard',
+          workflowType: 'special',
+          isStandalone: true,
+          employeeId: managerUser.id,
+          startDate: '2026-10-15',
+          dueDate: '2026-11-15',
+        },
+      };
+      const resTaskboardNoGoal = createMockRes();
+      await createTask(reqTaskboardNoGoal, resTaskboardNoGoal);
+      assert(resTaskboardNoGoal.statusCode === 200 || resTaskboardNoGoal.statusCode === 201, 'Taskboard source task without goalId created successfully');
+      if (resTaskboardNoGoal.data?.id) {
+        createdTaskIds.push(resTaskboardNoGoal.data.id);
+      }
     }
 
     // --------------------------------------------------------------------------

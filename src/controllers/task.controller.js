@@ -306,11 +306,27 @@ export async function createTask(req, res, next) {
     }
     const {
       title, priority, startDate, dueDate, financialYear,
-      tags, goalId, isPrivate, isStandalone, workflowType, taskMode, weight,
+      goalId, isPrivate, isStandalone, workflowType, taskMode, weight,
       description, employeeId, employeeIds, dependency, isDependencyOf,
       status, progress, actualStartDate, actualCompletionDate,
-      isMilestoneTracked,
+      isMilestoneTracked, source,
     } = parsed.data;
+
+    // Task Creation Source Validation
+    if (source === 'goal') {
+      if (!goalId) {
+        return res.status(400).json({
+          success: false,
+          message: 'A task created from within a goal must be associated with a valid goal ID.',
+        });
+      }
+      if (isStandalone === true || isPrivate === true) {
+        return res.status(400).json({
+          success: false,
+          message: 'Tasks created from within a goal cannot be configured as standalone or private.',
+        });
+      }
+    }
 
     // Normal vs Special Task Workflow Security & Validation
     const isNormalWorkflow = workflowType === 'normal' || taskMode === 'normal';
@@ -465,6 +481,13 @@ export async function createTask(req, res, next) {
       }
     }
 
+    if (source === 'goal' && !resolvedGoalId) {
+      return res.status(400).json({
+        success: false,
+        message: 'A task created from within a goal must be associated with an active goal belonging to this tenant.',
+      });
+    }
+
     // Idempotency & rapid double-click guard:
     // If an identical task was created with the same title, assignee, and goal within the last 5 seconds, suppress duplicate creation
     const fiveSecondsAgo = new Date(Date.now() - 5000);
@@ -614,7 +637,7 @@ export async function createTask(req, res, next) {
             startDate: startDate ? new Date(startDate) : undefined,
             dueDate: dueDate ? new Date(dueDate) : undefined,
             financialYear: financialYear || null,
-            tags: tags || null,
+            tags: req.body.tags || null,
             isPrivate: effectiveIsPrivate,
             isStandalone: effectiveIsStandalone,
             weight: resolvedWeight,

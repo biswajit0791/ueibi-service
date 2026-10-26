@@ -128,7 +128,6 @@ async function runTests() {
           targetDate: '2027-01-15',
           priority: 'high',
           category: 'Technical Skills',
-          goalType: 'General',
           employeeIds: [empUserA.id],
           ownerId: mgrUserB.id,
         },

@@ -630,7 +630,6 @@ const options = {
             startDate: { type: 'string', format: 'date', example: '2026-08-28' },
             dueDate: { type: 'string', format: 'date', example: '2026-08-30' },
             financialYear: { type: 'string', example: 'FY 2026-27' },
-            tags: { type: 'string', example: 'backend,routes' },
             goalId: { type: 'string', example: 'clgoal12345' },
             isPrivate: { type: 'boolean', example: false },
             isStandalone: { type: 'boolean', example: false },

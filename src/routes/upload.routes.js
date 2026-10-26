@@ -32,6 +32,10 @@ const storage = multer.diskStorage({
 // breaking those flows. Reuses the same executable/script denylist already
 // enforced for entity attachments (storageService.validateFile), which was
 // previously never applied here at all.
+const ALLOWED_GOAL_EXTENSIONS = new Set([
+  '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.jpg', '.jpeg', '.png', '.webp'
+]);
+
 const upload = multer({
   storage,
   limits: { fileSize: 25 * 1024 * 1024 }, // 25MB limit
@@ -39,6 +43,9 @@ const upload = multer({
     const ext = path.extname(file.originalname).toLowerCase();
     if (DISALLOWED_EXTENSIONS.has(ext)) {
       return cb(new Error(`Executable or script file type "${ext}" is not permitted for upload`));
+    }
+    if (req.query?.context === 'goal' && !ALLOWED_GOAL_EXTENSIONS.has(ext)) {
+      return cb(new Error(`Unsupported file type "${ext}". Supported formats: PDF, Word (.doc, .docx), Excel (.xls, .xlsx), Images (JPG, JPEG, PNG, WEBP)`));
     }
     cb(null, true);
   },
