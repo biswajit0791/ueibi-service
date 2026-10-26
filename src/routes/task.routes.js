@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { createTask, listTasks, updateTaskStatus, updateTask, deleteTask } from '../controllers/task.controller.js';
 import { getTeamWeightage, setTaskFinalWeight, getTeamWeightageSummary } from '../controllers/taskWeightage.controller.js';
 import { rateGoalTask } from '../controllers/taskRating.controller.js';
+import { submitTaskForReview, approveTaskReview, rejectTaskReview } from '../controllers/taskReview.controller.js';
 import {
   listMilestones, createMilestone, updateMilestone, deleteMilestone, listOverdueMilestones, listMyAssignedMilestones,
   getMilestoneLiveStatusSvg,
@@ -18,6 +19,13 @@ router.patch('/tasks/:id', requireAuth, requireTenant, updateTask);
 router.put('/tasks/:id', requireAuth, requireTenant, updateTask);
 router.patch('/tasks/:id/manager-rating', requireAuth, requireTenant, rateGoalTask);
 router.delete('/tasks/:id', requireAuth, requireTenant, deleteTask);
+
+// ── Per-task completion review ─────────────────────────────────────────────
+// Assignee submits a finished goal task; the goal owner approves or sends it
+// back. When every task on a goal is approved the goal completes by itself.
+router.post('/tasks/:id/review/submit', requireAuth, requireTenant, submitTaskForReview);
+router.post('/tasks/:id/review/approve', requireAuth, requireTenant, approveTaskReview);
+router.post('/tasks/:id/review/reject', requireAuth, requireTenant, rejectTaskReview);
 
 // ── Weightage ledger ───────────────────────────────────────────────────────
 // What each task was planned to be worth, what completing it earned, whether

@@ -258,6 +258,7 @@ model TenantUser {
   assignedGoalRecords        GoalAssignment[]         @relation("AssignedGoals")
   tasks                      Task[]
   tasksApproved              Task[]                   @relation("TaskApprovedBy")
+  tasksReviewed              Task[]                   @relation("TaskReviewedBy")
   tasksManagerRated          Task[]                   @relation("TaskManagerRater")
   assignedEscalations        CheckpointEscalationLevel[] @relation("EscalationAssignedTo")
   userFollowers              Follower[]               @relation("UserFollowers")
@@ -990,6 +991,17 @@ model Task {
   approvedById       String?
   approvedBy         TenantUser?    @relation("TaskApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
   approvedAt         DateTime?
+  // ── Completion review (per task) ─────────────────────────────────────────
+  /// null (not submitted) | SUBMITTED | APPROVED | REJECTED. A finished task is
+  /// submitted by its assignee and approved by the goal owner (or a manager
+  /// above the assignee). A task the goal owner completes is APPROVED at once.
+  /// Once every task of a goal is APPROVED the goal completes on its own.
+  reviewStatus       String?
+  reviewSubmittedAt  DateTime?
+  reviewedById       String?
+  reviewedBy         TenantUser?    @relation("TaskReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt         DateTime?
+  reviewComment      String?        @db.Text
   /// Opt-in milestone tracking for critical work. Only settable at creation,
   /// only when priority = 'critical', only by a MANAGER or above (see
   /// taskMilestone.controller.js). Replaces the old SubTask checklist.

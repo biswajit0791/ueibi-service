@@ -15,6 +15,7 @@ import { assertTaskDatesFitMilestones } from '../lib/dateValidation.js';
 import { validateMilestoneDrafts, validateMilestonesComplete } from '../lib/criticalTask.js';
 import { assertWatcherEmailsAllowed, assertMilestoneAssigneesValid } from './taskMilestone.controller.js';
 import { withDefaultMilestoneWatcher } from '../services/milestoneWatcher.service.js';
+import { REVIEW_STATUS, reviewFieldsForTransition, completeGoalIfAllApproved } from '../services/taskReview.service.js';
 
 function formatZodIssues(issues, fallback = 'Validation failed') {
   if (!Array.isArray(issues) || issues.length === 0) return fallback;
@@ -330,6 +331,14 @@ async function resolveGoal(goalId, tenantId) {
 async function recalculateGoalProgress(goalId, employeeId = null) {
   if (!goalId) return 0;
   return await goalService.recalculateProgress(goalId, employeeId);
+}
+
+/** Review fields for a task moving between states — see taskReview.service.js. */
+async function reviewFieldsFor(existing, next, goalId, actorId) {
+  const goal = goalId
+    ? await prisma.goal.findUnique({ where: { id: goalId }, select: { ownerManagerId: true } })
+    : null;
+  return reviewFieldsForTransition({ existing: { ...existing, goalId }, next, goal, actorId });
 }
 
 // ─── POST /api/tasks ────────────────────────────────────────────────────────
@@ -704,6 +713,13 @@ export async function createTask(req, res, next) {
     const initialStatus = milestoneDrafts.length > 0 && effStatus === 'todo' && effProgress === 0
       ? 'pending_approval'
       : effStatus;
+    // A task the goal owner records as already finished needs no approval.
+    const createReview = await reviewFieldsFor(
+      { status: 'todo', progress: 0, isPrivate: effectiveIsPrivate, isStandalone: effectiveIsStandalone },
+      { status: initialStatus, progress: effProgress },
+      resolvedGoalId,
+      req.user.id,
+    );
     let createdMilestones = [];
     try {
       createdTask = await withWeightGuard(resolvedGoalId, async (tx) => {
@@ -731,6 +747,7 @@ export async function createTask(req, res, next) {
             // A task created already in progress has actually started now,
             // unless the caller recorded when it really began.
             ...actualDates.data,
+            ...createReview,
             // ─ Relations ─
             employee: { connect: { id: primaryTarget.id } },
             tenant: { connect: { id: tenantId } },
@@ -911,6 +928,8 @@ export async function updateTaskStatus(req, res, next) {
       }
     }
 
+    const reviewFields = await reviewFieldsFor(existing, nextState, existing.goalId, req.user.id);
+
     const updated = await prisma.task.update({
       where: { id },
       data: { 
@@ -918,12 +937,16 @@ export async function updateTaskStatus(req, res, next) {
         ...(progressUpdate !== undefined && !isNaN(progressUpdate) && { progress: progressUpdate }),
         ...(req.body.onHoldReason !== undefined && { onHoldReason: req.body.onHoldReason }),
         ...timingUpdates(existing, nextState),
+        ...reviewFields,
       },
     });
 
     let goalProgress = 0;
     if (updated.goalId) {
       goalProgress = await recalculateGoalProgress(updated.goalId, updated.employeeId);
+      if (reviewFields.reviewStatus === REVIEW_STATUS.APPROVED) {
+        await completeGoalIfAllApproved({ goalId: updated.goalId, tenantId, actor: req.user });
+      }
     }
 
     if (updated.status === 'done' && updated.isDependencyOf) {
@@ -1302,10 +1325,21 @@ export async function updateTask(req, res, next) {
       }
     }
 
+    const reviewFields = await reviewFieldsFor(
+      existing,
+      {
+        status: finalStatus !== undefined ? finalStatus : existing.status,
+        progress: finalProgress !== undefined ? finalProgress : existing.progress,
+      },
+      targetGoalId,
+      req.user.id,
+    );
+
     const runUpdate = (tx) => tx.task.update({
       where: { id },
       data: {
         ...actualDates.data,
+        ...reviewFields,
         ...(title !== undefined && { title: title.trim() }),
         ...(priority !== undefined && { priority }),
         ...(finalStatus !== undefined && { status: finalStatus }),
@@ -1349,6 +1383,9 @@ export async function updateTask(req, res, next) {
             await recalculateGoalProgress(updated.goalId, coId);
           }
         }
+      }
+      if (reviewFields.reviewStatus === REVIEW_STATUS.APPROVED) {
+        await completeGoalIfAllApproved({ goalId: updated.goalId, tenantId, actor: req.user });
       }
     }
 
