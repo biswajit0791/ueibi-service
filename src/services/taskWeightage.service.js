@@ -220,4 +220,37 @@ export async function weightageFor({ tenantId, employeeId, fy, from, to, page, l
   };
 }
 
+/**
+ * Per-employee totals for the team directory, one entry per task owner.
+ * `managerRating` is the mean of the goal owner's 0-5 ratings across that
+ * person's rated tasks (one decimal), or null when nothing is rated yet.
+ */
+export function summariseByEmployee(tasks, now = new Date()) {
+  const byEmployee = {};
+  for (const task of tasks) {
+    const row = weightageRow(task, now);
+    const bucket = (byEmployee[row.employeeId] ||= {
+      employeeId: row.employeeId,
+      employeeName: row.employeeName,
+      taskCount: 0, plannedWeight: 0, completedWeight: 0, finalWeight: 0,
+      delayedCount: 0, adjustedCount: 0, adjustmentDelta: 0,
+      ratedCount: 0, ratingTotal: 0,
+    });
+    bucket.taskCount += 1;
+    bucket.plannedWeight += row.plannedWeight;
+    bucket.completedWeight += row.completedWeight;
+    bucket.finalWeight += row.finalWeight;
+    if (row.isDelayed) bucket.delayedCount += 1;
+    if (row.isAdjusted) { bucket.adjustedCount += 1; bucket.adjustmentDelta += row.adjustmentDelta ?? 0; }
+    if (row.managerRating !== null && !Number.isNaN(Number(row.managerRating))) {
+      bucket.ratedCount += 1;
+      bucket.ratingTotal += Number(row.managerRating);
+    }
+  }
+  return Object.values(byEmployee).map(({ ratingTotal, ...b }) => ({
+    ...b,
+    managerRating: b.ratedCount > 0 ? Math.round((ratingTotal / b.ratedCount) * 10) / 10 : null,
+  }));
+}
+
 export { TASK_SELECT as WEIGHTAGE_TASK_SELECT };
