@@ -27,6 +27,12 @@ export async function getCompanySettings(tenantId) {
 export async function updateCompanySettings(tenantId, {
   milestoneWatcherDomains,
   milestoneRequireApproval,
+  milestoneAlertEnabled,
+  milestoneAlertDaysBefore,
+  milestoneAlertFrequencyDays,
+  milestoneAlertOnlyNoProgress,
+  milestoneAlertSubject,
+  milestoneAlertBody,
   theme,
   financialYearStartMonth,
   financialYearStartDay,
@@ -37,6 +43,12 @@ export async function updateCompanySettings(tenantId, {
     data: {
       ...(milestoneWatcherDomains !== undefined && { milestoneWatcherDomains }),
       ...(milestoneRequireApproval !== undefined && { milestoneRequireApproval }),
+      ...(milestoneAlertEnabled !== undefined && { milestoneAlertEnabled }),
+      ...(milestoneAlertDaysBefore !== undefined && { milestoneAlertDaysBefore }),
+      ...(milestoneAlertFrequencyDays !== undefined && { milestoneAlertFrequencyDays }),
+      ...(milestoneAlertOnlyNoProgress !== undefined && { milestoneAlertOnlyNoProgress }),
+      ...(milestoneAlertSubject !== undefined && { milestoneAlertSubject }),
+      ...(milestoneAlertBody !== undefined && { milestoneAlertBody }),
       // Prisma needs DbNull (not JS null) to store SQL NULL in a Json column.
       ...(theme !== undefined && { theme: theme === null ? Prisma.DbNull : theme }),
       ...(financialYearStartMonth !== undefined && { financialYearStartMonth }),

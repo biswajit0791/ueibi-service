@@ -9,21 +9,18 @@
  * An email can't work that way: nobody may be looking at the dashboard the
  * day a milestone goes overdue, so the notify step has to run on its own.
  *
- * This is the one exception, kept as small as the requirement allows: no new
- * dependency, no persisted "alert" record — just a periodic sweep that emails
- * watchers and creates the same Notification rows the rest of the app already
- * uses, throttled to once per milestone per calendar day via
- * TaskMilestone.lastEscalatedAt so a server restart never re-sends the same
- * day's escalations twice.
+ * This periodic sweep sends tenant-configured reminders to milestone watchers
+ * and creates Notification rows for watchers who are tenant users. The
+ * TaskMilestone.lastEscalatedAt timestamp enforces the tenant's cadence across
+ * process restarts.
  *
  * Performance notes (this is the one job in the app that touches every
  * tenant at once, so it gets its own care):
  *  - the query is covered by the (status, dueDate) index added alongside
  *    TaskMilestone — see the migration that introduced it — so it stays a
  *    cheap index range scan as the table grows, not a full scan.
- *  - "is this watcher email also a platform user" used to be one
- *    findFirst PER WATCHER PER MILESTONE — classic N+1. It's now one bulk
- *    query for every distinct (tenantId, email) pair in the whole run.
+ *  - platform accounts for watcher notifications are resolved in one bulk
+ *    query for the full sweep.
  *  - emails go out with bounded concurrency (EMAIL_CONCURRENCY at a time),
  *    not fully sequential and not all at once — keeps total wall-clock
  *    reasonable without opening hundreds of connections to the mail
@@ -39,19 +36,18 @@ import { prisma } from '../lib/prisma.js';
 import { sendMail } from '../lib/mailer.js';
 import { emitToUser } from '../lib/socket.js';
 import { env } from '../config/env.js';
+import {
+  DEFAULT_MILESTONE_ALERT_SETTINGS,
+  escapeMilestoneAlertHtml,
+  milestoneAlertContext,
+  renderMilestoneAlertTemplate,
+  shouldSendMilestoneAlert,
+} from '../lib/milestoneAlertPolicy.js';
+import { defaultManagerWatcherEmail } from './milestoneWatcher.service.js';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const EMAIL_CONCURRENCY = 5;
 const MAX_MILESTONES_PER_RUN = 2000;
-
-function isSameCalendarDay(a, b) {
-  if (!a || !b) return false;
-  const da = new Date(a);
-  const db = new Date(b);
-  return da.getUTCFullYear() === db.getUTCFullYear()
-    && da.getUTCMonth() === db.getUTCMonth()
-    && da.getUTCDate() === db.getUTCDate();
-}
 
 /**
  * Builds a clean, high-clarity HTML email template for checkpoint status and escalations
@@ -328,7 +324,7 @@ export function buildModernMilestoneEmailHtml({ milestone, task, allMilestones =
                             SURVEILLANCE FREQUENCY
                           </div>
                           <div style="font-size: 13.5px; font-weight: 700; color: #10b981;">
-                            Daily Sweep @ 00:00 UTC
+                            Company-configured reminder cadence
                           </div>
                         </td>
                       </tr>
@@ -357,7 +353,7 @@ export function buildModernMilestoneEmailHtml({ milestone, task, allMilestones =
                 You are receiving this automated alert because your address is authorized as a <strong>Watcher Sentinel</strong> for this critical task.
               </p>
               <p style="margin: 6px 0 0 0; font-size: 11px; color: #475569;">
-                UEIBI Enterprise Platform · Automated Watcher Delay Escalation Sentinel · Daily 00:00 UTC
+                UEIBI Enterprise Platform · Company-configured milestone reminder
               </p>
             </td>
           </tr>
@@ -368,22 +364,6 @@ export function buildModernMilestoneEmailHtml({ milestone, task, allMilestones =
   </table>
 </body>
 </html>`;
-}
-
-function escalationEmail({ milestone, task, daysOverdue, allMilestones = [], escalationRole = null }) {
-  const dueStr = new Date(milestone.dueDate).toISOString().slice(0, 10);
-  const subject = `[Overdue Alert] Checkpoint 0${milestone.order} "${milestone.title}" on "${task.title}" is ${daysOverdue} day(s) late`;
-  const text = `Critical Checkpoint Overdue: "${milestone.title}" on task "${task.title}" was due ${dueStr} and is ${daysOverdue} day(s) overdue.\n\n`
-    + (escalationRole ? `Escalated to: ${escalationRole}\n\n` : '')
-    + `Review in Performance Management: ${env.frontendOrigin || 'http://localhost:5173'}/uer/goals`;
-  const html = buildModernMilestoneEmailHtml({
-    milestone,
-    task,
-    allMilestones,
-    daysOverdue,
-    escalationRole,
-  });
-  return { subject, text, html };
 }
 
 /** Runs `tasks` with at most `limit` in flight at once. Each task's own
@@ -401,224 +381,154 @@ async function runWithConcurrency(tasks, limit) {
 }
 
 /**
- * Finds every overdue, unfinished milestone not already escalated today, and
- * notifies assignee, followers, watcher emails, and the dynamic reporting hierarchy level:
- *  - 1 to 3 days late: Level 1 (Direct Manager)
- *  - 4 to 7 days late: Level 2 (General Manager / Dept Head)
- *  - >7 days late: Level 3 (CXO / COO / Director)
- * @returns {Promise<{ scanned: number, escalated: number, capped: boolean }>}
+ * Sends configured reminders only to milestone watchers. The daily sweep
+ * includes pre-due and overdue milestones, using each tenant's cadence and
+ * progress rule.
  */
 export async function checkOverdueMilestonesAndNotify() {
   const now = new Date();
-
-  const overdueAll = await prisma.taskMilestone.findMany({
-    where: { dueDate: { lt: now }, status: { not: 'DONE' } },
+  const alerts = await prisma.taskMilestone.findMany({
+    where: {
+      dueDate: { lte: new Date(now.getTime() + 31 * MS_PER_DAY) },
+      status: { not: 'DONE' },
+      isDone: false,
+      progress: { lt: 100 },
+    },
     include: {
-      escalationLevels: true,
       task: {
         select: {
           id: true,
           title: true,
           tenantId: true,
           employeeId: true,
-          goalId: true,
-          milestones: {
-            select: { id: true, title: true, order: true, status: true, dueDate: true },
-            orderBy: { order: 'asc' },
+          employee: {
+            select: {
+              name: true,
+              manager: { select: { name: true, email: true, role: true, status: true, isDeleted: true } },
+            },
           },
         },
       },
+      assignee: { select: { name: true } },
     },
-    orderBy: { dueDate: 'asc' }, // longest overdue first
+    orderBy: { dueDate: 'asc' },
     take: MAX_MILESTONES_PER_RUN + 1,
   });
-  const capped = overdueAll.length > MAX_MILESTONES_PER_RUN;
-  const overdue = capped ? overdueAll.slice(0, MAX_MILESTONES_PER_RUN) : overdueAll;
+  const capped = alerts.length > MAX_MILESTONES_PER_RUN;
+  const milestones = capped ? alerts.slice(0, MAX_MILESTONES_PER_RUN) : alerts;
   if (capped) {
-    console.warn(`[milestoneEscalation] ${overdueAll.length} overdue milestones found — processing the ${MAX_MILESTONES_PER_RUN} most overdue this run.`);
+    console.warn(`[milestoneEscalation] ${alerts.length} eligible milestones found — processing the ${MAX_MILESTONES_PER_RUN} soonest this run.`);
+  }
+  if (milestones.length === 0) return { scanned: 0, escalated: 0, capped };
+
+  const tenantIds = [...new Set(milestones.map((m) => m.tenantId))];
+  const tenantSettings = await prisma.tenantSettings.findMany({ where: { tenantId: { in: tenantIds } } });
+  const settingsByTenant = new Map(tenantSettings.map((settings) => [settings.tenantId, settings]));
+  const sendTasks = [];
+  const sentMilestoneIds = [];
+  const eligibleAlerts = [];
+
+  for (const milestone of milestones) {
+    const { task } = milestone;
+    if (!task) continue;
+    const settings = {
+      ...DEFAULT_MILESTONE_ALERT_SETTINGS,
+      ...(settingsByTenant.get(milestone.tenantId) || {}),
+    };
+    if (!shouldSendMilestoneAlert(milestone, settings, now)) continue;
+
+    const storedWatchers = [...new Set((milestone.watcherEmails || [])
+      .map((email) => String(email || '').trim().toLowerCase())
+      .filter(Boolean))];
+    const defaultEmail = defaultManagerWatcherEmail(task.employee?.manager);
+    const watcherEmails = storedWatchers.length > 0 ? storedWatchers : (defaultEmail ? [defaultEmail] : []);
+    if (watcherEmails.length === 0) continue;
+
+    if (!milestone.watcherEmails?.length) {
+      await prisma.taskMilestone.update({
+        where: { id: milestone.id },
+        data: { watcherEmails },
+      });
+    }
+    sentMilestoneIds.push(milestone.id);
+
+    const context = milestoneAlertContext(milestone, task, now);
+    const subject = renderMilestoneAlertTemplate(settings.milestoneAlertSubject, context)
+      .replace(/[\r\n]+/g, ' ')
+      .slice(0, 250);
+    const text = renderMilestoneAlertTemplate(settings.milestoneAlertBody, context);
+    const html = `<div style="font-family:Arial,sans-serif;line-height:1.6">${escapeMilestoneAlertHtml(text)}</div>`;
+    eligibleAlerts.push({ milestone, task, watcherEmails, subject, text, html, daysUntilDue: Number(context.daysUntilDue) });
   }
 
-  const dueToday = overdue.filter((m) => !isSameCalendarDay(m.lastEscalatedAt, now));
-  if (dueToday.length === 0) return { scanned: overdue.length, escalated: 0, capped };
+  if (eligibleAlerts.length === 0) return { scanned: milestones.length, escalated: 0, capped };
+  const watcherEmails = [...new Set(eligibleAlerts.flatMap((alert) => alert.watcherEmails))];
+  const watcherUsers = await prisma.tenantUser.findMany({
+    where: {
+      tenantId: { in: [...new Set(eligibleAlerts.map((alert) => alert.milestone.tenantId))] },
+      status: 'ACTIVE',
+      isDeleted: false,
+      email: { in: watcherEmails },
+    },
+    select: { id: true, tenantId: true, email: true },
+  });
+  const watcherUsersByEmail = new Map(watcherUsers.map((user) => [
+    `${user.tenantId}:${user.email.toLowerCase()}`,
+    user,
+  ]));
 
-  const escalatedLevelIds = [];
-  const sendTasks = [];
-
-  for (const milestone of dueToday) {
-    const { task } = milestone;
-    const daysOverdue = Math.max(1, Math.floor((now.getTime() - new Date(milestone.dueDate).getTime()) / MS_PER_DAY));
-
-    // Determine target hierarchy level: 1 (1-3d), 2 (4-7d), 3 (>7d)
-    const targetLevelNum = daysOverdue <= 3 ? 1 : daysOverdue <= 7 ? 2 : 3;
-    const targetLevel = (milestone.escalationLevels || []).find((l) => l.levelNumber === targetLevelNum)
-      || (milestone.escalationLevels || [])[0];
-
-    if (targetLevel && !targetLevel.escalatedAt) {
-      escalatedLevelIds.push(targetLevel.id);
-    }
-
-    const escalationRole = targetLevel?.roleOrTitle || `Level ${targetLevelNum} Executive`;
-    const { subject, text, html } = escalationEmail({
-      milestone,
-      task,
-      daysOverdue,
-      allMilestones: task.milestones || [],
-      escalationRole,
-    });
-
-    // Gather recipients: Assignee + Escalation user + Followers + Watchers
-    const recipientUserIds = new Set();
-    if (task.employeeId) recipientUserIds.add(task.employeeId);
-    if (targetLevel?.userId) recipientUserIds.add(targetLevel.userId);
-
-    // Fetch followers for this task and goal
-    try {
-      const entityIds = [task.id, task.goalId].filter(Boolean);
-      const followers = await prisma.follower.findMany({
-        where: { tenantId: task.tenantId, entityId: { in: entityIds } },
-        select: { userId: true },
-      });
-      for (const f of followers) recipientUserIds.add(f.userId);
-    } catch (err) {
-      // Non-fatal if followers lookup fails
-    }
-
-    // Deliver in-app notifications to all platform users involved
-    for (const uid of recipientUserIds) {
-      sendTasks.push(async () => {
-        try {
-          const notif = await prisma.notification.create({
-            data: {
-              tenantId: task.tenantId,
-              recipientId: uid,
-              type: 'task_update',
-              title: `Checkpoint Overdue (${daysOverdue}d)`,
-              body: `Checkpoint 0${milestone.order} ("${milestone.title}") on task "${task.title}" is ${daysOverdue} day(s) overdue. Escalated to ${escalationRole}.`,
-              entityType: 'milestone',
-              entityId: milestone.id,
-            },
-          });
-          emitToUser(task.tenantId, uid, 'notification', notif);
-        } catch (err) {
-          // Ignore individual notification failure
-        }
-      });
-    }
-
-    // Look up emails for users and watcherEmails
-    const userEmailsToNotify = new Set();
-    if (recipientUserIds.size > 0) {
-      const users = await prisma.tenantUser.findMany({
-        where: { id: { in: [...recipientUserIds] }, isDeleted: false },
-        select: { email: true },
-      });
-      for (const u of users) {
-        if (u.email) userEmailsToNotify.add(u.email.toLowerCase());
+  for (const alert of eligibleAlerts) {
+    const { milestone, watcherEmails: recipients, subject, text, html, daysUntilDue } = alert;
+    for (const email of recipients) {
+      const user = watcherUsersByEmail.get(`${milestone.tenantId}:${email}`);
+      if (user) {
+        sendTasks.push(async () => {
+          try {
+            const notification = await prisma.notification.create({
+              data: {
+                tenantId: milestone.tenantId,
+                recipientId: user.id,
+                type: 'task_update',
+                title: 'Milestone reminder',
+                body: text,
+                entityType: 'milestone',
+                entityId: milestone.id,
+              },
+            });
+            emitToUser(milestone.tenantId, user.id, 'notification', notification);
+          } catch (err) {
+            console.warn(`[milestoneEscalation] In-app notification failed for watcher ${user.id}:`, err.message);
+          }
+        });
       }
-    }
-    for (const rawEmail of milestone.watcherEmails || []) {
-      if (rawEmail) userEmailsToNotify.add(rawEmail.toLowerCase());
-    }
-
-    // Send emails
-    for (const email of userEmailsToNotify) {
       sendTasks.push(async () => {
         try {
-          await sendMail({ to: email, subject, text, html, event: 'MILESTONE_OVERDUE_ESCALATION' });
+          await sendMail({
+            to: email,
+            subject,
+            text,
+            html,
+            event: 'MILESTONE_AUTOMATIC_ALERT',
+          });
         } catch (err) {
           console.warn(`[milestoneEscalation] Failed to notify ${email} for milestone ${milestone.id}:`, err.message);
         }
       });
     }
+    if (daysUntilDue >= 0) {
+      console.info(`[milestoneEscalation] Reminder sent for milestone ${milestone.id}, due in ${daysUntilDue} day(s).`);
+    }
   }
 
   await runWithConcurrency(sendTasks, EMAIL_CONCURRENCY);
-
-  // Update timestamps
-  await prisma.taskMilestone.updateMany({
-    where: { id: { in: dueToday.map((m) => m.id) } },
-    data: { lastEscalatedAt: now },
-  });
-
-  if (escalatedLevelIds.length > 0) {
-    await prisma.checkpointEscalationLevel.updateMany({
-      where: { id: { in: escalatedLevelIds } },
-      data: { escalatedAt: now },
+  if (sentMilestoneIds.length > 0) {
+    await prisma.taskMilestone.updateMany({
+      where: { id: { in: sentMilestoneIds } },
+      data: { lastEscalatedAt: now },
     });
   }
 
-  return { scanned: overdue.length, escalated: dueToday.length, capped };
-}
-
-/**
- * Finds checkpoints due within the next 48 hours and notifies owner and followers
- */
-export async function checkPreDueMilestonesAndNotify() {
-  const now = new Date();
-  const twoDaysLater = new Date(now.getTime() + 48 * 60 * 60 * 1000);
-
-  const preDueMilestones = await prisma.taskMilestone.findMany({
-    where: {
-      dueDate: { gte: now, lte: twoDaysLater },
-      status: { not: 'DONE' },
-    },
-    include: {
-      task: {
-        select: {
-          id: true,
-          title: true,
-          tenantId: true,
-          employeeId: true,
-          goalId: true,
-        },
-      },
-    },
-  });
-
-  for (const m of preDueMilestones) {
-    const { task } = m;
-    // Check if pre-due notification was already sent in last 48h
-    const recentNotif = await prisma.notification.findFirst({
-      where: {
-        tenantId: task.tenantId,
-        entityType: 'milestone',
-        entityId: m.id,
-        type: 'milestone_predue',
-        createdAt: { gte: new Date(now.getTime() - 48 * 60 * 60 * 1000) },
-      },
-    });
-    if (recentNotif) continue;
-
-    const dueStr = new Date(m.dueDate).toISOString().slice(0, 10);
-    const recipientUserIds = new Set();
-    if (task.employeeId) recipientUserIds.add(task.employeeId);
-
-    try {
-      const entityIds = [task.id, task.goalId].filter(Boolean);
-      const followers = await prisma.follower.findMany({
-        where: { tenantId: task.tenantId, entityId: { in: entityIds } },
-        select: { userId: true },
-      });
-      for (const f of followers) recipientUserIds.add(f.userId);
-    } catch (_) {}
-
-    for (const uid of recipientUserIds) {
-      try {
-        const notif = await prisma.notification.create({
-          data: {
-            tenantId: task.tenantId,
-            recipientId: uid,
-            type: 'milestone_predue',
-            title: `Checkpoint Due in 2 Days`,
-            body: `Checkpoint 0${m.order} ("${m.title}") on task "${task.title}" is due on ${dueStr}.`,
-            entityType: 'milestone',
-            entityId: m.id,
-          },
-        });
-        emitToUser(task.tenantId, uid, 'notification', notif);
-      } catch (_) {}
-    }
-  }
+  return { scanned: milestones.length, escalated: sentMilestoneIds.length, capped };
 }
 
 let intervalHandle = null;
@@ -630,12 +540,9 @@ export function startMilestoneEscalationSchedule(intervalMs = 24 * 60 * 60 * 100
   const runAndLog = (label) => {
     checkOverdueMilestonesAndNotify()
       .then(({ scanned, escalated, capped }) => {
-        if (escalated > 0) console.log(`[milestoneEscalation] ${label}: ${escalated}/${scanned} overdue milestone(s) escalated${capped ? ' (capped this run)' : ''}.`);
+        if (escalated > 0) console.log(`[milestoneEscalation] ${label}: sent alerts for ${escalated}/${scanned} milestone(s)${capped ? ' (capped this run)' : ''}.`);
       })
-      .catch((err) => console.warn(`[milestoneEscalation] ${label} overdue check failed:`, err.message));
-
-    checkPreDueMilestonesAndNotify()
-      .catch((err) => console.warn(`[milestoneEscalation] ${label} pre-due check failed:`, err.message));
+      .catch((err) => console.warn(`[milestoneEscalation] ${label} alert check failed:`, err.message));
   };
 
   runAndLog('Boot sweep');
@@ -645,63 +552,3 @@ export function startMilestoneEscalationSchedule(intervalMs = 24 * 60 * 60 * 100
 
   return intervalHandle;
 }
-
-/**
- * Dispatches an immediate alert email to a milestone's watchers and assignees.
- */
-export async function dispatchMilestoneWatcherAlert(milestoneId) {
-  const milestone = await prisma.taskMilestone.findUnique({
-    where: { id: milestoneId },
-    include: {
-      task: {
-        select: {
-          id: true,
-          title: true,
-          tenantId: true,
-          milestones: {
-            select: { id: true, title: true, order: true, status: true, dueDate: true },
-            orderBy: { order: 'asc' },
-          },
-        },
-      },
-    },
-  });
-  if (!milestone) throw { status: 404, message: 'Milestone not found' };
-  if (!milestone.watcherEmails || milestone.watcherEmails.length === 0) {
-    throw { status: 400, message: 'This milestone has no watcher emails configured' };
-  }
-
-  const { task } = milestone;
-  const dueStr = new Date(milestone.dueDate).toISOString().slice(0, 10);
-  const subject = `[Checkpoint Alert] Checkpoint 0${milestone.order} "${milestone.title}" on "${task.title}" — Status Update`;
-  const text = `Critical Checkpoint Status Alert\n\n`
-    + `Parent Task: "${task.title}"\n`
-    + `Checkpoint 0${milestone.order}: "${milestone.title}"\n`
-    + `Target Date: ${dueStr}\n\n`
-    + `Review in Performance Management: ${env.frontendOrigin || 'http://localhost:5173'}/uer/goals`;
-  const html = buildModernMilestoneEmailHtml({
-    milestone,
-    task,
-    allMilestones: task.milestones || [],
-    daysOverdue: 0,
-  });
-
-  const results = [];
-  for (const email of milestone.watcherEmails) {
-    const res = await sendMail({
-      to: email.toLowerCase(),
-      subject,
-      text,
-      html,
-      event: 'MILESTONE_STATUS_DISPATCH',
-    });
-    results.push({ email, ...res });
-  }
-
-  return { success: true, results, recipients: milestone.watcherEmails };
-}
-
-// Backwards compatibility alias
-export const sendMilestoneTestEmail = dispatchMilestoneWatcherAlert;
-
-

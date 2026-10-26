@@ -1029,9 +1029,9 @@ model TaskMilestone {
   title         String
   dueDate       DateTime // must be <= task.dueDate
   /// Plain email addresses, not necessarily platform users — "manager need to
-  /// add email as watchers" in the spec. Escalation emails go to every one of
-  /// these; a dashboard Notification is additionally created for any watcher
-  /// who is also a TenantUser in this tenant.
+  /// add email as watchers" in the spec. Automatic reminder emails go to these;
+  /// dashboard Notifications are additionally created for watchers in this tenant.
+  /// When none are supplied, the parent task owner's direct manager is inserted.
   watcherEmails String[]
   /// PENDING_APPROVAL -> APPROVED -> DONE, with RESCHEDULE_REQUESTED as the
   /// side-branch when the manager sends a proposed date back for another try.
@@ -1277,8 +1277,16 @@ model TenantSettings {
   /// Whether a milestone must be manager-approved before its assignee can
   /// mark it complete. Default true (the original, stricter behaviour);
   /// a tenant may relax this to let the assignee complete on their own
-  /// timeline, still subject to the usual overdue escalation.
+  /// timeline, still subject to the configured watcher reminders.
   milestoneRequireApproval Boolean @default(true)
+
+  /// Tenant-configurable milestone reminder policy.
+  milestoneAlertEnabled          Boolean @default(true)
+  milestoneAlertDaysBefore       Int     @default(1)
+  milestoneAlertFrequencyDays    Int     @default(1)
+  milestoneAlertOnlyNoProgress   Boolean @default(true)
+  milestoneAlertSubject          String  @default("Milestone reminder: {{milestoneTitle}} due {{dueDate}}")
+  milestoneAlertBody             String  @default("Milestone \"{{milestoneTitle}}\" on task \"{{taskTitle}}\" is due {{dueDate}} and is still at {{progress}}% progress.") @db.Text
 
   /// Company appearance (Company Settings → Appearance): sidebar colours,
   /// menu typography, accent, text scale, corner radius. Shape and limits are
