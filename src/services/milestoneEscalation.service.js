@@ -239,7 +239,7 @@ export function buildModernMilestoneEmailHtml({ milestone, task, allMilestones =
                           WORKSTREAM COMPLETION VELOCITY
                         </td>
                         <td align="right" style="font-size: 11.5px; font-weight: 800; color: ${themeColor}; font-family: monospace;">
-                          ${progressPercent}% [${doneStationsCount}/${totalStations} SECURED]
+                          ${progressPercent}% [${doneStationsCount}/${totalCount} SECURED]
                         </td>
                       </tr>
                     </table>

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   isCriticalPriority,
   validateMilestoneDrafts,
+  validateMilestonesComplete,
   MIN_CRITICAL_MILESTONES,
   MAX_CRITICAL_MILESTONES,
 } from '../../src/lib/criticalTask.js';
@@ -102,4 +103,32 @@ test('requires a task due date', () => {
 test('reports which milestone is at fault', () => {
   const r = validateMilestoneDrafts([box(1), box(2, '2030-01-01')], task);
   assert.match(r.error, /^Milestone 2:/);
+});
+
+test('validateMilestonesComplete allows non-milestone tasks', () => {
+  assert.equal(validateMilestonesComplete([]).canComplete, true);
+  assert.equal(validateMilestonesComplete(null).canComplete, true);
+  assert.equal(validateMilestonesComplete(undefined).canComplete, true);
+});
+
+test('validateMilestonesComplete blocks task when any milestone is incomplete', () => {
+  const milestones = [
+    { order: 1, title: 'Drafting', isDone: true, status: 'DONE', progress: 100 },
+    { order: 2, title: 'Review', isDone: false, status: 'APPROVED', progress: 50 },
+  ];
+  const res = validateMilestonesComplete(milestones);
+  assert.equal(res.canComplete, false);
+  assert.equal(res.incomplete.length, 1);
+  assert.match(res.reason, /Checkpoint 02/);
+  assert.match(res.reason, /Review/);
+});
+
+test('validateMilestonesComplete permits task when all milestones are 100% done', () => {
+  const milestones = [
+    { order: 1, title: 'Drafting', isDone: true, status: 'DONE', progress: 100 },
+    { order: 2, title: 'Review', isDone: true, status: 'DONE', progress: 100 },
+  ];
+  const res = validateMilestonesComplete(milestones);
+  assert.equal(res.canComplete, true);
+  assert.equal(res.incomplete.length, 0);
 });

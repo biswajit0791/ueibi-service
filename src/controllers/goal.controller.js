@@ -1007,6 +1007,10 @@ export async function listGoals(req, res, next) {
             orderBy: { createdAt: 'asc' },
             include: {
               employee: { select: { id: true, name: true } },
+              milestones: {
+                select: { id: true, order: true, title: true, status: true, isDone: true, progress: true },
+                orderBy: { order: 'asc' },
+              },
             },
           },
           auditLogs: {
@@ -1085,6 +1089,10 @@ export async function getGoalById(req, res, next) {
           orderBy: { createdAt: 'asc' },
           include: {
             employee: { select: { id: true, name: true } },
+            milestones: {
+              select: { id: true, order: true, title: true, status: true, isDone: true, progress: true },
+              orderBy: { order: 'asc' },
+            },
           },
         },
         auditLogs: {
