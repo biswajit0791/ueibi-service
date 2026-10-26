@@ -30,11 +30,12 @@ import {
 import {
   buildModernMilestoneEmailHtml,
 } from '../services/milestoneEscalation.service.js';
-import { assertGoalUnlocked } from '../services/goalWeight.service.js';
+import { goalWeightSummary } from '../services/goalWeight.service.js';
+import { milestoneBlock } from '../lib/milestoneGate.js';
 import { goalService } from '../services/goal.service.js';
-import { isWorkStarted, timingUpdates } from '../lib/taskTiming.js';
+import { timingUpdates } from '../lib/taskTiming.js';
 import {
-  REVIEW_STATUS, isGoalActive, reviewFieldsForTransition, completeGoalIfAllApproved,
+  REVIEW_STATUS, reviewFieldsForTransition, completeGoalIfAllApproved,
 } from '../services/taskReview.service.js';
 
 export const MILESTONE_INCLUDE = {
@@ -117,6 +118,22 @@ async function maybeUnlockTask(taskId) {
     performedById: task.employeeId,
     action: 'milestones_approved',
     details: 'All milestones approved — task unlocked and moved to To Do.',
+  });
+}
+
+/**
+ * Why work may not be recorded against a milestone of this task yet, or null.
+ * Shared by updates and by creation with a starting progress, so a milestone
+ * cannot be born already part-done to get round the gate.
+ */
+export async function milestoneWorkBlock({ goalId, isStandalone, tenantId, milestone }) {
+  const goal = goalId && !isStandalone
+    ? await prisma.goal.findUnique({ where: { id: goalId }, select: { status: true } })
+    : null;
+  const weightSummary = goal ? await goalWeightSummary(goalId) : null;
+  const { milestoneRequireApproval } = await getCompanySettings(tenantId);
+  return milestoneBlock({
+    action: 'work', goal, weightSummary, milestone, requireApproval: milestoneRequireApproval,
   });
 }
 
@@ -226,6 +243,14 @@ export async function createMilestone(req, res, next) {
     const due = new Date(dueDate);
     if (Number.isNaN(due.getTime())) {
       return res.status(400).json({ error: 'Invalid milestone due date' });
+    }
+
+    if (Number(progress || 0) > 0) {
+      const blocked = await milestoneWorkBlock({
+        goalId: task.goalId, isStandalone: task.isStandalone, tenantId,
+        milestone: { status: 'PENDING_APPROVAL' },
+      });
+      if (blocked) return res.status(409).json({ code: blocked.code, error: blocked.message });
     }
 
     const today = new Date();
@@ -469,6 +494,37 @@ export async function updateMilestone(req, res, next) {
     const data = {};
     const auditLines = [];
 
+    // ── Execution gate (lib/milestoneGate.js) ─────────────────────────────
+    // Nobody approves or works a milestone until its goal is active and the
+    // goal's task weights total 100%; the assignee additionally waits for the
+    // milestone itself to be approved when the company requires approval.
+    // Only a CHANGE is work: an edit form re-sending the same progress must
+    // not turn a rename or re-date into a refused progress update.
+    const recordsWork = (progress !== undefined && Number(progress) !== Number(milestone.progress || 0))
+      || (isDone !== undefined && Boolean(isDone) !== Boolean(milestone.isDone));
+    if (approve === true || recordsWork) {
+      const goal = task.goalId && !task.isStandalone
+        ? await prisma.goal.findUnique({ where: { id: task.goalId }, select: { status: true } })
+        : null;
+      const weightSummary = goal ? await goalWeightSummary(task.goalId) : null;
+      const { milestoneRequireApproval } = await getCompanySettings(tenantId);
+      const gate = { goal, weightSummary, requireApproval: milestoneRequireApproval };
+      const blocked = (approve === true && milestoneBlock({ ...gate, action: 'approve', milestone }))
+        || (recordsWork && milestoneBlock({
+          ...gate,
+          action: 'work',
+          // Approving and working in one request: judge the work as approved.
+          milestone: approve === true ? { ...milestone, status: 'APPROVED' } : milestone,
+        }));
+      if (blocked) {
+        return res.status(409).json({
+          code: blocked.code,
+          error: blocked.message,
+          ...(weightSummary ? { weightSummary } : {}),
+        });
+      }
+    }
+
     // Description and Progress updates (allowed by assignee or manager)
     if (description !== undefined) {
       data.description = description ? description.trim() : null;
@@ -479,11 +535,6 @@ export async function updateMilestone(req, res, next) {
         return res.status(403).json({ error: 'Only the task owner or manager can update milestone progress' });
       }
       const newProgress = Math.min(100, Math.max(0, Number(progress)));
-      const settings = await getCompanySettings(tenantId);
-      if (newProgress === 100 && settings.milestoneRequireApproval && milestone.status !== 'APPROVED') {
-        return res.status(409).json({ error: 'This milestone must be approved by a manager before it can reach 100% completion' });
-      }
-
       data.progress = newProgress;
       auditLines.push(`updated progress to ${data.progress}%`);
 
@@ -630,15 +681,6 @@ export async function updateMilestone(req, res, next) {
       if (!['PENDING_APPROVAL', 'RESCHEDULE_REQUESTED'].includes(milestone.status)) {
         return res.status(409).json({ error: 'This milestone has already been decided' });
       }
-      if (approve && task.goalId) {
-        const goal = await prisma.goal.findUnique({ where: { id: task.goalId }, select: { status: true } });
-        if (!isGoalActive(goal)) {
-          return res.status(409).json({
-            code: 'GOAL_NOT_ACTIVE',
-            error: 'Milestones can only be approved once the goal is active. Activate the goal first.',
-          });
-        }
-      }
       if (approve) {
         // Accepting a pending proposal or extension locks it in as the new dueDate.
         const proposed = data.proposedCompletionDate !== undefined
@@ -709,18 +751,6 @@ export async function updateMilestone(req, res, next) {
 
     if (Object.keys(data).length === 0) {
       return res.status(400).json({ error: 'No recognised update supplied' });
-    }
-
-    // Milestone work is task work: the same weight gate applies before it
-    // can start a task that has not started yet.
-    const startsWork = (data.progress > 0 || data.isDone === true) && !isWorkStarted(task);
-    if (startsWork && task.goalId && !task.isStandalone) {
-      try {
-        await assertGoalUnlocked(task.goalId);
-      } catch (e) {
-        if (!e.code) throw e;
-        return res.status(e.status || 409).json({ code: e.code, error: e.message, weightSummary: e.weightSummary });
-      }
     }
 
     const updated = await prisma.taskMilestone.update({
