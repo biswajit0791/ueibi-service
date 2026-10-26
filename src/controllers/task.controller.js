@@ -12,7 +12,7 @@ import {
 import { timingUpdates, isWorkStarted, taskTiming } from '../lib/taskTiming.js';
 import { visibleTaskWhere } from '../services/taskVisibility.service.js';
 import { assertTaskDatesFitMilestones } from '../lib/dateValidation.js';
-import { validateMilestoneDrafts } from '../lib/criticalTask.js';
+import { validateMilestoneDrafts, validateMilestonesComplete } from '../lib/criticalTask.js';
 import { assertWatcherEmailsAllowed, assertMilestoneAssigneesValid } from './taskMilestone.controller.js';
 import { withDefaultMilestoneWatcher } from '../services/milestoneWatcher.service.js';
 
@@ -275,6 +275,45 @@ export async function resolveTargetEmployee(requestingUser, tenantId, employeeId
 // Thin wrapper around the shared taskAccess service so task.controller and
 // taskActivity.controller enforce exactly the same rule.
 const assertTaskOwner = (id, requestingUser, tenantId) => loadTaskForUser(id, requestingUser, tenantId);
+
+/**
+ * Validates that all milestones on a critical / milestone-tracked task are 100% complete
+ * before the task itself can be marked as 'done' or progress set to 100%.
+ */
+export async function assertTaskMilestonesComplete(taskId) {
+  const [task, milestones] = await Promise.all([
+    prisma.task.findUnique({
+      where: { id: taskId },
+      select: { id: true, isMilestoneTracked: true },
+    }),
+    prisma.taskMilestone.findMany({
+      where: { taskId },
+      select: { id: true, order: true, title: true, status: true, isDone: true, progress: true },
+      orderBy: { order: 'asc' },
+    }),
+  ]);
+
+  if (task?.isMilestoneTracked && milestones.length === 0) {
+    throw {
+      status: 400,
+      code: 'TASK_MILESTONES_INCOMPLETE',
+      message: 'This critical task is milestone-tracked but has no checkpoints defined. Checkpoints must be completed before marking the task Done.',
+      incompleteCount: 0,
+      totalCount: 0,
+    };
+  }
+
+  const check = validateMilestonesComplete(milestones);
+  if (!check.canComplete) {
+    throw {
+      status: 400,
+      code: 'TASK_MILESTONES_INCOMPLETE',
+      message: check.reason,
+      incompleteCount: check.incomplete.length,
+      totalCount: milestones.length,
+    };
+  }
+}
 
 // ─── Helper: validate goal belongs to same tenant ─────────────────────────
 async function resolveGoal(goalId, tenantId) {
@@ -571,6 +610,14 @@ export async function createTask(req, res, next) {
       return res.status(e.status || 400).json({ success: false, message: e.message });
     }
 
+    if (isMilestoneTracked && (effStatus === 'done' || effProgress === 100)) {
+      return res.status(400).json({
+        success: false,
+        code: 'TASK_MILESTONES_INCOMPLETE',
+        message: 'A critical milestone-tracked task cannot be created as completed. Milestones must be completed during execution.',
+      });
+    }
+
     let actualDates;
     try {
       actualDates = resolveActualDates({
@@ -783,7 +830,16 @@ export async function listTasks(req, res, next) {
     });
     if (error) return res.status(error.status).json({ error: error.message });
 
-    const items = await prisma.task.findMany({ where, orderBy: { createdAt: 'desc' } });
+    const items = await prisma.task.findMany({
+      where,
+      include: {
+        milestones: {
+          select: { id: true, order: true, title: true, status: true, isDone: true, progress: true },
+          orderBy: { order: 'asc' },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
     res.json({ items: items.map(withTiming) });
   } catch (err) {
     next(err);
@@ -819,6 +875,22 @@ export async function updateTaskStatus(req, res, next) {
       else if (status === 'in_progress' && (!existing.progress || existing.progress === 0)) progressUpdate = 10;
     } else {
       progressUpdate = Math.min(100, Math.max(0, progressUpdate));
+    }
+
+    // ── Milestone completion guard ───────────────────────────────────────
+    // Critical tasks with milestones CANNOT be completed until all milestone
+    // checkpoints are finished (100% / DONE).
+    if (status === 'done' || progressUpdate === 100) {
+      try {
+        await assertTaskMilestonesComplete(id);
+      } catch (e) {
+        return res.status(e.status || 400).json({
+          success: false,
+          code: e.code || 'TASK_MILESTONES_INCOMPLETE',
+          error: e.message,
+          message: e.message,
+        });
+      }
     }
 
     // ── The weight gate ──────────────────────────────────────────────────
@@ -1213,6 +1285,20 @@ export async function updateTask(req, res, next) {
         if (done) { finalStatus = done.status; finalProgress = done.progress; }
       } catch (e) {
         return res.status(e.status || 400).json({ success: false, message: e.message });
+      }
+    }
+
+    // ── Milestone completion guard ───────────────────────────────────────
+    if (finalStatus === 'done' || finalProgress === 100 || actualDates?.data?.actualCompletionDate) {
+      try {
+        await assertTaskMilestonesComplete(id);
+      } catch (e) {
+        return res.status(e.status || 400).json({
+          success: false,
+          code: e.code || 'TASK_MILESTONES_INCOMPLETE',
+          error: e.message,
+          message: e.message,
+        });
       }
     }
 

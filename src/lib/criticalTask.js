@@ -76,3 +76,28 @@ export function validateMilestoneDrafts(drafts, { startDate, dueDate, now = new 
   }
   return { items };
 }
+
+/**
+ * Evaluates whether a critical / milestone-tracked task's milestones allow it to complete.
+ * Returns `{ canComplete: true }` or `{ canComplete: false, reason: string, incomplete: Array }`.
+ */
+export function validateMilestonesComplete(milestones = []) {
+  if (!Array.isArray(milestones) || milestones.length === 0) {
+    return { canComplete: true, incomplete: [] };
+  }
+  const incomplete = milestones.filter(
+    (m) => !m.isDone || String(m.status || '').toUpperCase() !== 'DONE' || Number(m.progress || 0) < 100
+  );
+  if (incomplete.length > 0) {
+    const listStr = incomplete
+      .map((m) => `Checkpoint 0${m.order || '?'} ("${m.title || 'Untitled'}") [${m.progress || 0}%]`)
+      .join(', ');
+    return {
+      canComplete: false,
+      incomplete,
+      reason: `Cannot complete this critical task: ${incomplete.length} checkpoint milestone(s) are not finished yet (${listStr}). All checkpoints must be 100% completed before marking the task as Done.`,
+    };
+  }
+  return { canComplete: true, incomplete: [] };
+}
+
