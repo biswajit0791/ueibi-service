@@ -107,7 +107,7 @@ async function loadMilestoneOrThrow(taskId, milestoneId) {
 
 /** Throws a 400 naming every watcher email whose domain isn't on the
  *  tenant's allowlist (its own registered domain, plus Company Settings). */
-async function assertWatcherEmailsAllowed(tenantId, emails) {
+export async function assertWatcherEmailsAllowed(tenantId, emails) {
   if (!emails || emails.length === 0) return;
   const disallowed = await findDisallowedWatcherEmails(tenantId, emails);
   if (disallowed.length > 0) {

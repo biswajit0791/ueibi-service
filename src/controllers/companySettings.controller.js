@@ -87,6 +87,33 @@ export async function patchSettings(req, res, next) {
   }
 }
 
+// ─── GET /api/company/watcher-candidates ───────────────────────────────────
+// Returns every active member (with designation) so any of them can be picked as a milestone watcher.
+export async function getWatcherCandidates(req, res, next) {
+  try {
+    const employees = await prisma.tenantUser.findMany({
+      where: {
+        tenantId: req.tenantId,
+        status: 'ACTIVE',
+        isDeleted: false,
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        department: true,
+        designation: true,
+      },
+      orderBy: { name: 'asc' },
+    });
+
+    res.json({ employees });
+  } catch (err) {
+    next(err);
+  }
+}
+
 // ─── GET /api/company/top-level-employees ──────────────────────────────────
 // Returns top-level employees (Leadership, CMD, Admin, HR, Directors) for Watcher selection.
 export async function getTopLevelEmployees(req, res, next) {

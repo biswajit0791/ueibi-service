@@ -12,6 +12,8 @@ import {
 import { timingUpdates, isWorkStarted, taskTiming } from '../lib/taskTiming.js';
 import { visibleTaskWhere } from '../services/taskVisibility.service.js';
 import { assertTaskDatesFitMilestones } from '../lib/dateValidation.js';
+import { canAssignOutsideGoal, validateMilestoneDrafts } from '../lib/criticalTask.js';
+import { assertWatcherEmailsAllowed, getEscalationChainForEmployee } from './taskMilestone.controller.js';
 
 function formatZodIssues(issues, fallback = 'Validation failed') {
   if (!Array.isArray(issues) || issues.length === 0) return fallback;
@@ -150,11 +152,14 @@ export async function isUserGoalAssignee(goalId, employeeId, tenantId) {
 // ─── Helper: resolve & authorise target employee ───────────────────────────
 // Returns the TenantUser record that will own the task.
 // Verifies the employee belongs to the SAME tenant as the requesting user.
-export async function resolveTargetEmployee(requestingUser, tenantId, employeeId, parentTask = null, goalId = null) {
+// `allowOutsideGoal` is set for critical tasks, which may be handed to members
+// of other teams: the goal-membership rule and the manager's own-team rule are
+// relaxed, but the role-hierarchy rules still apply.
+export async function resolveTargetEmployee(requestingUser, tenantId, employeeId, parentTask = null, goalId = null, allowOutsideGoal = false) {
   const targetId = employeeId || requestingUser.id;
 
   // Task Assignment Restriction: A task can only be assigned to an employee who is already assigned to the parent Goal.
-  if (goalId && !parentTask) {
+  if (goalId && !parentTask && !allowOutsideGoal) {
     const isGoalAssignee = await isUserGoalAssignee(goalId, targetId, tenantId);
     if (!isGoalAssignee) {
       throw {
@@ -241,6 +246,11 @@ export async function resolveTargetEmployee(requestingUser, tenantId, employeeId
       };
     }
 
+    // 0. Critical tasks may go to members of other teams.
+    if (allowOutsideGoal) {
+      return targetUser;
+    }
+
     // 1. Direct or indirect downline subordinate:
     if (await goalService.isSubordinate(requestingUser.id, employeeId, tenantId)) {
       return targetUser;
@@ -309,7 +319,7 @@ export async function createTask(req, res, next) {
       goalId, isPrivate, isStandalone, workflowType, taskMode, weight,
       description, employeeId, employeeIds, dependency, isDependencyOf,
       status, progress, actualStartDate, actualCompletionDate,
-      isMilestoneTracked, source,
+      isMilestoneTracked, source, milestones,
     } = parsed.data;
 
     // Task Creation Source Validation
@@ -352,6 +362,24 @@ export async function createTask(req, res, next) {
       if ((priority || 'medium') !== 'critical') {
         return res.status(400).json({ success: false, message: 'Milestone tracking is only available for critical-priority tasks' });
       }
+    } else if (Array.isArray(milestones) && milestones.length > 0) {
+      return res.status(400).json({ success: false, message: 'Milestones can only be supplied for a milestone-tracked critical task' });
+    }
+
+    // 2c. A milestone-tracked task is created together with its 1–4 milestone
+    //     boxes, validated in full before anything is written.
+    let milestoneDrafts = [];
+    if (isMilestoneTracked) {
+      const result = validateMilestoneDrafts(milestones, { startDate, dueDate });
+      if (result.error) {
+        return res.status(400).json({ success: false, message: result.error });
+      }
+      try {
+        await assertWatcherEmailsAllowed(tenantId, result.items.flatMap((m) => m.watcherEmails));
+      } catch (e) {
+        return res.status(e.status || 500).json({ success: false, message: e.message });
+      }
+      milestoneDrafts = result.items;
     }
 
     // 3. Date validation: dueDate must not be earlier than startDate
@@ -602,16 +630,17 @@ export async function createTask(req, res, next) {
     // 6. Resolve every target employee FIRST. These checks read the database
     //    and can refuse the request outright, and neither belongs inside the
     //    transaction that follows.
+    const allowOutsideGoal = canAssignOutsideGoal(priority, req.user.role);
     const targets = [];
     for (const targetId of targetEmployeeIds) {
       let target;
       try {
-        target = await resolveTargetEmployee(req.user, tenantId, targetId, parentTask, resolvedGoalId);
+        target = await resolveTargetEmployee(req.user, tenantId, targetId, parentTask, resolvedGoalId, allowOutsideGoal);
       } catch (e) {
         return res.status(e.status || 500).json({ success: false, message: e.message });
       }
 
-      if (resolvedGoalId) {
+      if (resolvedGoalId && !allowOutsideGoal) {
         const isGoalAssignee = await isUserGoalAssignee(resolvedGoalId, target.id, tenantId);
         if (!isGoalAssignee) {
           return res.status(400).json({
@@ -626,13 +655,19 @@ export async function createTask(req, res, next) {
     // 7. Create one task record for its single assigned employee.
     let createdTask;
     const primaryTarget = targets[0];
+    // A milestone-tracked task waits at pending_approval until its milestones
+    // are approved (same rule createMilestone applies to a lone milestone).
+    const initialStatus = milestoneDrafts.length > 0 && effStatus === 'todo' && effProgress === 0
+      ? 'pending_approval'
+      : effStatus;
+    let createdMilestones = [];
     try {
       createdTask = await withWeightGuard(resolvedGoalId, async (tx) => {
-        return await tx.task.create({
+        const task = await tx.task.create({
           data: {
             title: title.trim(),
             priority: priority || 'medium',
-            status: effStatus,
+            status: initialStatus,
             progress: effProgress,
             startDate: startDate ? new Date(startDate) : undefined,
             dueDate: dueDate ? new Date(dueDate) : undefined,
@@ -663,10 +698,47 @@ export async function createTask(req, res, next) {
             },
           },
         });
+        createdMilestones = [];
+        for (const m of milestoneDrafts) {
+          createdMilestones.push(await tx.taskMilestone.create({
+            data: {
+              tenantId,
+              taskId: task.id,
+              order: m.order,
+              title: m.title,
+              description: m.description,
+              dueDate: m.dueDate,
+              progress: m.progress,
+              watcherEmails: m.watcherEmails,
+              status: 'PENDING_APPROVAL',
+              createdById: req.user.id,
+            },
+          }));
+        }
+        return task;
       });
     } catch (e) {
       if (sendWeightError(res, e)) return;
       return res.status(e.status || 500).json({ success: false, message: e.message || 'Could not create the task' });
+    }
+
+    // Reporting-chain escalation levels for each milestone, as createMilestone does.
+    if (createdMilestones.length > 0) {
+      try {
+        const chainLevels = await getEscalationChainForEmployee(tenantId, primaryTarget.id);
+        if (chainLevels.length > 0) {
+          await prisma.checkpointEscalationLevel.createMany({
+            data: createdMilestones.flatMap((m) => chainLevels.map((lvl) => ({
+              milestoneId: m.id,
+              levelNumber: lvl.levelNumber,
+              roleOrTitle: lvl.roleOrTitle,
+              userId: lvl.userId,
+            }))),
+          });
+        }
+      } catch (e) {
+        console.error('Failed to attach escalation levels to milestones:', e);
+      }
     }
 
     // 8. Side effects, once the row is safely committed.
@@ -965,7 +1037,8 @@ export async function updateTask(req, res, next) {
           existingParent = await prisma.task.findFirst({ where: { id: existing.isDependencyOf, tenantId } });
         }
         const effectiveGoalForReassign = isStandalone ? null : (goalId !== undefined ? goalId : existing.goalId);
-        await resolveTargetEmployee(req.user, tenantId, employeeId, existingParent, effectiveGoalForReassign);
+        const reassignPriority = priority !== undefined ? priority : existing.priority;
+        await resolveTargetEmployee(req.user, tenantId, employeeId, existingParent, effectiveGoalForReassign, canAssignOutsideGoal(reassignPriority, req.user.role));
       } catch (e) {
         return res.status(e.status || 500).json({ success: false, message: e.message });
       }
@@ -1063,7 +1136,9 @@ export async function updateTask(req, res, next) {
 
     // ── Task Assignment Restriction: A task can only be assigned to an employee who is already assigned to the parent Goal ──
     const effectiveParentGoalId = effectiveIsStandalone ? null : targetGoalId;
-    if (effectiveParentGoalId) {
+    // Critical tasks may be assigned to members outside the goal's team.
+    const updatePriority = priority !== undefined ? priority : existing.priority;
+    if (effectiveParentGoalId && !canAssignOutsideGoal(updatePriority, req.user.role)) {
       const effectiveAssigneeIds = resolvedAssigneeIds !== undefined
         ? resolvedAssigneeIds
         : (employeeId !== undefined ? [employeeId] : [existing.employeeId]);

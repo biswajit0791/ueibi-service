@@ -91,6 +91,9 @@ export const createTaskSchema = z.object({
   // the controller re-checks priority = 'critical' and MANAGER+ role before
   // trusting this flag; see createTask in task.controller.js.
   isMilestoneTracked: z.boolean().optional(),
+  // Milestone boxes created together with a milestone-tracked task (1–4).
+  // Each entry is validated by validateMilestoneDrafts in lib/criticalTask.js.
+  milestones: z.array(z.unknown()).optional(),
 }).passthrough().refine((data) => {
   if (data.startDate && data.dueDate) {
     const start = new Date(data.startDate);

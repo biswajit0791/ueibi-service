@@ -26,7 +26,8 @@
     "seed:appraisals": "node seeddata/seedAppraisalCycles.js",
     "seed:appraisals:all": "node seeddata/seedAppraisalCycles.js --all",
     "check-users": "node check-users.js",
-    "test:appraisal": "node test-appraisal.js"
+    "test:appraisal": "node test-appraisal.js",
+    "test:unit": "node --test tests/unit/"
   },
   "dependencies": {
     "@prisma/client": "^6.3.0",
