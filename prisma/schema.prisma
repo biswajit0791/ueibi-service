@@ -310,6 +310,7 @@ model TenantUser {
   milestonesApproved  TaskMilestone[]      @relation("MilestoneApprovedBy")
   milestonesCompleted TaskMilestone[]      @relation("MilestoneCompletedBy")
   milestonesCreated   TaskMilestone[]      @relation("MilestoneCreatedBy")
+  milestonesAssigned  TaskMilestone[]      @relation("MilestoneAssignee")
   taskWeightsAdjusted Task[]               @relation("TaskWeightAdjustedBy")
   taskAuditLogs       TaskAuditLog[]       @relation("TaskAuditPerformer")
   goalComments        GoalComment[]        @relation("GoalCommentAuthor")
@@ -1048,6 +1049,10 @@ model TaskMilestone {
   completedAt   DateTime?
   createdById   String?
   createdBy     TenantUser? @relation("MilestoneCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  /// The single owner of this checkpoint. May belong to any team, not only
+  /// the parent goal's team (the task itself stays with a goal member).
+  assigneeId    String?
+  assignee      TenantUser? @relation("MilestoneAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
   description   String?     @db.Text
   progress      Int         @default(0) // 0-100% completion of this checkpoint
   extensionDaysRequested Int?
@@ -1061,6 +1066,7 @@ model TaskMilestone {
 
   @@index([tenantId])
   @@index([taskId])
+  @@index([assigneeId])
   @@index([dueDate])
   // Covers the daily escalation sweep's WHERE (status != DONE AND dueDate <
   // now) without a full-table scan as task_milestones grows.

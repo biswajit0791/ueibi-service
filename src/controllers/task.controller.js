@@ -12,8 +12,8 @@ import {
 import { timingUpdates, isWorkStarted, taskTiming } from '../lib/taskTiming.js';
 import { visibleTaskWhere } from '../services/taskVisibility.service.js';
 import { assertTaskDatesFitMilestones } from '../lib/dateValidation.js';
-import { canAssignOutsideGoal, validateMilestoneDrafts } from '../lib/criticalTask.js';
-import { assertWatcherEmailsAllowed, getEscalationChainForEmployee } from './taskMilestone.controller.js';
+import { validateMilestoneDrafts } from '../lib/criticalTask.js';
+import { assertWatcherEmailsAllowed, assertMilestoneAssigneesValid, getEscalationChainForEmployee } from './taskMilestone.controller.js';
 
 function formatZodIssues(issues, fallback = 'Validation failed') {
   if (!Array.isArray(issues) || issues.length === 0) return fallback;
@@ -152,14 +152,11 @@ export async function isUserGoalAssignee(goalId, employeeId, tenantId) {
 // ─── Helper: resolve & authorise target employee ───────────────────────────
 // Returns the TenantUser record that will own the task.
 // Verifies the employee belongs to the SAME tenant as the requesting user.
-// `allowOutsideGoal` is set for critical tasks, which may be handed to members
-// of other teams: the goal-membership rule and the manager's own-team rule are
-// relaxed, but the role-hierarchy rules still apply.
-export async function resolveTargetEmployee(requestingUser, tenantId, employeeId, parentTask = null, goalId = null, allowOutsideGoal = false) {
+export async function resolveTargetEmployee(requestingUser, tenantId, employeeId, parentTask = null, goalId = null) {
   const targetId = employeeId || requestingUser.id;
 
   // Task Assignment Restriction: A task can only be assigned to an employee who is already assigned to the parent Goal.
-  if (goalId && !parentTask && !allowOutsideGoal) {
+  if (goalId && !parentTask) {
     const isGoalAssignee = await isUserGoalAssignee(goalId, targetId, tenantId);
     if (!isGoalAssignee) {
       throw {
@@ -244,11 +241,6 @@ export async function resolveTargetEmployee(requestingUser, tenantId, employeeId
         status: 403,
         message: `Access forbidden: managers cannot assign tasks to peer or higher authority roles (${targetRole})`,
       };
-    }
-
-    // 0. Critical tasks may go to members of other teams.
-    if (allowOutsideGoal) {
-      return targetUser;
     }
 
     // 1. Direct or indirect downline subordinate:
@@ -376,6 +368,7 @@ export async function createTask(req, res, next) {
       }
       try {
         await assertWatcherEmailsAllowed(tenantId, result.items.flatMap((m) => m.watcherEmails));
+        await assertMilestoneAssigneesValid(tenantId, result.items.map((m) => m.assigneeId));
       } catch (e) {
         return res.status(e.status || 500).json({ success: false, message: e.message });
       }
@@ -630,17 +623,16 @@ export async function createTask(req, res, next) {
     // 6. Resolve every target employee FIRST. These checks read the database
     //    and can refuse the request outright, and neither belongs inside the
     //    transaction that follows.
-    const allowOutsideGoal = canAssignOutsideGoal(priority, req.user.role);
     const targets = [];
     for (const targetId of targetEmployeeIds) {
       let target;
       try {
-        target = await resolveTargetEmployee(req.user, tenantId, targetId, parentTask, resolvedGoalId, allowOutsideGoal);
+        target = await resolveTargetEmployee(req.user, tenantId, targetId, parentTask, resolvedGoalId);
       } catch (e) {
         return res.status(e.status || 500).json({ success: false, message: e.message });
       }
 
-      if (resolvedGoalId && !allowOutsideGoal) {
+      if (resolvedGoalId) {
         const isGoalAssignee = await isUserGoalAssignee(resolvedGoalId, target.id, tenantId);
         if (!isGoalAssignee) {
           return res.status(400).json({
@@ -710,6 +702,7 @@ export async function createTask(req, res, next) {
               dueDate: m.dueDate,
               progress: m.progress,
               watcherEmails: m.watcherEmails,
+              assigneeId: m.assigneeId,
               status: 'PENDING_APPROVAL',
               createdById: req.user.id,
             },
@@ -1037,8 +1030,7 @@ export async function updateTask(req, res, next) {
           existingParent = await prisma.task.findFirst({ where: { id: existing.isDependencyOf, tenantId } });
         }
         const effectiveGoalForReassign = isStandalone ? null : (goalId !== undefined ? goalId : existing.goalId);
-        const reassignPriority = priority !== undefined ? priority : existing.priority;
-        await resolveTargetEmployee(req.user, tenantId, employeeId, existingParent, effectiveGoalForReassign, canAssignOutsideGoal(reassignPriority, req.user.role));
+        await resolveTargetEmployee(req.user, tenantId, employeeId, existingParent, effectiveGoalForReassign);
       } catch (e) {
         return res.status(e.status || 500).json({ success: false, message: e.message });
       }
@@ -1136,9 +1128,7 @@ export async function updateTask(req, res, next) {
 
     // ── Task Assignment Restriction: A task can only be assigned to an employee who is already assigned to the parent Goal ──
     const effectiveParentGoalId = effectiveIsStandalone ? null : targetGoalId;
-    // Critical tasks may be assigned to members outside the goal's team.
-    const updatePriority = priority !== undefined ? priority : existing.priority;
-    if (effectiveParentGoalId && !canAssignOutsideGoal(updatePriority, req.user.role)) {
+    if (effectiveParentGoalId) {
       const effectiveAssigneeIds = resolvedAssigneeIds !== undefined
         ? resolvedAssigneeIds
         : (employeeId !== undefined ? [employeeId] : [existing.employeeId]);

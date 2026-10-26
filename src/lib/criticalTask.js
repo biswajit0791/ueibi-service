@@ -5,17 +5,11 @@
  * can be unit tested directly (tests/unit/criticalTask.test.js).
  */
 import { createMilestoneSchema, MAX_MILESTONES_PER_TASK } from '../validations/taskMilestone.schema.js';
-import { MANAGER_OR_ELEVATED_ROLES, hasRole } from './roles.js';
 
 export const MIN_CRITICAL_MILESTONES = 1;
 export const MAX_CRITICAL_MILESTONES = MAX_MILESTONES_PER_TASK;
 
 export const isCriticalPriority = (priority) => String(priority || '').toLowerCase() === 'critical';
-
-/** Critical work may be handed to people outside the parent goal's team,
- *  but only by a manager or above. */
-export const canAssignOutsideGoal = (priority, role) =>
-  isCriticalPriority(priority) && hasRole(role, MANAGER_OR_ELEVATED_ROLES);
 
 const startOfDay = (value) => {
   const d = new Date(value);
@@ -77,6 +71,7 @@ export function validateMilestoneDrafts(drafts, { startDate, dueDate, now = new 
       dueDate: due,
       progress: Number(data.progress || 0),
       watcherEmails: data.watcherEmails,
+      assigneeId: data.assigneeId || null,
     });
   }
   return { items };

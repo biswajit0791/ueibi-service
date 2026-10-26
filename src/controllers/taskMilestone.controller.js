@@ -36,6 +36,7 @@ export const MILESTONE_INCLUDE = {
   approvedBy: { select: { id: true, name: true } },
   completedBy: { select: { id: true, name: true } },
   createdBy: { select: { id: true, name: true } },
+  assignee: { select: { id: true, name: true, email: true, designation: true, role: true } },
   escalationLevels: {
     include: {
       user: {
@@ -119,6 +120,19 @@ export async function assertWatcherEmailsAllowed(tenantId, emails) {
   }
 }
 
+/** Throws a 400 unless every id is an active member of this tenant. A milestone
+ *  owner may belong to any team, so only tenancy is checked here. */
+export async function assertMilestoneAssigneesValid(tenantId, assigneeIds) {
+  const ids = [...new Set((assigneeIds || []).filter(Boolean))];
+  if (ids.length === 0) return;
+  const found = await prisma.tenantUser.count({
+    where: { id: { in: ids }, tenantId, isDeleted: false, status: 'ACTIVE' },
+  });
+  if (found !== ids.length) {
+    throw { status: 400, message: 'Milestone assignee must be an active member of this company' };
+  }
+}
+
 /** Once every milestone on a task is APPROVED or DONE, the task itself may
  *  leave pending_approval and become workable. Mirrors the same idea as
  *  goalWeight.service.js's PENDING_APPROVAL gate, one level down. */
@@ -179,8 +193,9 @@ export async function createMilestone(req, res, next) {
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
-    const { title, description, dueDate, progress, watcherEmails } = parsed.data;
+    const { title, description, dueDate, progress, watcherEmails, assigneeId } = parsed.data;
     await assertWatcherEmailsAllowed(tenantId, watcherEmails);
+    await assertMilestoneAssigneesValid(tenantId, [assigneeId]);
 
     const due = new Date(dueDate);
     if (Number.isNaN(due.getTime())) {
@@ -225,6 +240,7 @@ export async function createMilestone(req, res, next) {
         dueDate: due,
         progress: Number(progress || 0),
         watcherEmails,
+        assigneeId: assigneeId || null,
         status: 'PENDING_APPROVAL',
         createdById: req.user.id,
       },
@@ -434,6 +450,7 @@ export async function updateMilestone(req, res, next) {
       dueDate,
       progress,
       watcherEmails,
+      assigneeId,
       proposedCompletionDate,
       extensionDaysRequested,
       extensionReason,
@@ -479,7 +496,7 @@ export async function updateMilestone(req, res, next) {
     }
 
     // ── Manager: edit the milestone's own fields ──────────────────────────
-    if (title !== undefined || dueDate !== undefined || watcherEmails !== undefined) {
+    if (title !== undefined || dueDate !== undefined || watcherEmails !== undefined || assigneeId !== undefined) {
       if (!isManager) {
         return res.status(403).json({ error: 'Only a manager (or above) can edit a milestone' });
       }
@@ -487,6 +504,11 @@ export async function updateMilestone(req, res, next) {
         return res.status(409).json({ error: 'This milestone is already complete and cannot be edited' });
       }
       if (title !== undefined) data.title = title.trim();
+      if (assigneeId !== undefined) {
+        await assertMilestoneAssigneesValid(tenantId, [assigneeId]);
+        data.assigneeId = assigneeId || null;
+        auditLines.push('assignee changed');
+      }
       if (watcherEmails !== undefined) {
         await assertWatcherEmailsAllowed(tenantId, watcherEmails);
         data.watcherEmails = watcherEmails;
