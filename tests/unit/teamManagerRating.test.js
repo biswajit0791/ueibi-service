@@ -91,3 +91,15 @@ test('an employee sees only the actual weightage of their own work', () => {
   assert.equal(own.finalWeight, null);
   assert.equal(own.plannedWeight, 50);
 });
+
+test('a completed dependency task counts with its own weightage', () => {
+  const r = byId(summariseByEmployee([
+    goalTask('a', 30),
+    task('a', null, { weight: 10, isStandalone: true, isDependencyOf: 'parent-1', managerFinalWeight: 6 }),
+    task('a', null, { weight: 20, isDependencyOf: 'parent-2', progress: 50, status: 'in_progress' }),
+  ], NOW));
+  assert.equal(r.a.completedCount, 2);
+  assert.equal(r.a.avgActualWeight, 20);
+  assert.equal(r.a.avgFinalWeight, 18);
+  assert.equal(r.a.managerCount, 1);
+});

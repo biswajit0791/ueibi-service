@@ -228,9 +228,10 @@ const meanOf = (total, count) => (count > 0 ? Math.round((total / count) * 10) /
  * `managerRating` is the mean of the goal owner's 0-5 ratings across that
  * person's rated tasks (one decimal), or null when nothing is rated yet.
  *
- * The three weightage averages are taken over COMPLETED goal tasks only — an
- * unfinished task has no final weightage yet, and a standalone task's weight is
- * not a share of anything:
+ * The weightage averages are taken over COMPLETED goal tasks and dependency
+ * tasks only — an unfinished task has no final weightage yet, and a standalone
+ * task's weight is not a share of anything. A dependency task carries its own
+ * weightage, rated against the parent task's goal:
  *
  *   avgActualWeight   mean of the planned `weight`. Shown for reference
  *                     only — nothing is calculated from it.
@@ -265,7 +266,8 @@ export function summariseByEmployee(tasks, now = new Date()) {
       bucket.ratedCount += 1;
       bucket.ratingTotal += Number(row.managerRating);
     }
-    if (row.goalId && !task.isStandalone && row.timing?.isComplete) {
+    const weighted = (row.goalId && !task.isStandalone) || row.dependentTaskId;
+    if (weighted && row.timing?.isComplete) {
       bucket.completedCount += 1;
       bucket.actualTotal += row.plannedWeight;
       bucket.finalTotal += row.isAdjusted ? row.managerFinalWeight : row.plannedWeight;

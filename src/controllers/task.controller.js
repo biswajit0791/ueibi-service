@@ -577,7 +577,12 @@ export async function createTask(req, res, next) {
 
     // 5b. Weightage: Removed for private tasks and unmonitored tasks (Req 8)
     // A task is monitored if it is linked to a goal OR milestone tracked.
-    const isUnmonitoredOrPrivate = Boolean(effectiveIsPrivate || effectiveIsStandalone || (!resolvedGoalId && !isMilestoneTracked));
+    // A dependency task carries its own weightage even with no goal of its
+    // own: it is rated and weighed against the parent task's goal, and counts
+    // toward its assignee's weightage. It sits outside any goal's 100% total.
+    const isWeightedDependency = Boolean(isDependencyOf) && !effectiveIsPrivate;
+    const isUnmonitoredOrPrivate = !isWeightedDependency
+      && Boolean(effectiveIsPrivate || effectiveIsStandalone || (!resolvedGoalId && !isMilestoneTracked));
     let resolvedWeight;
 
     if (isUnmonitoredOrPrivate) {
@@ -587,6 +592,7 @@ export async function createTask(req, res, next) {
         ? await defaultWeightFor(resolvedGoalId, 1)
         : Number(weight);
       if (!Number.isFinite(resolvedWeight) || resolvedWeight < 1) resolvedWeight = 1;
+      if (isWeightedDependency && resolvedWeight > 100) resolvedWeight = 100;
 
       if (resolvedGoalId) {
         try {
@@ -1244,7 +1250,11 @@ export async function updateTask(req, res, next) {
     const targetGoalId = resolvedGoalId !== undefined ? resolvedGoalId : existing.goalId;
     const effectiveIsPrivate = isPrivate !== undefined ? isPrivate : existing.isPrivate;
     const effectiveIsStandalone = isStandalone !== undefined ? isStandalone : existing.isStandalone;
-    const isUnmonitoredOrPrivate = Boolean(effectiveIsPrivate || effectiveIsStandalone || (!targetGoalId && !existing.isMilestoneTracked));
+    // Dependency tasks keep their own weightage — see createTask.
+    const effectiveDependencyOf = isDependencyOf !== undefined ? isDependencyOf : existing.isDependencyOf;
+    const isWeightedDependency = Boolean(effectiveDependencyOf) && !effectiveIsPrivate;
+    const isUnmonitoredOrPrivate = !isWeightedDependency
+      && Boolean(effectiveIsPrivate || effectiveIsStandalone || (!targetGoalId && !existing.isMilestoneTracked));
 
     // ── Task Assignment Restriction: A task can only be assigned to an employee who is already assigned to the parent Goal ──
     const effectiveParentGoalId = effectiveIsStandalone ? null : targetGoalId;
@@ -1271,6 +1281,7 @@ export async function updateTask(req, res, next) {
       finalWeight = 0;
     } else if (weight !== undefined && weight !== null && (isElevated || isDirectManager)) {
       finalWeight = Number(weight);
+      if (isWeightedDependency && !targetGoalId) finalWeight = Math.min(100, Math.max(1, finalWeight || 1));
       if (targetGoalId) {
         try {
           await assertWeightFits({ goalId: targetGoalId, weight: finalWeight, excludeTaskId: id });
