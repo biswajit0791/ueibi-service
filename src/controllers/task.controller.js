@@ -801,8 +801,9 @@ export async function createTask(req, res, next) {
     // 8. Side effects, once the row is safely committed.
     let goalProgress = 0;
     if (resolvedGoalId) {
+      goalProgress = await recalculateGoalProgress(resolvedGoalId);
       for (const empId of targetEmployeeIds) {
-        goalProgress = await recalculateGoalProgress(resolvedGoalId, empId);
+        await recalculateGoalProgress(resolvedGoalId, empId);
       }
     }
 
@@ -942,22 +943,44 @@ export async function updateTaskStatus(req, res, next) {
       }
     }
 
-    const reviewFields = await reviewFieldsFor(existing, nextState, existing.goalId, req.user.id);
-
-    const updated = await prisma.task.update({
-      where: { id },
-      data: { 
-        status,
-        ...(progressUpdate !== undefined && !isNaN(progressUpdate) && { progress: progressUpdate }),
-        ...(req.body.onHoldReason !== undefined && { onHoldReason: req.body.onHoldReason }),
-        ...timingUpdates(existing, nextState),
-        ...reviewFields,
-      },
-    });
+    let updated;
+    try {
+      updated = await prisma.task.update({
+        where: { id },
+        data: { 
+          status,
+          ...(progressUpdate !== undefined && !isNaN(progressUpdate) && { progress: progressUpdate }),
+          ...(req.body.onHoldReason !== undefined && { onHoldReason: req.body.onHoldReason }),
+          ...timingUpdates(existing, nextState),
+          ...reviewFields,
+        },
+      });
+    } catch (updateErr) {
+      if (updateErr?.message?.includes('reviewStatus') || updateErr?.message?.includes('Unknown argument')) {
+        updated = await prisma.task.update({
+          where: { id },
+          data: { 
+            status,
+            ...(progressUpdate !== undefined && !isNaN(progressUpdate) && { progress: progressUpdate }),
+            ...(req.body.onHoldReason !== undefined && { onHoldReason: req.body.onHoldReason }),
+            ...timingUpdates(existing, nextState),
+          },
+        });
+      } else {
+        throw updateErr;
+      }
+    }
 
     let goalProgress = 0;
     if (updated.goalId) {
       goalProgress = await recalculateGoalProgress(updated.goalId, updated.employeeId);
+      if (Array.isArray(updated.assigneeIds)) {
+        for (const coId of updated.assigneeIds) {
+          if (coId !== updated.employeeId) {
+            await recalculateGoalProgress(updated.goalId, coId);
+          }
+        }
+      }
       if (reviewFields.reviewStatus === REVIEW_STATUS.APPROVED) {
         await completeGoalIfAllApproved({ goalId: updated.goalId, tenantId, actor: req.user });
       }
@@ -1349,9 +1372,8 @@ export async function updateTask(req, res, next) {
       req.user.id,
     );
 
-    const runUpdate = (tx) => tx.task.update({
-      where: { id },
-      data: {
+    const runUpdate = (tx) => {
+      const updateData = {
         ...actualDates.data,
         ...reviewFields,
         ...(title !== undefined && { title: title.trim() }),
@@ -1375,8 +1397,23 @@ export async function updateTask(req, res, next) {
         ...(req.body.requiresApproval !== undefined && { requiresApproval: Boolean(req.body.requiresApproval) }),
         ...(req.body.onHoldReason !== undefined && { onHoldReason: req.body.onHoldReason }),
         ...(req.body.approveDelegation === true && { approvedById: req.user.id, approvedAt: new Date() }),
-      },
-    });
+      };
+      return tx.task.update({
+        where: { id },
+        data: updateData,
+      }).catch((updateErr) => {
+        if (updateErr?.message?.includes('reviewStatus') || updateErr?.message?.includes('Unknown argument')) {
+          const fallbackData = { ...updateData };
+          delete fallbackData.reviewStatus;
+          delete fallbackData.reviewSubmittedAt;
+          delete fallbackData.reviewedById;
+          delete fallbackData.reviewedAt;
+          delete fallbackData.reviewComment;
+          return tx.task.update({ where: { id }, data: fallbackData });
+        }
+        throw updateErr;
+      });
+    };
 
     let updated;
     try {

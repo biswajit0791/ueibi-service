@@ -146,53 +146,57 @@ const MILESTONE_STARTABLE_STATUSES = ['todo', 'pending_approval', 'rejected', 'd
  * when the goal owner is the one finishing it, approves it as well).
  */
 async function syncTaskFromMilestones(taskId, actor, tenantId) {
-  const task = await prisma.task.findUnique({ where: { id: taskId } });
-  const milestones = await prisma.taskMilestone.findMany({ where: { taskId } });
-  if (!task || milestones.length === 0) return;
+  try {
+    const task = await prisma.task.findUnique({ where: { id: taskId } });
+    const milestones = await prisma.taskMilestone.findMany({ where: { taskId } });
+    if (!task || milestones.length === 0) return;
 
-  const pct = (m) => (m.status === 'DONE' ? 100 : Math.min(100, Math.max(0, Number(m.progress) || 0)));
-  const allDone = milestones.every((m) => m.status === 'DONE');
-  const anyWork = milestones.some((m) => pct(m) > 0);
-  const average = Math.round(milestones.reduce((sum, m) => sum + pct(m), 0) / milestones.length);
+    const pct = (m) => (m.status === 'DONE' ? 100 : Math.min(100, Math.max(0, Number(m.progress) || 0)));
+    const allDone = milestones.every((m) => m.status === 'DONE');
+    const anyWork = milestones.some((m) => pct(m) > 0);
+    const average = Math.round(milestones.reduce((sum, m) => sum + pct(m), 0) / milestones.length);
 
-  let status = task.status;
-  if (allDone) status = 'done';
-  else if (anyWork && MILESTONE_STARTABLE_STATUSES.includes(task.status)) status = 'in_progress';
-  const progress = allDone ? 100 : Math.min(average, 99);
-  if (status === task.status && progress === task.progress) return;
+    let status = task.status;
+    if (allDone) status = 'done';
+    else if (anyWork && MILESTONE_STARTABLE_STATUSES.includes(task.status)) status = 'in_progress';
+    const progress = allDone ? 100 : Math.min(average, 99);
+    if (status === task.status && progress === task.progress) return;
 
-  const next = { status, progress };
-  const goal = task.goalId
-    ? await prisma.goal.findUnique({ where: { id: task.goalId }, select: { ownerManagerId: true } })
-    : null;
-  const reviewFields = reviewFieldsForTransition({ existing: task, next, goal, actorId: actor.id });
+    const next = { status, progress };
+    const goal = task.goalId
+      ? await prisma.goal.findUnique({ where: { id: task.goalId }, select: { ownerManagerId: true } })
+      : null;
+    const reviewFields = reviewFieldsForTransition({ existing: task, next, goal, actorId: actor.id });
 
-  const updated = await prisma.task.update({
-    where: { id: taskId },
-    data: { ...next, ...timingUpdates(task, next), ...reviewFields },
-  });
-
-  let goalProgress = 0;
-  if (updated.goalId) {
-    goalProgress = await goalService.recalculateProgress(updated.goalId, updated.employeeId);
-    if (reviewFields.reviewStatus === REVIEW_STATUS.APPROVED) {
-      await completeGoalIfAllApproved({ goalId: updated.goalId, tenantId, actor });
-    }
-  }
-
-  if (status !== task.status) {
-    await logTaskAudit({
-      taskId,
-      performedById: actor.id,
-      action: 'status_changed',
-      details: status === 'done'
-        ? 'All milestones complete — task marked DONE.'
-        : `Milestone work started — status updated to ${status.toUpperCase().replace('_', ' ')}.`,
+    const updated = await prisma.task.update({
+      where: { id: taskId },
+      data: { ...next, ...timingUpdates(task, next), ...reviewFields },
     });
+
+    let goalProgress = 0;
+    if (updated.goalId) {
+      goalProgress = await goalService.recalculateProgress(updated.goalId, updated.employeeId);
+      if (reviewFields.reviewStatus === REVIEW_STATUS.APPROVED) {
+        await completeGoalIfAllApproved({ goalId: updated.goalId, tenantId, actor });
+      }
+    }
+
+    if (status !== task.status) {
+      await logTaskAudit({
+        taskId,
+        performedById: actor.id,
+        action: 'status_changed',
+        details: status === 'done'
+          ? 'All milestones complete — task marked DONE.'
+          : `Milestone work started — status updated to ${status.toUpperCase().replace('_', ' ')}.`,
+      });
+    }
+    emitToTenant(tenantId, 'task_updated', {
+      action: 'update', task: updated, goalId: updated.goalId, goalProgress,
+    });
+  } catch (syncErr) {
+    console.error(`[syncTaskFromMilestones] Error syncing task ${taskId} from milestones:`, syncErr);
   }
-  emitToTenant(tenantId, 'task_updated', {
-    action: 'update', task: updated, goalId: updated.goalId, goalProgress,
-  });
 }
 
 // ─── GET /api/tasks/:id/milestones ─────────────────────────────────────────

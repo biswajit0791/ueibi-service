@@ -67,3 +67,51 @@ test('private, standalone and goal-less tasks are never reviewed', () => {
     assert.deepEqual(r, {});
   }
 });
+
+test('completeGoalIfAllApproved returns null if not all reviewed tasks are approved', async () => {
+  const { completeGoalIfAllApproved } = await import('../../src/services/taskReview.service.js');
+  const { prisma } = await import('../../src/lib/prisma.js');
+
+  const mockGoal = {
+    id: 'g1',
+    tenantId: 't1',
+    status: 'ACTIVE',
+    assignments: [
+      { id: 'a1', employeeId: 'emp1', status: 'ACTIVE', progress: 0 },
+      { id: 'a2', employeeId: 'emp2', status: 'ACTIVE', progress: 0 },
+    ],
+    tasks: [
+      { id: 'task1', employeeId: 'emp1', status: 'todo', progress: 0, isStandalone: false, isPrivate: false, reviewStatus: null },
+      { id: 'task2', employeeId: 'emp2', status: 'done', progress: 100, isStandalone: false, isPrivate: false, reviewStatus: REVIEW_STATUS.APPROVED },
+    ],
+  };
+
+  const origGoal = prisma.goal;
+  const origAssignment = prisma.goalAssignment;
+
+  try {
+    Object.defineProperty(prisma, 'goal', {
+      value: {
+        findFirst: async () => mockGoal,
+        update: async () => { throw new Error('Should not update goal to completed!'); },
+      },
+      configurable: true,
+    });
+    Object.defineProperty(prisma, 'goalAssignment', {
+      value: {
+        updateMany: async () => ({ count: 1 }),
+        findMany: async () => [
+          { status: 'ACTIVE', progress: 0 },
+          { status: 'COMPLETED', progress: 100 },
+        ],
+      },
+      configurable: true,
+    });
+
+    const res = await completeGoalIfAllApproved({ goalId: 'g1', tenantId: 't1', actor: { id: 'owner' } });
+    assert.equal(res, null);
+  } finally {
+    if (origGoal) Object.defineProperty(prisma, 'goal', { value: origGoal, configurable: true });
+    if (origAssignment) Object.defineProperty(prisma, 'goalAssignment', { value: origAssignment, configurable: true });
+  }
+});

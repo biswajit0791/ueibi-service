@@ -55,13 +55,34 @@ app.set('trust proxy', true);
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
-const defaultOrigins = ['http://localhost:5173', 'http://localhost:5174', 'https://ueibi.defigo.in'];
+const defaultOrigins = [
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'https://ueibi.defigo.in',
+  'https://ekaryam.io',
+  'https://www.ekaryam.io',
+];
 const allowedOrigins = Array.from(new Set([
   ...defaultOrigins,
   env.corsOrigin,
   env.frontendOrigin,
 ].filter(Boolean)));
-app.use(cors({ origin: allowedOrigins, credentials: true }));
+
+const isAllowedOrigin = (origin) => {
+  if (!origin) return true;
+  if (allowedOrigins.includes(origin)) return true;
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
+  if (/^https?:\/\/([a-z0-9-]+\.)*defigo\.in(:\d+)?$/i.test(origin)) return true;
+  if (/^https?:\/\/([a-z0-9-]+\.)*ekaryam\.io(:\d+)?$/i.test(origin)) return true;
+  return false;
+};
+
+app.use(cors({
+  origin: (origin, callback) => {
+    callback(null, isAllowedOrigin(origin));
+  },
+  credentials: true,
+}));
 app.use(express.json());
 app.use(morgan(env.nodeEnv === 'development' ? 'dev' : 'combined'));
 

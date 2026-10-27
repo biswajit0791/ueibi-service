@@ -44,6 +44,23 @@ export function isGoalOwner(goal, userId) {
   return Boolean(goal && userId && (goal.ownerManagerId === userId || goal.ownerId === userId));
 }
 
+export function hasTaskReviewSupport() {
+  try {
+    const model = prisma?._runtimeDataModel?.models?.Task;
+    if (model?.fields) {
+      if (Array.isArray(model.fields)) {
+        return model.fields.some((f) => (typeof f === 'string' ? f : f?.name) === 'reviewStatus');
+      }
+      return Boolean(model.fields.reviewStatus);
+    }
+    const dmmf = prisma?._dmmf?.modelMap?.Task;
+    if (dmmf?.fields) {
+      return dmmf.fields.some((f) => f.name === 'reviewStatus');
+    }
+  } catch {}
+  return false;
+}
+
 /**
  * Review fields to write alongside a task status/progress change.
  *
@@ -52,6 +69,7 @@ export function isGoalOwner(goal, userId) {
  * Leaving complete: any earlier review no longer describes the work.
  */
 export function reviewFieldsForTransition({ existing, next, goal, actorId, now = new Date() }) {
+  if (!hasTaskReviewSupport()) return {};
   if (!isReviewedTask({ ...existing, ...next })) return {};
   const after = {
     status: next.status !== undefined ? next.status : existing.status,
@@ -139,7 +157,7 @@ export async function completeGoalIfAllApproved({ goalId, tenantId, actor }) {
   const status = rows.length > 0
     ? rollUpGoalStatus(rows, goal.status)
     : (allApproved ? 'COMPLETED' : goal.status);
-  if (String(status).toUpperCase() !== 'COMPLETED') {
+  if (String(status).toUpperCase() !== 'COMPLETED' || !allApproved) {
     if (finishedAssignees.length > 0) {
       emitToTenant(tenantId, 'goal_updated', { action: 'update', goalId });
     }

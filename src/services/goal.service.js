@@ -3,6 +3,7 @@ import { emitToTenant, emitToUser } from '../lib/socket.js';
 import { ELEVATED_ROLES, HR_ROLES, MANAGER_OR_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
 import { sendGoalSubmissionEmail, sendGoalReviewResultEmail } from './goalEscalation.service.js';
 import { goalRatingGate } from '../lib/goalRating.js';
+import { calculateWeightedTaskProgress } from './goalWeight.service.js';
 
 export const GOAL_CATEGORIES = [
   'Technical Skills',
@@ -90,11 +91,15 @@ export function rollUpGoalStatus(assignments, fallbackStatus) {
   return rows.reduce((lowest, a) => (rankOf(a.status) < rankOf(lowest.status) ? a : lowest), rows[0]).status;
 }
 
-/** Parent progress is the mean of the assignees' progress, for the same reason. */
+/** Parent progress is the mean of the assignees' progress, for the same reason.
+ * Never returns 100 unless every assignee row is at 100%. */
 export function rollUpGoalProgress(assignments, fallbackProgress) {
   const rows = (assignments || []).filter(Boolean);
   if (rows.length === 0) return fallbackProgress;
-  return Math.round(rows.reduce((sum, a) => sum + (Number(a.progress) || 0), 0) / rows.length);
+  const all100 = rows.every((a) => (Number(a.progress) || 0) >= 100);
+  const avg = Math.round(rows.reduce((sum, a) => sum + (Number(a.progress) || 0), 0) / rows.length);
+  if (all100) return 100;
+  return Math.min(99, Math.max(0, avg));
 }
 
 const isOneOf = (status, allowed) => allowed.includes(String(status || '').trim().toUpperCase());
@@ -304,32 +309,24 @@ export class GoalService {
 
   /**
    * Recalculates goal progress from its linked tasks for a specific employee or across all tasks.
-   * Automatically transitions status to READY_FOR_SUBMISSION when all tasks are complete, or IN_PROGRESS when tasks are underway.
+   * Automatically transitions status to READY_FOR_SUBMISSION only when all tasks are complete,
+   * or IN_PROGRESS when tasks are underway. Progress is never 100% when tasks remain incomplete.
    */
   async recalculateProgress(goalId, employeeId = null) {
     if (!goalId) return 0;
 
-    const allGoalTasks = await prisma.task.findMany({ where: { goalId } });
-    const empTasks = employeeId
-      ? allGoalTasks.filter(t => !t.employeeId || t.employeeId === employeeId || (Array.isArray(t.assigneeIds) && t.assigneeIds.includes(employeeId)))
-      : allGoalTasks;
-
-    const calcEarned = (tasks) => tasks.reduce((sum, t) => {
-      if (t.managerFinalWeight !== null && t.managerFinalWeight !== undefined) {
-        return sum + Number(t.managerFinalWeight);
-      }
-      const w = Number(t.weight || 1);
-      const p = Math.min(100, Math.max(0, Number(t.progress || 0)));
-      return sum + ((w * p) / 100);
-    }, 0);
-
-    const totalWeight = empTasks.reduce((sum, t) => sum + Number(t.weight || 1), 0);
-    const earned = calcEarned(empTasks);
-    const empProgress = totalWeight > 0 ? Math.min(100, Math.round((earned / totalWeight) * 100)) : 0;
-    const empCompletedCount = empTasks.filter(t => t.status === 'done' || t.progress === 100).length;
+    const allGoalTasks = await prisma.task.findMany({
+      where: { goalId },
+    });
+    const eligibleTasks = allGoalTasks.filter(t => !t.isStandalone && !t.isPrivate);
 
     // Update specific GoalAssignment if employeeId is specified
     if (employeeId) {
+      const empTasks = eligibleTasks.filter(t =>
+        !t.employeeId || t.employeeId === employeeId || (Array.isArray(t.assigneeIds) && t.assigneeIds.includes(employeeId))
+      );
+      const empCalc = calculateWeightedTaskProgress(empTasks);
+
       try {
         const currentAssignment = await prisma.goalAssignment.findFirst({
           where: { goalId, employeeId },
@@ -337,11 +334,11 @@ export class GoalService {
 
         let assignmentStatus = currentAssignment?.status || 'DRAFT';
         if (['DRAFT', 'IN_PROGRESS', 'READY_FOR_SUBMISSION'].includes(assignmentStatus)) {
-          if (empTasks.length > 0 && (empCompletedCount === empTasks.length || empProgress === 100)) {
+          if (empTasks.length > 0 && empCalc.allCompleted) {
             assignmentStatus = 'READY_FOR_SUBMISSION';
-          } else if (empProgress > 0) {
+          } else if (empCalc.progress > 0) {
             assignmentStatus = 'IN_PROGRESS';
-          } else if (empProgress === 0 && assignmentStatus === 'IN_PROGRESS') {
+          } else if (empCalc.progress === 0 && assignmentStatus === 'IN_PROGRESS') {
             assignmentStatus = 'DRAFT';
           }
         }
@@ -349,10 +346,10 @@ export class GoalService {
         await prisma.goalAssignment.updateMany({
           where: { goalId, employeeId },
           data: {
-            progress: empProgress,
+            progress: empCalc.progress,
             status: assignmentStatus,
-            milestones: empTasks.length,
-            completedMilestones: empCompletedCount,
+            milestones: empCalc.totalCount,
+            completedMilestones: empCalc.completedCount,
           },
         });
       } catch (err) {
@@ -360,21 +357,18 @@ export class GoalService {
       }
     }
 
-    // Recalculate overall goal progress across all tasks
-    const totalAllWeight = allGoalTasks.reduce((sum, t) => sum + Number(t.weight || 1), 0);
-    const earnedAll = calcEarned(allGoalTasks);
-    const overallProgress = totalAllWeight > 0 ? Math.min(100, Math.round((earnedAll / totalAllWeight) * 100)) : 0;
-    const allCompletedCount = allGoalTasks.filter(t => t.status === 'done' || t.progress === 100).length;
+    // Recalculate overall goal progress across all eligible tasks
+    const overallCalc = calculateWeightedTaskProgress(eligibleTasks);
 
     const goal = await prisma.goal.findUnique({ where: { id: goalId } });
     if (goal) {
       let goalStatus = goal.status || 'DRAFT';
       if (['DRAFT', 'IN_PROGRESS', 'READY_FOR_SUBMISSION'].includes(goalStatus)) {
-        if (allGoalTasks.length > 0 && (allCompletedCount === allGoalTasks.length || overallProgress === 100)) {
+        if (eligibleTasks.length > 0 && overallCalc.allCompleted) {
           goalStatus = 'READY_FOR_SUBMISSION';
-        } else if (overallProgress > 0) {
+        } else if (overallCalc.progress > 0) {
           goalStatus = 'IN_PROGRESS';
-        } else if (overallProgress === 0 && goalStatus === 'IN_PROGRESS') {
+        } else if (overallCalc.progress === 0 && goalStatus === 'IN_PROGRESS') {
           goalStatus = 'DRAFT';
         }
       }
@@ -382,15 +376,15 @@ export class GoalService {
       await prisma.goal.update({
         where: { id: goalId },
         data: {
-          progress: overallProgress,
+          progress: overallCalc.progress,
           status: goalStatus,
-          milestones: allGoalTasks.length,
-          completedMilestones: allCompletedCount,
+          milestones: overallCalc.totalCount,
+          completedMilestones: overallCalc.completedCount,
         },
       });
     }
 
-    return overallProgress;
+    return overallCalc.progress;
   }
 
   // ─── WORKFLOW ACTION: Activate/Approve a PENDING_APPROVAL goal ──────────────────

@@ -22,9 +22,9 @@ import { isWorkStarted, isWorkComplete } from '../lib/taskTiming.js';
 
 export const REQUIRED_TOTAL = 100;
 
-/** Tasks that count towards a goal's total. A standalone task is not part of
- *  the goal's plan even if it still carries the goalId. */
-const countsTowardsTotal = (t) => !t.isStandalone;
+/** Tasks that count towards a goal's total. A standalone, soft-deleted, or private
+ *  task is not part of the goal's plan even if it still carries the goalId. */
+export const countsTowardsTotal = (t) => !t.isStandalone && !t.isDeleted && !t.isPrivate;
 
 /**
  * The weight position of one goal.
@@ -46,7 +46,8 @@ export async function goalWeightSummary(goalId, client = prisma) {
       tasks: {
         select: {
           id: true, title: true, weight: true, status: true,
-          progress: true, isStandalone: true, employeeId: true,
+          progress: true, isStandalone: true, isPrivate: true,
+          employeeId: true,
           managerFinalWeight: true,
         },
       },
@@ -96,29 +97,64 @@ export async function goalWeightSummary(goalId, client = prisma) {
 }
 
 /**
+ * Calculates weighted task progress across a list of tasks.
+ * Consistently handles:
+ * - Zero tasks -> 0%
+ * - Unweighted tasks -> equal-weighted average (e.g. completed / total)
+ * - Explicit task weights -> sum(w * p / 100) / sum(w)
+ * - Incomplete tasks remaining -> strictly capped at max 99% (NEVER 100% when tasks remain incomplete)
+ * - All tasks completed -> 100%
+ */
+export function calculateWeightedTaskProgress(tasks) {
+  const eligible = (tasks || []).filter(countsTowardsTotal);
+  if (eligible.length === 0) {
+    return { progress: 0, completedCount: 0, totalCount: 0, allCompleted: false };
+  }
+
+  const isTaskComplete = (t) => {
+    const s = String(t.status || '').toLowerCase();
+    return s === 'done' || s === 'completed' || Number(t.progress || 0) >= 100;
+  };
+
+  const completedCount = eligible.filter(isTaskComplete).length;
+  const allCompleted = eligible.length > 0 && completedCount === eligible.length;
+
+  const hasWeights = eligible.some((t) => Number(t.weight) > 0);
+  const totalWeight = eligible.reduce((sum, t) => sum + (hasWeights ? Number(t.weight || 0) : 1), 0);
+  if (totalWeight <= 0) {
+    return { progress: 0, completedCount, totalCount: eligible.length, allCompleted };
+  }
+
+  const earned = eligible.reduce((sum, t) => {
+    if (t.managerFinalWeight !== null && t.managerFinalWeight !== undefined) {
+      return sum + Number(t.managerFinalWeight);
+    }
+    const w = hasWeights ? Number(t.weight || 0) : 1;
+    const p = Math.min(100, Math.max(0, Number(t.progress || 0)));
+    return sum + ((w * p) / 100);
+  }, 0);
+
+  let pct = Math.round((earned / totalWeight) * 100);
+  if (allCompleted) {
+    pct = 100;
+  } else if (pct >= 100) {
+    pct = 99; // Never allow 100% when tasks remain incomplete!
+  } else if (pct < 0) {
+    pct = 0;
+  }
+
+  return { progress: pct, completedCount, totalCount: eligible.length, allCompleted };
+}
+
+/**
  * Weighted completion across a goal's tasks: how much of the goal is actually
  * DONE, as opposed to how much of it has been planned.
- *
- * These two are easy to confuse and were being shown as one number. A goal
- * with a 50%-weight task finished and a 50%-weight task untouched is 100%
- * ALLOCATED but only 50% COMPLETE. The panel reported "100%", which reads as
- * finished when nothing of the sort is true.
  *
  * Same formula as goalService.recalculateProgress, so this figure and the
  * goal's stored `progress` cannot drift apart.
  */
-function weightedCompletion(tasks) {
-  const totalWeight = tasks.reduce((sum, t) => sum + Number(t.weight || 0), 0);
-  if (totalWeight <= 0) return 0;
-  const earned = tasks.reduce((sum, t) => {
-    if (t.managerFinalWeight !== null && t.managerFinalWeight !== undefined) {
-      return sum + Number(t.managerFinalWeight);
-    }
-    const w = Number(t.weight || 0);
-    const p = Math.min(100, Math.max(0, Number(t.progress || 0)));
-    return sum + ((w * p) / 100);
-  }, 0);
-  return Math.min(100, Math.round((earned / totalWeight) * 100));
+export function weightedCompletion(tasks) {
+  return calculateWeightedTaskProgress(tasks).progress;
 }
 
 function lockReason({ locked, exempt, totalWeight, taskCount, awaitingApproval }) {
@@ -262,7 +298,7 @@ export async function summariseGoals(goalIds, client = prisma) {
     where: { id: { in: ids } },
     select: {
       id: true, weightLockExempt: true, status: true,
-      tasks: { select: { id: true, weight: true, status: true, progress: true, isStandalone: true } },
+      tasks: { select: { id: true, weight: true, status: true, progress: true, isStandalone: true, isPrivate: true, managerFinalWeight: true } },
     },
   });
   const out = {};
