@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { createTask, listTasks, updateTaskStatus, updateTask, deleteTask } from '../controllers/task.controller.js';
 import { getTeamWeightage, setTaskFinalWeight, getTeamWeightageSummary } from '../controllers/taskWeightage.controller.js';
-import { rateGoalTask } from '../controllers/taskRating.controller.js';
+import { rateGoalTask, getTask } from '../controllers/taskRating.controller.js';
 import { submitTaskForReview, approveTaskReview, rejectTaskReview } from '../controllers/taskReview.controller.js';
 import {
   listMilestones, createMilestone, updateMilestone, deleteMilestone, listOverdueMilestones, listMyAssignedMilestones,
@@ -18,6 +18,7 @@ router.patch('/tasks/:id/status', requireAuth, requireTenant, updateTaskStatus);
 router.patch('/tasks/:id', requireAuth, requireTenant, updateTask);
 router.put('/tasks/:id', requireAuth, requireTenant, updateTask);
 router.patch('/tasks/:id/manager-rating', requireAuth, requireTenant, rateGoalTask);
+router.get('/tasks/:id', requireAuth, requireTenant, getTask);
 router.delete('/tasks/:id', requireAuth, requireTenant, deleteTask);
 
 // ── Per-task completion review ─────────────────────────────────────────────

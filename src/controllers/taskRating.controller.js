@@ -4,6 +4,8 @@ import { taskIdParamSchema, managerTaskRatingSchema } from '../validations/task.
 import { goalRatingGate } from '../lib/goalRating.js';
 import { SUPER_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
 import { goalService } from '../services/goal.service.js';
+import { loadTaskForUser } from '../services/taskAccess.service.js';
+import { taskTiming } from '../lib/taskTiming.js';
 
 const RATEABLE_GOAL_STATUSES = new Set([
   'PENDING_MANAGER_REVIEW',
@@ -35,14 +37,29 @@ export async function rateGoalTask(req, res, next) {
       },
     });
     if (!task) return res.status(404).json({ error: 'Task not found' });
-    if (!task.goal || task.isStandalone || task.isPrivate) {
-      return res.status(400).json({ error: 'Only tasks linked to a goal can be rated' });
+
+    // A dependency task has no goal of its own; it is rated against the goal
+    // of the task it unblocks, by that goal's owner, once that goal is done.
+    let ratingGoal = task.goal;
+    let goalAssigneeId = task.employeeId;
+    if (!ratingGoal && task.isDependencyOf && !task.isPrivate) {
+      const parent = await prisma.task.findFirst({
+        where: { id: task.isDependencyOf, tenantId: req.tenantId },
+        include: { goal: { include: { assignments: { select: { employeeId: true, status: true } } } } },
+      });
+      ratingGoal = parent?.goal || null;
+      goalAssigneeId = parent?.employeeId;
+    } else if (task.isStandalone) {
+      ratingGoal = null;
+    }
+    if (!ratingGoal || task.isPrivate) {
+      return res.status(400).json({ error: 'Only tasks linked to a goal (or dependencies of one) can be rated' });
     }
     const userRole = String(req.user.role || '').toUpperCase();
     const isElevated = ['MANAGER', 'HR', 'ADMIN', 'SUPER_ADMIN', 'CMD', 'DIRECTOR', 'LEADERSHIP'].includes(userRole);
     const isGoalOwnerOrManager = Boolean(
-      (task.goal.ownerManagerId && task.goal.ownerManagerId === req.user.id) ||
-      (task.goal.ownerId && task.goal.ownerId === req.user.id) ||
+      (ratingGoal.ownerManagerId && ratingGoal.ownerManagerId === req.user.id) ||
+      (ratingGoal.ownerId && ratingGoal.ownerId === req.user.id) ||
       isElevated
     );
     if (!isGoalOwnerOrManager) {
@@ -57,7 +74,7 @@ export async function rateGoalTask(req, res, next) {
     }
 
     const goalTasks = await prisma.task.findMany({
-      where: { goalId: task.goal.id, tenantId: req.tenantId },
+      where: { goalId: ratingGoal.id, tenantId: req.tenantId },
       select: { status: true },
     });
     const gate = goalRatingGate(goalTasks);
@@ -67,8 +84,8 @@ export async function rateGoalTask(req, res, next) {
       });
     }
 
-    const assignment = task.goal.assignments.find((row) => row.employeeId === task.employeeId);
-    const reviewStatus = String(assignment?.status || task.goal.status || '').toUpperCase();
+    const assignment = ratingGoal.assignments.find((row) => row.employeeId === goalAssigneeId);
+    const reviewStatus = String(assignment?.status || ratingGoal.status || '').toUpperCase();
     if (!RATEABLE_GOAL_STATUSES.has(reviewStatus)) {
       return res.status(409).json({
         error: 'Task ratings are available for completed tasks while the goal is active or under manager review',
@@ -105,9 +122,9 @@ export async function rateGoalTask(req, res, next) {
 
     const updated = await prisma.$transaction(async (tx) => {
       // If legacy goal had no ownerManagerId, backfill it so future checks align
-      if (!task.goal.ownerManagerId) {
+      if (!ratingGoal.ownerManagerId) {
         await tx.goal.update({
-          where: { id: task.goal.id },
+          where: { id: ratingGoal.id },
           data: { ownerManagerId: req.user.id },
         });
       }
@@ -162,15 +179,42 @@ export async function rateGoalTask(req, res, next) {
       return ratedTask;
     });
 
-    if (weightChanged) {
-      await goalService.recalculateProgress(task.goal.id, task.employeeId).catch((err) => {
+    // A dependency's weightage is outside its parent goal's progress.
+    if (weightChanged && task.goalId) {
+      await goalService.recalculateProgress(task.goalId, task.employeeId).catch((err) => {
         console.warn('[taskRating] Notice recalculating goal progress:', err?.message || err);
       });
-      emitToTenant(req.tenantId, 'task_weightage_updated', { taskId: task.id });
     }
+    if (weightChanged) emitToTenant(req.tenantId, 'task_weightage_updated', { taskId: task.id });
     emitToTenant(req.tenantId, 'task_manager_rating_updated', { taskId: task.id, task: updated });
     res.json(updated);
   } catch (err) {
+    next(err);
+  }
+}
+
+// ─── GET /tasks/:id ─────────────────────────────────────────────────────────
+/**
+ * One task with its timing, for a panel that shows a task it does not already
+ * hold — e.g. a dependency task's rating, shown on the parent task's card.
+ * Access is loadTaskForUser, which covers the parent task's owner/manager.
+ */
+export async function getTask(req, res, next) {
+  try {
+    const parsedParams = taskIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid task ID parameter' });
+    }
+    const task = await loadTaskForUser(parsedParams.data.id, req.user, req.tenantId);
+    // The assignee sees only the actual weightage of their own task.
+    const own = task.employeeId === req.user.id;
+    res.json({
+      ...task,
+      ...(own ? { managerFinalWeight: null, weightAdjustReason: null } : {}),
+      timing: taskTiming(task),
+    });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
     next(err);
   }
 }
