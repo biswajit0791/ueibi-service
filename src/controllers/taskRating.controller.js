@@ -2,6 +2,8 @@ import { prisma } from '../lib/prisma.js';
 import { emitToTenant } from '../lib/socket.js';
 import { taskIdParamSchema, managerTaskRatingSchema } from '../validations/task.schema.js';
 import { goalRatingGate } from '../lib/goalRating.js';
+import { SUPER_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
+import { goalService } from '../services/goal.service.js';
 
 const RATEABLE_GOAL_STATUSES = new Set([
   'PENDING_MANAGER_REVIEW',
@@ -73,7 +75,34 @@ export async function rateGoalTask(req, res, next) {
       });
     }
 
-    const { rating, notes } = parsedBody.data;
+    const { rating, notes, finalWeight, weightReason } = parsedBody.data;
+
+    // The final weightage travels with the rating so the manager judges both
+    // in one step. Same rules as PATCH /tasks/:id/final-weight: never above
+    // the planned weight, and HR / Finance work is weighed only by Admin+.
+    const settingWeight = finalWeight !== undefined;
+    const planned = Number(task.weight || 0);
+    if (settingWeight) {
+      if (finalWeight !== null && finalWeight > planned) {
+        return res.status(400).json({
+          error: `The final weightage cannot exceed this task's planned weight of ${planned}%.`,
+          plannedWeight: planned,
+        });
+      }
+      const target = await prisma.tenantUser.findUnique({
+        where: { id: task.employeeId },
+        select: { role: true },
+      });
+      const targetRole = String(target?.role || '').toUpperCase();
+      if ((targetRole === 'HR' || targetRole === 'FINANCE') && !hasRole(req.user.role, SUPER_ELEVATED_ROLES)) {
+        return res.status(403).json({
+          error: `Final weightage for ${targetRole} personnel can only be managed and approved by Admin or Super Admin.`,
+        });
+      }
+    }
+    // An unchanged figure is not a new adjustment — keep who made it and when.
+    const weightChanged = settingWeight && finalWeight !== (task.managerFinalWeight ?? null);
+
     const updated = await prisma.$transaction(async (tx) => {
       // If legacy goal had no ownerManagerId, backfill it so future checks align
       if (!task.goal.ownerManagerId) {
@@ -90,11 +119,32 @@ export async function rateGoalTask(req, res, next) {
           managerRatingNotes: notes || null,
           managerRatedById: req.user.id,
           managerRatedAt: new Date(),
+          ...(weightChanged ? {
+            managerFinalWeight: finalWeight,
+            weightAdjustedById: finalWeight === null ? null : req.user.id,
+            weightAdjustedAt: finalWeight === null ? null : new Date(),
+            weightAdjustReason: finalWeight === null ? null : (weightReason || null),
+          } : {}),
         },
         include: {
           managerRatedBy: { select: { id: true, name: true } },
+          weightAdjustedBy: { select: { id: true, name: true } },
         },
       });
+
+      if (weightChanged) {
+        await tx.taskAuditLog.create({
+          data: {
+            taskId: task.id,
+            performedById: req.user.id,
+            action: 'edited',
+            details: finalWeight === null
+              ? `Final weightage cleared — the planned ${planned}% stands again.`
+              : `Final weightage set to ${finalWeight}% (planned ${planned}%)${weightReason ? `. Reason: "${weightReason}"` : ''}.`,
+            previousValue: { managerFinalWeight: task.managerFinalWeight },
+          },
+        });
+      }
 
       await tx.taskAuditLog.create({
         data: {
@@ -112,6 +162,12 @@ export async function rateGoalTask(req, res, next) {
       return ratedTask;
     });
 
+    if (weightChanged) {
+      await goalService.recalculateProgress(task.goal.id, task.employeeId).catch((err) => {
+        console.warn('[taskRating] Notice recalculating goal progress:', err?.message || err);
+      });
+      emitToTenant(req.tenantId, 'task_weightage_updated', { taskId: task.id });
+    }
     emitToTenant(req.tenantId, 'task_manager_rating_updated', { taskId: task.id, task: updated });
     res.json(updated);
   } catch (err) {

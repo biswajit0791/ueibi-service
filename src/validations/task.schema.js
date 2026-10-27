@@ -209,9 +209,20 @@ export const taskCommentAttachmentQuerySchema = z.object({
   download: z.enum(['true', 'false']).optional(),
 });
 
+/**
+ * A manager's star rating, optionally with a downgraded final weightage for
+ * the same task (e.g. docked for late delivery). `finalWeight` omitted leaves
+ * the weightage untouched; `null` clears an earlier downgrade. The upper bound
+ * is the task's planned weight, checked in the controller.
+ */
 export const managerTaskRatingSchema = z.object({
   rating: z.coerce.number().int().min(1).max(5),
   notes: z.string().trim().max(1000).nullable().optional(),
+  finalWeight: z.preprocess(
+    (v) => (v === undefined || v === null || v === '' ? (v === '' ? null : v) : Math.round(Number(v))),
+    z.number().int().min(0).max(100).nullable().optional(),
+  ),
+  weightReason: z.string().trim().max(500).nullable().optional(),
 }).strict();
 
 /**

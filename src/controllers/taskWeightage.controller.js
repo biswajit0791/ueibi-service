@@ -14,7 +14,7 @@ import { loadTaskForUser } from '../services/taskAccess.service.js';
 import { visibleTaskWhere } from '../services/taskVisibility.service.js';
 import {
   weightageFor, weightageRow, completedWeightOf, summariseByEmployee, WEIGHTAGE_TASK_SELECT,
-  financialYearFilter, dateRangeFilter,
+  financialYearFilter, dateRangeFilter, hideManagerWeightage,
 } from '../services/taskWeightage.service.js';
 import { logTaskAudit } from './taskActivity.controller.js';
 import { emitToTenant } from '../lib/socket.js';
@@ -67,7 +67,13 @@ export async function getTeamWeightage(req, res, next) {
     // will refuse.
     const isElevated = hasRole(req.user.role, ELEVATED_ROLES);
     const isManager = String(req.user.role || '').toUpperCase() === 'MANAGER';
-    res.json({ ...ledger, canAdjust: (isElevated || isManager) && employeeId !== req.user.id });
+    const isSelf = employeeId === req.user.id;
+    // Your own ledger shows only the actual weightage — the manager's
+    // downgrade and the final figure are not the employee's to see.
+    const visible = isSelf
+      ? { ...ledger, rows: ledger.rows.map(hideManagerWeightage), totals: hideManagerWeightage(ledger.totals) }
+      : ledger;
+    res.json({ ...visible, canAdjust: (isElevated || isManager) && !isSelf });
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });
     next(err);
@@ -194,7 +200,10 @@ export async function getTeamWeightageSummary(req, res, next) {
       select: WEIGHTAGE_TASK_SELECT,
     });
 
-    res.json({ items: summariseByEmployee(tasks) });
+    // The caller's own entry keeps only the actual weightage.
+    const items = summariseByEmployee(tasks)
+      .map((item) => (item.employeeId === req.user.id ? hideManagerWeightage(item) : item));
+    res.json({ items });
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });
     next(err);

@@ -943,11 +943,13 @@ export async function updateTaskStatus(req, res, next) {
       }
     }
 
+    const reviewFields = await reviewFieldsFor(existing, nextState, existing.goalId, req.user.id);
+
     let updated;
     try {
       updated = await prisma.task.update({
         where: { id },
-        data: { 
+        data: {
           status,
           ...(progressUpdate !== undefined && !isNaN(progressUpdate) && { progress: progressUpdate }),
           ...(req.body.onHoldReason !== undefined && { onHoldReason: req.body.onHoldReason }),

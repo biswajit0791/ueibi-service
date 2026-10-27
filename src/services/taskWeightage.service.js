@@ -220,10 +220,28 @@ export async function weightageFor({ tenantId, employeeId, fy, from, to, page, l
   };
 }
 
+/** Mean to one decimal, or null when there is nothing to average. */
+const meanOf = (total, count) => (count > 0 ? Math.round((total / count) * 10) / 10 : null);
+
 /**
  * Per-employee totals for the team directory, one entry per task owner.
  * `managerRating` is the mean of the goal owner's 0-5 ratings across that
  * person's rated tasks (one decimal), or null when nothing is rated yet.
+ *
+ * The three weightage averages are taken over COMPLETED goal tasks only — an
+ * unfinished task has no final weightage yet, and a standalone task's weight is
+ * not a share of anything:
+ *
+ *   avgActualWeight   mean of the planned `weight`. Shown for reference
+ *                     only — nothing is calculated from it.
+ *   avgFinalWeight    mean of each task's manager weightage: the manager's
+ *                     figure when set, otherwise the planned weight (the
+ *                     manager let it stand). Tasks of 30, 20 and 10 with the
+ *                     20 downgraded to 15 average (30+15+10)/3 = 18.3.
+ *   managerCount      how many of those tasks the manager downgraded.
+ *
+ * The manager and final figures are a manager's judgement: see
+ * hideManagerWeightage() for what the employee themself may see.
  */
 export function summariseByEmployee(tasks, now = new Date()) {
   const byEmployee = {};
@@ -235,6 +253,7 @@ export function summariseByEmployee(tasks, now = new Date()) {
       taskCount: 0, plannedWeight: 0, completedWeight: 0, finalWeight: 0,
       delayedCount: 0, adjustedCount: 0, adjustmentDelta: 0,
       ratedCount: 0, ratingTotal: 0,
+      completedCount: 0, actualTotal: 0, managerCount: 0, finalTotal: 0,
     });
     bucket.taskCount += 1;
     bucket.plannedWeight += row.plannedWeight;
@@ -246,11 +265,35 @@ export function summariseByEmployee(tasks, now = new Date()) {
       bucket.ratedCount += 1;
       bucket.ratingTotal += Number(row.managerRating);
     }
+    if (row.goalId && !task.isStandalone && row.timing?.isComplete) {
+      bucket.completedCount += 1;
+      bucket.actualTotal += row.plannedWeight;
+      bucket.finalTotal += row.isAdjusted ? row.managerFinalWeight : row.plannedWeight;
+      if (row.isAdjusted) bucket.managerCount += 1;
+    }
   }
-  return Object.values(byEmployee).map(({ ratingTotal, ...b }) => ({
+  return Object.values(byEmployee).map(({ ratingTotal, actualTotal, finalTotal, ...b }) => ({
     ...b,
-    managerRating: b.ratedCount > 0 ? Math.round((ratingTotal / b.ratedCount) * 10) / 10 : null,
+    managerRating: meanOf(ratingTotal, b.ratedCount),
+    avgActualWeight: meanOf(actualTotal, b.completedCount),
+    avgFinalWeight: meanOf(finalTotal, b.completedCount),
   }));
+}
+
+/**
+ * An employee sees only the actual (planned) weightage of their own work —
+ * never the manager's downgrade or the final figure built from it. Applied to
+ * a ledger row, ledger totals, or a summary entry; fields absent are skipped.
+ */
+const MANAGER_WEIGHTAGE_FIELDS = [
+  'managerFinalWeight', 'finalWeight', 'isAdjusted', 'adjustmentDelta',
+  'adjustedBy', 'adjustedAt', 'adjustReason', 'adjustedCount',
+  'avgFinalWeight', 'managerCount',
+];
+export function hideManagerWeightage(obj) {
+  const out = { ...obj };
+  for (const key of MANAGER_WEIGHTAGE_FIELDS) if (key in out) out[key] = null;
+  return out;
 }
 
 export { TASK_SELECT as WEIGHTAGE_TASK_SELECT };
