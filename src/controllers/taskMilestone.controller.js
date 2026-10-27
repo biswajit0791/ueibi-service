@@ -947,14 +947,49 @@ export async function listMyAssignedMilestones(req, res, next) {
         ...MILESTONE_INCLUDE,
         task: {
           select: {
-            id: true, title: true, status: true, priority: true, dueDate: true, goalId: true,
+            id: true, title: true, status: true, priority: true, dueDate: true, goalId: true, isStandalone: true,
             employee: { select: { id: true, name: true, designation: true } },
+            goal: {
+              select: {
+                id: true, title: true, status: true,
+                ownerManager: { select: { id: true, name: true } },
+                assignments: { select: { employeeId: true } },
+              },
+            },
           },
         },
       },
       orderBy: [{ dueDate: 'asc' }, { order: 'asc' }],
     });
-    const items = rows.filter((m) => m.task);
+
+    // Whether work may be recorded yet, judged by the same gate updateMilestone
+    // applies, so the panel never offers an action the API will refuse.
+    const { milestoneRequireApproval } = await getCompanySettings(req.tenantId);
+    const weightByGoal = new Map();
+    const items = [];
+    for (const m of rows) {
+      if (!m.task) continue;
+      const goal = m.task.goalId && !m.task.isStandalone ? m.task.goal : null;
+      if (goal && !weightByGoal.has(goal.id)) weightByGoal.set(goal.id, await goalWeightSummary(goal.id));
+      const blocked = milestoneBlock({
+        action: 'work',
+        goal,
+        weightSummary: goal ? weightByGoal.get(goal.id) : null,
+        milestone: m,
+        requireApproval: milestoneRequireApproval,
+      });
+      const { assignments, ...goalInfo } = m.task.goal || {};
+      items.push({
+        ...m,
+        task: { ...m.task, goal: m.task.goal ? goalInfo : null },
+        // External = assigned to someone who is neither the task owner nor a
+        // member of its goal, so the goal never shows up on their Goals page.
+        isExternal: m.task.employeeId !== req.user.id
+          && !(assignments || []).some((a) => a.employeeId === req.user.id),
+        canWork: !blocked,
+        blockedReason: blocked?.message || null,
+      });
+    }
     res.json({ items, total: items.length });
   } catch (err) {
     next(err);
