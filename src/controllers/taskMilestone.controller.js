@@ -81,7 +81,7 @@ export async function assertWatcherEmailsAllowed(tenantId, emails) {
   if (disallowed.length > 0) {
     throw {
       status: 400,
-      message: `These watcher emails aren't on an allowed domain for this company: ${disallowed.join(', ')}. `
+      message: `These escalation authority email addresses aren't on an allowed domain for this company: ${disallowed.join(', ')}. `
         + 'An admin can add more domains under Company Settings.',
     };
   }

@@ -4191,7 +4191,7 @@ export const swaggerExtensions = {
           properties: {
             title: { type: 'string', maxLength: 300 },
             dueDate: { type: 'string', format: 'date-time' },
-            watcherEmails: { type: 'array', maxItems: 10, items: { type: 'string', format: 'email' } },
+            watcherEmails: { type: 'array', maxItems: 10, description: 'Escalation authority email addresses for delay alerts.', items: { type: 'string', format: 'email' } },
           },
         } } } },
         responses: {
@@ -4218,7 +4218,7 @@ export const swaggerExtensions = {
           properties: {
             title: { type: 'string', maxLength: 300 },
             dueDate: { type: 'string', format: 'date-time' },
-            watcherEmails: { type: 'array', maxItems: 10, items: { type: 'string', format: 'email' } },
+            watcherEmails: { type: 'array', maxItems: 10, description: 'Escalation authority email addresses for delay alerts.', items: { type: 'string', format: 'email' } },
             proposedCompletionDate: { type: 'string', format: 'date-time', nullable: true, description: 'Employee proposes a new date.' },
             approve: { type: 'boolean', description: 'Manager approves the proposed date (or the milestone itself, if none was proposed).' },
             isDone: { type: 'boolean' },
