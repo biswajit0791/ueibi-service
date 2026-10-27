@@ -5,7 +5,7 @@ import { rateGoalTask, getTask } from '../controllers/taskRating.controller.js';
 import { submitTaskForReview, approveTaskReview, rejectTaskReview } from '../controllers/taskReview.controller.js';
 import {
   listMilestones, createMilestone, updateMilestone, deleteMilestone, listOverdueMilestones, listMyAssignedMilestones,
-  getMilestoneLiveStatusSvg,
+  getMilestoneLiveStatusSvg, listMilestoneContributions,
 } from '../controllers/taskMilestone.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
@@ -37,6 +37,7 @@ router.post('/tasks/:id/review/reject', requireAuth, requireTenant, rejectTaskRe
 // swallowed by the :id parameter.
 router.get('/team/weightage-summary', requireAuth, requireTenant, getTeamWeightageSummary);
 router.get('/team/:id/weightage', requireAuth, requireTenant, getTeamWeightage);
+router.get('/team/:id/milestone-contributions', requireAuth, requireTenant, listMilestoneContributions);
 router.patch('/tasks/:id/final-weight', requireAuth, requireTenant, setTaskFinalWeight);
 
 // ── Critical-task Milestones ─────────────────────────────────────────────────
