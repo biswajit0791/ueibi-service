@@ -449,13 +449,13 @@ export async function resolveTokensForEmployee({
   if (tenantId) {
     tenant = await prisma.tenant.findUnique({
       where: { id: tenantId },
+      // Tenant holds only the company name; contact emails live on its
+      // registration. Logo, address and website are not stored per tenant —
+      // a template supplies its own logo — so those tokens resolve empty.
       select: {
         id: true,
         companyName: true,
-        logoUrl: true,
-        address: true,
-        email: true,
-        website: true,
+        registration: { select: { email: true, hrEmail: true } },
       },
     });
   }
@@ -537,10 +537,10 @@ export async function resolveTokensForEmployee({
 
     // Company
     companyName: tenant?.companyName || 'UEIBI Organization',
-    companyLogo: tenant?.logoUrl || '',
-    companyAddress: tenant?.address || '',
-    companyEmail: tenant?.email || '',
-    companyWebsite: tenant?.website || '',
+    companyLogo: '',
+    companyAddress: '',
+    companyEmail: tenant?.registration?.hrEmail || tenant?.registration?.email || '',
+    companyWebsite: '',
 
     // Exit
     resignationDate: exitDetails?.resignationDate
