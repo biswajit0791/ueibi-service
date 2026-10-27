@@ -33,7 +33,8 @@ import {
 import { goalWeightSummary } from '../services/goalWeight.service.js';
 import { milestoneBlock } from '../lib/milestoneGate.js';
 import { goalService } from '../services/goal.service.js';
-import { timingUpdates } from '../lib/taskTiming.js';
+import { timingUpdates, daysBetween } from '../lib/taskTiming.js';
+import { getTenantFinancialYear } from '../lib/financialYear.js';
 import {
   REVIEW_STATUS, reviewFieldsForTransition, completeGoalIfAllApproved,
 } from '../services/taskReview.service.js';
@@ -1183,6 +1184,79 @@ export async function getMilestoneLiveStatusSvg(req, res, next) {
 
     return res.send(svg);
   } catch (err) {
+    next(err);
+  }
+}
+
+// ─── GET /api/team/:id/milestone-contributions?fy=FY 2026-27 ─────────────────
+/**
+ * Milestones a person COMPLETED, on any goal — including goals they are not a
+ * member of, which otherwise leave no trace on their profile once done.
+ *
+ * Who may look is the task board's rule (visibleTaskWhere for that employee),
+ * the same check the weightage ledger uses. `fy` narrows to milestones
+ * completed inside that financial year, using the company's FY start.
+ */
+export async function listMilestoneContributions(req, res, next) {
+  try {
+    const employeeId = String(req.params.id || '');
+    if (!employeeId) return res.status(400).json({ error: 'Invalid employee ID parameter' });
+
+    const { error } = await visibleTaskWhere({ user: req.user, tenantId: req.tenantId, employeeId });
+    if (error) return res.status(error.status).json({ error: error.message });
+
+    let completedAt;
+    const fyYear = String(req.query.fy || '').match(/(\d{4})/);
+    if (fyYear) {
+      const settings = await getCompanySettings(req.tenantId);
+      const startMonth = Math.min(12, Math.max(1, Number(settings?.financialYearStartMonth) || 4));
+      const startDay = Math.min(31, Math.max(1, Number(settings?.financialYearStartDay) || 1));
+      const window = getTenantFinancialYear(settings, new Date(Date.UTC(Number(fyYear[1]), startMonth - 1, startDay)));
+      completedAt = { gte: window.startDate, lte: window.endDate };
+    }
+
+    const rows = await prisma.taskMilestone.findMany({
+      where: { tenantId: req.tenantId, assigneeId: employeeId, isDone: true, ...(completedAt ? { completedAt } : {}) },
+      select: {
+        id: true, title: true, dueDate: true, completedAt: true, status: true,
+        task: {
+          select: {
+            id: true, title: true, employeeId: true,
+            employee: { select: { id: true, name: true } },
+            goal: { select: { id: true, title: true, assignments: { select: { employeeId: true } } } },
+          },
+        },
+      },
+      orderBy: { completedAt: 'desc' },
+    });
+
+    const items = rows.filter((m) => m.task).map((m) => {
+      const lateDays = m.completedAt && m.dueDate ? daysBetween(m.dueDate, m.completedAt) : null;
+      return {
+        id: m.id,
+        title: m.title,
+        dueDate: m.dueDate,
+        completedAt: m.completedAt,
+        lateDays: lateDays !== null && lateDays > 0 ? lateDays : 0,
+        onTime: lateDays === null ? null : lateDays <= 0,
+        taskId: m.task.id,
+        taskTitle: m.task.title,
+        taskOwner: m.task.employee?.name || null,
+        goalId: m.task.goal?.id || null,
+        goalTitle: m.task.goal?.title || null,
+        isExternal: m.task.employeeId !== employeeId
+          && !(m.task.goal?.assignments || []).some((a) => a.employeeId === employeeId),
+      };
+    });
+
+    res.json({
+      items,
+      total: items.length,
+      externalCount: items.filter((i) => i.isExternal).length,
+      lateCount: items.filter((i) => i.onTime === false).length,
+    });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
     next(err);
   }
 }
