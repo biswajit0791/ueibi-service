@@ -219,3 +219,100 @@ export function subscriptionStateOf({ startsAt, endsAt, cancelledAt }, now = new
   if (endsAt && new Date(endsAt) < now) return 'EXPIRED';
   return 'ACTIVE';
 }
+
+/**
+ * Computes the annual license billing cycle.
+ * For example: a company purchasing 30 licenses in January 2025 renews in January 2026 (12-month annual term).
+ * If the term has lapsed, projects the current annual cycle relative to the anniversary date.
+ */
+export function calculateAnnualCycle(startDate = new Date(), referenceDate = new Date()) {
+  const start = new Date(startDate);
+  const validStart = Number.isNaN(start.getTime()) ? new Date() : start;
+  let cycleStart = new Date(validStart);
+  let cycleEnd = addMonths(cycleStart, 12);
+
+  while (cycleEnd < referenceDate) {
+    cycleStart = new Date(cycleEnd);
+    cycleEnd = addMonths(cycleStart, 12);
+  }
+
+  const daysRemaining = Math.ceil((cycleEnd.getTime() - referenceDate.getTime()) / 86400000);
+
+  return {
+    startsAt: cycleStart,
+    endsAt: cycleEnd,
+    interval: 'ANNUAL',
+    termMonths: 12,
+    daysRemaining,
+  };
+}
+
+/**
+ * Calculates the number of months remaining in the current annual billing cycle.
+ * Example: A company whose annual renewal is in January 2026 purchasing additional
+ * licenses in August 2025 has exactly 5 months remaining (Aug, Sep, Oct, Nov, Dec).
+ *
+ * @param {Date | string} renewalDate - The annual renewal date (e.g. planEndsAt)
+ * @param {Date | string} referenceDate - The purchase / request date (defaults to now)
+ * @returns {number} Integer between 1 and 12
+ */
+export function calculateRemainingMonths(renewalDate, referenceDate = new Date()) {
+  const ref = new Date(referenceDate);
+  const renewal = new Date(renewalDate);
+
+  if (Number.isNaN(renewal.getTime()) || Number.isNaN(ref.getTime())) {
+    return 12;
+  }
+
+  // If renewal date is past or equal, the term has lapsed or renews immediately
+  if (renewal <= ref) {
+    return 12;
+  }
+
+  let months = (renewal.getFullYear() - ref.getFullYear()) * 12 + (renewal.getMonth() - ref.getMonth());
+
+  // If renewal day is later in the month than ref day, ensure partial month counts as remaining
+  if (renewal.getDate() > ref.getDate() && months === 0) {
+    months = 1;
+  }
+
+  return Math.min(12, Math.max(1, months));
+}
+
+/**
+ * Calculates pro-rata pricing for additional licenses purchased during the billing year.
+ * Licenses purchased mid-cycle are charged ONLY for the remaining months in the billing year.
+ * Example: licenses purchased in August with 5 months remaining charged for only those 5 months.
+ *
+ * @param {Object} options
+ * @param {number} [options.annualUnitPrice=499.00] - Base full-year unit price per seat
+ * @param {number} [options.remainingMonths=12] - Remaining months until next annual renewal (1-12)
+ * @param {number} [options.seats=1] - Number of license seats being purchased
+ * @param {number} [options.taxRate=0.18] - Corporate GST rate (18%)
+ */
+export function calculateProRataLicensePrice({
+  annualUnitPrice = 499.00,
+  remainingMonths = 12,
+  seats = 1,
+  taxRate = 0.18,
+} = {}) {
+  const months = Math.min(12, Math.max(1, Number(remainingMonths) || 12));
+  const proRataUnitPrice = round2((annualUnitPrice * months) / 12);
+  const subtotal = round2(seats * proRataUnitPrice);
+  const taxAmount = round2(subtotal * taxRate);
+  const totalAmount = round2(subtotal + taxAmount);
+  const fullYearTotal = round2(seats * annualUnitPrice * (1 + taxRate));
+
+  return {
+    annualUnitPrice: round2(annualUnitPrice),
+    remainingMonths: months,
+    totalTermMonths: 12,
+    proRataUnitPrice,
+    seats,
+    subtotal,
+    taxRate,
+    taxAmount,
+    totalAmount,
+    savingsVsFullYear: round2(fullYearTotal - totalAmount),
+  };
+}

@@ -868,17 +868,56 @@ export async function listTasks(req, res, next) {
     });
     if (error) return res.status(error.status).json({ error: error.message });
 
-    const items = await prisma.task.findMany({
-      where,
-      include: {
-        milestones: {
-          select: { id: true, order: true, title: true, status: true, isDone: true, progress: true },
-          orderBy: { order: 'asc' },
+    const isPaginated = parsedQuery.data.page != null || parsedQuery.data.limit != null;
+
+    if (isPaginated) {
+      const page = Math.max(1, parsedQuery.data.page || 1);
+      const limit = Math.min(500, Math.max(1, parsedQuery.data.limit || 50));
+      const skip = (page - 1) * limit;
+
+      const [total, items] = await Promise.all([
+        prisma.task.count({ where }),
+        prisma.task.findMany({
+          where,
+          include: {
+            milestones: {
+              select: { id: true, order: true, title: true, status: true, isDone: true, progress: true },
+              orderBy: { order: 'asc' },
+            },
+          },
+          orderBy: { createdAt: 'desc' },
+          skip,
+          take: limit,
+        }),
+      ]);
+
+      return res.json({
+        items: items.map(withTiming),
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      });
+    }
+
+    const [total, items] = await Promise.all([
+      prisma.task.count({ where }),
+      prisma.task.findMany({
+        where,
+        include: {
+          milestones: {
+            select: { id: true, order: true, title: true, status: true, isDone: true, progress: true },
+            orderBy: { order: 'asc' },
+          },
         },
-      },
-      orderBy: { createdAt: 'desc' },
+        orderBy: { createdAt: 'desc' },
+      }),
+    ]);
+
+    res.json({
+      items: items.map(withTiming),
+      total,
     });
-    res.json({ items: items.map(withTiming) });
   } catch (err) {
     next(err);
   }

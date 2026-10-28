@@ -27,19 +27,31 @@ export const CLEARANCE_LEADERSHIP_ROLES = ['SUPER_ADMIN', 'ADMIN', 'HR'];
 // Department names (case-insensitive) treated as the IT department.
 const IT_DEPARTMENT_NAMES = ['it', 'information technology'];
 
+// Department names (case-insensitive) treated as the Product department.
+const PRODUCT_DEPARTMENT_NAMES = ['product', 'product department', 'product engineering', 'product management'];
+
 // The four clearances that existed before rows did; each still mirrors into
 // the ExitDetails boolean columns of the same prefix.
 export const LEGACY_KEYS = ['it', 'hr', 'finance', 'manager'];
 
-const BASE_CLEARANCES = [
-  { key: 'it', label: 'IT Department', sortOrder: 0 },
-  { key: 'hr', label: 'Human Resources', sortOrder: 1 },
-  { key: 'finance', label: 'Finance & Accounts', sortOrder: 2 },
-  { key: 'manager', label: 'Reporting Manager', sortOrder: 3 },
+/**
+ * Enterprise Exit Clearance Sequence:
+ * 1. Reporting Manager -> 2. IT Department -> 3. HR -> 4. Finance -> 5. Product Department
+ */
+export const CLEARANCE_SEQUENCE = [
+  { key: 'manager', label: 'Reporting Manager', sortOrder: 1, stepNumber: 1 },
+  { key: 'it', label: 'IT Department', sortOrder: 2, stepNumber: 2 },
+  { key: 'hr', label: 'HR', sortOrder: 3, stepNumber: 3 },
+  { key: 'finance', label: 'Finance', sortOrder: 4, stepNumber: 4 },
+  { key: 'product', label: 'Product Department', sortOrder: 5, stepNumber: 5 },
 ];
+
+export const BASE_CLEARANCES = CLEARANCE_SEQUENCE;
+export const SEQUENCE_ORDER = ['manager', 'it', 'hr', 'finance', 'product'];
 
 const lower = (s) => String(s || '').trim().toLowerCase();
 const isItDepartment = (name) => IT_DEPARTMENT_NAMES.includes(lower(name));
+const isProductDepartment = (name) => PRODUCT_DEPARTMENT_NAMES.includes(lower(name));
 
 function parseRemarks(raw) {
   try {
@@ -51,8 +63,8 @@ function parseRemarks(raw) {
 }
 
 /**
- * Rows for a newly initiated exit. Call inside the transaction that creates
- * the ExitDetails row.
+ * Rows for a newly initiated exit following the 5-step clearance sequence:
+ * 1. Reporting Manager -> 2. IT Department -> 3. HR -> 4. Finance -> 5. Product Department
  *
  * @param {import('@prisma/client').Prisma.TransactionClient} tx
  * @param {{ id: string, tenantId: string }} exit
@@ -64,19 +76,18 @@ export async function createInitialClearances(tx, exit, employee) {
     select: { name: true },
   });
   const itDept = departments.find((d) => isItDepartment(d.name));
-  const ownDept = employee.department
-    ? departments.find((d) => lower(d.name) === lower(employee.department))
-    : null;
+  const productDept = departments.find((d) => isProductDepartment(d.name));
 
   const rows = BASE_CLEARANCES.map((c) => ({
-    ...c,
-    departmentName: c.key === 'it' ? (itDept?.name || 'IT') : null,
+    key: c.key,
+    label: c.label,
+    sortOrder: c.sortOrder,
+    departmentName: c.key === 'it' 
+      ? (itDept?.name || 'IT') 
+      : c.key === 'product'
+      ? (productDept?.name || 'Product')
+      : null,
   }));
-  // The IT head already signs off for IT staff; a second item would make the
-  // same person approve twice.
-  if (ownDept && !isItDepartment(ownDept.name)) {
-    rows.push({ key: 'dept_head', label: `${ownDept.name} Department Head`, departmentName: ownDept.name, sortOrder: 4 });
-  }
 
   await tx.exitClearance.createMany({
     data: rows.map((r) => ({ ...r, tenantId: exit.tenantId, exitId: exit.id })),
@@ -85,43 +96,70 @@ export async function createInitialClearances(tx, exit, employee) {
 }
 
 /**
- * Make sure every exit has clearance rows, building them for exits created
- * before the rows existed. Returns the exits with `clearances` populated.
- * Safe under concurrency: the (exitId, key) unique index absorbs a race.
+ * Make sure every exit has clearance rows, backfilling rows for exits created
+ * before the rows or sequence existed. Ensures the 5-step sequence is established.
  *
  * @param {Array<object>} exits - ExitDetails rows, with or without `clearances`
  */
 export async function ensureClearanceRows(exits) {
-  const missing = exits.filter((e) => !e.clearances || e.clearances.length === 0);
-  if (missing.length === 0) return exits;
+  if (!exits || exits.length === 0) return exits;
 
-  for (const exit of missing) {
-    const cd = parseRemarks(exit.feedbackRemarks).clearances || {};
-    const data = BASE_CLEARANCES.map((c) => {
-      const cleared = !!exit[`${c.key}Cleared`];
-      return {
-        ...c,
-        tenantId: exit.tenantId,
-        exitId: exit.id,
-        departmentName: c.key === 'it' ? 'IT' : null,
-        status: cleared ? 'CLEARED' : 'PENDING',
-        remarks: cd[c.key]?.remarks || null,
-        fileUrl: cd[c.key]?.fileUrl || null,
-        fileName: cd[c.key]?.fileName || null,
-        actedByName: cleared ? (exit[`${c.key}ClearedBy`] || null) : null,
-        actedAt: cleared ? (exit[`${c.key}ClearedAt`] || null) : null,
-      };
-    });
-    await prisma.exitClearance.createMany({ data, skipDuplicates: true });
+  for (const exit of exits) {
+    const existing = exit.clearances || [];
+    const existingKeys = new Set(existing.map((c) => c.key));
+
+    const missingBase = BASE_CLEARANCES.filter((c) => !existingKeys.has(c.key));
+    if (missingBase.length > 0) {
+      const cd = parseRemarks(exit.feedbackRemarks).clearances || {};
+      const newRows = missingBase.map((c) => {
+        const cleared = !!exit[`${c.key}Cleared`];
+        return {
+          key: c.key,
+          label: c.label,
+          sortOrder: c.sortOrder,
+          tenantId: exit.tenantId,
+          exitId: exit.id,
+          departmentName: c.key === 'it' ? 'IT' : c.key === 'product' ? 'Product' : null,
+          status: cleared ? 'CLEARED' : 'PENDING',
+          remarks: cd[c.key]?.remarks || null,
+          fileUrl: cd[c.key]?.fileUrl || null,
+          fileName: cd[c.key]?.fileName || null,
+          actedByName: cleared ? (exit[`${c.key}ClearedBy`] || null) : null,
+          actedAt: cleared ? (exit[`${c.key}ClearedAt`] || null) : null,
+        };
+      });
+      await prisma.exitClearance.createMany({ data: newRows, skipDuplicates: true });
+    }
+
+    // Synchronize sortOrder and label to adhere strictly to the sequence:
+    // 1. Manager -> 2. IT -> 3. HR -> 4. Finance -> 5. Product
+    for (const base of BASE_CLEARANCES) {
+      const match = existing.find((c) => c.key === base.key);
+      if (match && (match.sortOrder !== base.sortOrder || match.label !== base.label)) {
+        await prisma.exitClearance.updateMany({
+          where: { exitId: exit.id, key: base.key },
+          data: { sortOrder: base.sortOrder, label: base.label },
+        });
+      }
+    }
   }
 
+  const exitIds = exits.map((e) => e.id);
   const rows = await prisma.exitClearance.findMany({
-    where: { exitId: { in: missing.map((e) => e.id) } },
+    where: { exitId: { in: exitIds } },
     orderBy: { sortOrder: 'asc' },
   });
-  return exits.map((e) =>
-    missing.includes(e) ? { ...e, clearances: rows.filter((r) => r.exitId === e.id) } : e
-  );
+
+  return exits.map((e) => {
+    const exitRows = rows.filter((r) => r.exitId === e.id);
+    exitRows.sort((a, b) => {
+      const idxA = SEQUENCE_ORDER.indexOf(a.key);
+      const idxB = SEQUENCE_ORDER.indexOf(b.key);
+      if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+      return a.sortOrder - b.sortOrder;
+    });
+    return { ...e, clearances: exitRows };
+  });
 }
 
 /**
@@ -152,17 +190,12 @@ export async function loadApproverContext(tenantId, exits = []) {
 }
 
 /**
- * Designated approvers for one clearance. `unassigned` explains why nobody is
- * designated (HR / Admin can then still act on the employee's behalf).
+ * Designated approvers for one clearance.
  */
 export function resolveApprovers(clearance, exitUser, ctx) {
   const people = (ids) => ids.map((id) => ctx.personById.get(id)).filter(Boolean);
 
   switch (clearance.key) {
-    case 'hr':
-      return { ids: [], names: ['HR team'], unassigned: null };
-    case 'finance':
-      return { ids: [], names: ['Finance team'], unassigned: null };
     case 'manager': {
       const found = people([exitUser?.managerId].filter(Boolean));
       return {
@@ -171,17 +204,46 @@ export function resolveApprovers(clearance, exitUser, ctx) {
         unassigned: found.length ? null : 'No reporting manager assigned',
       };
     }
-    case 'it':
-    case 'dept_head': {
-      const dept = clearance.key === 'it'
-        ? [...ctx.deptByName.values()].find((d) => isItDepartment(d.name))
-        : ctx.deptByName.get(lower(clearance.departmentName));
+    case 'it': {
+      const dept = [...ctx.deptByName.values()].find((d) => isItDepartment(d.name));
       if (!dept) {
         return {
           ids: [], names: [],
-          unassigned: clearance.key === 'it'
-            ? 'No IT department set up in Master Data'
-            : `${clearance.departmentName || 'Department'} not found in Master Data`,
+          unassigned: 'No IT department set up in Master Data',
+        };
+      }
+      const found = people([dept.headId, dept.alternateHeadId].filter(Boolean));
+      return {
+        ids: found.map((p) => p.id),
+        names: found.map((p) => p.name),
+        unassigned: found.length ? null : `No head assigned for ${dept.name}`,
+      };
+    }
+    case 'hr':
+      return { ids: [], names: ['HR team'], unassigned: null };
+    case 'finance':
+      return { ids: [], names: ['Finance team'], unassigned: null };
+    case 'product': {
+      const dept = [...ctx.deptByName.values()].find((d) => isProductDepartment(d.name));
+      if (!dept) {
+        return {
+          ids: [], names: [],
+          unassigned: 'No Product department set up in Master Data',
+        };
+      }
+      const found = people([dept.headId, dept.alternateHeadId].filter(Boolean));
+      return {
+        ids: found.map((p) => p.id),
+        names: found.map((p) => p.name),
+        unassigned: found.length ? null : `No head assigned for ${dept.name}`,
+      };
+    }
+    case 'dept_head': {
+      const dept = ctx.deptByName.get(lower(clearance.departmentName));
+      if (!dept) {
+        return {
+          ids: [], names: [],
+          unassigned: `${clearance.departmentName || 'Department'} not found in Master Data`,
         };
       }
       const found = people([dept.headId, dept.alternateHeadId].filter(Boolean));
@@ -199,7 +261,6 @@ export function resolveApprovers(clearance, exitUser, ctx) {
 /**
  * May `user` clear or revoke this clearance, and would it be on someone
  * else's behalf (which requires a reason)?
- * @returns {{ allowed: boolean, onBehalf: boolean }}
  */
 export function permissionFor(user, clearance, approvers) {
   const role = String(user?.role || '').toUpperCase();
@@ -207,13 +268,16 @@ export function permissionFor(user, clearance, approvers) {
   const isDesignated = approvers.ids.includes(user?.id);
 
   switch (clearance.key) {
+    case 'manager':
+      return { allowed: isDesignated || isLeadership, onBehalf: false };
+    case 'it':
+      if (isDesignated) return { allowed: true, onBehalf: false };
+      return { allowed: isLeadership, onBehalf: isLeadership };
     case 'hr':
       return { allowed: isLeadership, onBehalf: false };
     case 'finance':
       return { allowed: isLeadership || role === 'FINANCE', onBehalf: false };
-    case 'manager':
-      return { allowed: isDesignated || isLeadership, onBehalf: false };
-    case 'it':
+    case 'product':
     case 'dept_head':
       if (isDesignated) return { allowed: true, onBehalf: false };
       return { allowed: isLeadership, onBehalf: isLeadership };
@@ -234,8 +298,7 @@ export function isAssignedTo(user, clearance, approvers) {
 }
 
 /**
- * The clearance as the API returns it. Carries both naming styles the
- * existing clients read (`by`/`at` and `clearedBy`/`clearedAt`).
+ * The clearance as the API returns it, enriched with sequence step order and readiness.
  */
 export function presentClearance(row, exit, user, ctx) {
   const approvers = resolveApprovers(row, exit.user, ctx);
@@ -243,12 +306,33 @@ export function presentClearance(row, exit, user, ctx) {
     ? { allowed: false, onBehalf: false }
     : permissionFor(user, row, approvers);
   const cleared = row.status === 'CLEARED';
+
+  // Sequence verification: 1. Manager -> 2. IT -> 3. HR -> 4. Finance -> 5. Product
+  const targetSeqIdx = SEQUENCE_ORDER.indexOf(row.key);
+  let isSequenceBlocked = false;
+  let waitingOnPredecessor = null;
+
+  if (targetSeqIdx > 0 && !cleared) {
+    const predKeys = SEQUENCE_ORDER.slice(0, targetSeqIdx);
+    const pendingPredecessor = (exit.clearances || [])
+      .filter((c) => predKeys.includes(c.key) && c.status !== 'CLEARED')
+      .sort((a, b) => SEQUENCE_ORDER.indexOf(a.key) - SEQUENCE_ORDER.indexOf(b.key))[0];
+
+    if (pendingPredecessor) {
+      isSequenceBlocked = true;
+      waitingOnPredecessor = pendingPredecessor.label;
+    }
+  }
+
+  const stepNumber = targetSeqIdx >= 0 ? targetSeqIdx + 1 : row.sortOrder;
+
   return {
     id: row.id,
     key: row.key,
     dept: row.label,
     label: row.label,
     departmentName: row.departmentName,
+    stepNumber,
     cleared,
     by: cleared ? row.actedByName : null,
     at: cleared ? row.actedAt : null,
@@ -261,7 +345,9 @@ export function presentClearance(row, exit, user, ctx) {
     onBehalfReason: cleared && row.onBehalf ? row.onBehalfReason : null,
     approverNames: approvers.names,
     unassigned: approvers.unassigned,
-    canAct: perm.allowed,
+    isSequenceBlocked,
+    waitingOnPredecessor,
+    canAct: perm.allowed && !isSequenceBlocked,
     requiresReason: perm.allowed && perm.onBehalf,
     assignedToMe: exit.exitStatus !== 'COMPLETED' && isAssignedTo(user, row, approvers),
   };

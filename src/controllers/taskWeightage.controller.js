@@ -21,6 +21,7 @@ import { emitToTenant } from '../lib/socket.js';
 import { ELEVATED_ROLES, SUPER_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
 import { finalWeightSchema, teamWeightageQuerySchema, taskIdParamSchema } from '../validations/task.schema.js';
 import { goalService } from '../services/goal.service.js';
+import { taskTiming } from '../lib/taskTiming.js';
 
 // ─── GET /api/team/:id/weightage ────────────────────────────────────────────
 /**
@@ -129,6 +130,20 @@ export async function setTaskFinalWeight(req, res, next) {
         error: `The final weightage cannot exceed this task's planned weight of ${planned}%.`,
         plannedWeight: planned,
       });
+    }
+    if (managerFinalWeight !== null && managerFinalWeight < planned) {
+      const timing = taskTiming(task);
+      const isDelayed = Boolean(
+        (timing.completionDelayDays && timing.completionDelayDays > 0) ||
+        timing.finishedLate ||
+        timing.state === 'COMPLETED_LATE' ||
+        (task.actualCompletionDate && task.dueDate && new Date(task.actualCompletionDate) > new Date(task.dueDate))
+      );
+      if (!isDelayed) {
+        return res.status(400).json({
+          error: 'Task weightage can only be reduced for delayed tasks.',
+        });
+      }
     }
 
     const clearing = managerFinalWeight === null;

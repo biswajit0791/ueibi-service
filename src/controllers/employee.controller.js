@@ -33,6 +33,12 @@ import {
   notifyLicensingActivity,
   checkAndNotifyLowLicenseCapacity,
 } from '../services/license.service.js';
+import {
+  calculateAnnualCycle,
+  calculateRemainingMonths,
+  calculateProRataLicensePrice,
+  addMonths,
+} from '../services/billing.service.js';
 import { generateReferenceCheckProfile } from '../services/pdf.service.js';
 
 // ── Shared select for privileged (SUPER_ADMIN / ADMIN / HR) employee queries ──
@@ -1053,23 +1059,41 @@ export async function requestTenantLicenses(req, res, next) {
       return res.status(400).json({ error: 'Please specify at least 1 license seat to request.' });
     }
 
-    const unitPrice = 499.00;
-    const taxRate = 0.18;
-    const subtotal = seats * unitPrice;
-    const taxAmount = Math.round(subtotal * taxRate * 100) / 100;
-    const totalAmount = Math.round((subtotal + taxAmount) * 100) / 100;
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { id: true, planEndsAt: true, createdAt: true },
+    });
+
+    const now = new Date();
+    let effectiveEndsAt = tenant?.planEndsAt;
+    if (!effectiveEndsAt || new Date(effectiveEndsAt) < now) {
+      const cycle = calculateAnnualCycle(tenant?.planEndsAt || tenant?.createdAt || now, now);
+      effectiveEndsAt = cycle.endsAt;
+    }
+
+    const remainingMonths = calculateRemainingMonths(effectiveEndsAt, now);
+    const pricing = calculateProRataLicensePrice({
+      annualUnitPrice: 499.00,
+      remainingMonths,
+      seats,
+      taxRate: 0.18,
+    });
+
+    const proRataNote = remainingMonths < 12
+      ? ` [Pro-rata: ${remainingMonths}/12 months @ ₹${pricing.proRataUnitPrice.toFixed(2)}/seat]`
+      : '';
 
     const licenseReq = await prisma.licenseRequest.create({
       data: {
         tenantId,
         requestedById: req.user.id,
         seats,
-        unitPrice,
-        taxRate,
-        taxAmount,
-        totalAmount,
+        unitPrice: pricing.proRataUnitPrice,
+        taxRate: pricing.taxRate,
+        taxAmount: pricing.taxAmount,
+        totalAmount: pricing.totalAmount,
         currency: 'INR',
-        reason,
+        reason: `${reason}${proRataNote}`,
         status: 'PENDING_FINANCE_APPROVAL',
       },
       include: {
@@ -1083,19 +1107,20 @@ export async function requestTenantLicenses(req, res, next) {
       actor: req.user,
       action: 'REQUESTED',
       seats,
-      totalAmount,
-      reason,
+      totalAmount: pricing.totalAmount,
+      reason: `${reason}${proRataNote}`,
       requestId: licenseReq.id,
     });
 
     emitToTenant(tenantId, 'LICENSE_REQUEST_CREATED', {
       request: licenseReq,
-      message: `HR submitted a request for ${seats} additional licenses.`,
+      message: `HR submitted a request for ${seats} additional licenses (₹${pricing.totalAmount.toLocaleString('en-IN')}${remainingMonths < 12 ? `, ${remainingMonths} months pro-rata` : ''}).`,
     });
 
     res.json({
-      message: `License request for ${seats} seat(s) submitted to Finance successfully. Estimated amount: ₹${totalAmount.toLocaleString('en-IN')}.`,
+      message: `License request for ${seats} seat(s) submitted to Finance successfully. Estimated amount: ₹${pricing.totalAmount.toLocaleString('en-IN')}${remainingMonths < 12 ? ` (Pro-rata for ${remainingMonths} remaining months)` : ''}.`,
       request: licenseReq,
+      pricing,
     });
   } catch (err) {
     next(err);
@@ -1114,6 +1139,36 @@ export async function payAndAddLicenses(req, res, next) {
     let additionalSeats = 0;
     let targetRequest = null;
     let totalPaid = 0;
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: {
+        id: true,
+        companyName: true,
+        licenseLimit: true,
+        planEndsAt: true,
+        createdAt: true,
+        subscriptions: {
+          where: { state: 'ACTIVE' },
+          orderBy: { startsAt: 'desc' },
+          take: 1,
+        },
+      },
+    });
+
+    if (!tenant) {
+      return res.status(404).json({ error: 'Tenant not found.' });
+    }
+
+    const now = new Date();
+    // Annual cycle: ensure tenant has a fixed annual renewal date
+    let effectiveEndsAt = tenant.planEndsAt;
+    if (!effectiveEndsAt || new Date(effectiveEndsAt) < now) {
+      const annualCycle = calculateAnnualCycle(tenant.planEndsAt || tenant.createdAt || now, now);
+      effectiveEndsAt = annualCycle.endsAt;
+    }
+
+    const remainingMonths = calculateRemainingMonths(effectiveEndsAt, now);
 
     if (requestId) {
       targetRequest = await prisma.licenseRequest.findUnique({
@@ -1137,7 +1192,7 @@ export async function payAndAddLicenses(req, res, next) {
         data: {
           status: 'PAID',
           paidById: req.user.id,
-          paidAt: new Date(),
+          paidAt: now,
           paymentMethod: paymentMethod || 'ONLINE',
           paymentRef: paymentRef || `TXN-${Date.now().toString(36).toUpperCase()}`,
         },
@@ -1150,25 +1205,31 @@ export async function payAndAddLicenses(req, res, next) {
       }
 
       additionalSeats = seats;
-      const unitPrice = 499.00;
-      const taxRate = 0.18;
-      const subtotal = additionalSeats * unitPrice;
-      const taxAmount = Math.round(subtotal * taxRate * 100) / 100;
-      totalPaid = Math.round((subtotal + taxAmount) * 100) / 100;
+      const pricing = calculateProRataLicensePrice({
+        annualUnitPrice: 499.00,
+        remainingMonths,
+        seats: additionalSeats,
+        taxRate: 0.18,
+      });
+
+      totalPaid = pricing.totalAmount;
+      const proRataNote = remainingMonths < 12
+        ? ` [Pro-rata: ${remainingMonths}/12 months @ ₹${pricing.proRataUnitPrice.toFixed(2)}/seat]`
+        : '';
 
       targetRequest = await prisma.licenseRequest.create({
         data: {
           tenantId,
           requestedById: req.user.id,
           paidById: req.user.id,
-          paidAt: new Date(),
+          paidAt: now,
           seats: additionalSeats,
-          unitPrice,
-          taxRate,
-          taxAmount,
+          unitPrice: pricing.proRataUnitPrice,
+          taxRate: pricing.taxRate,
+          taxAmount: pricing.taxAmount,
           totalAmount: totalPaid,
           currency: 'INR',
-          reason: req.body.reason || 'Finance direct license purchase',
+          reason: `${req.body.reason || 'Finance direct license purchase'}${proRataNote}`,
           status: 'PAID',
           paymentMethod: paymentMethod || 'ONLINE',
           paymentRef: paymentRef || `TXN-${Date.now().toString(36).toUpperCase()}`,
@@ -1176,21 +1237,38 @@ export async function payAndAddLicenses(req, res, next) {
       });
     }
 
-    const tenant = await prisma.tenant.findUnique({
-      where: { id: tenantId },
-      select: { id: true, companyName: true, licenseLimit: true },
-    });
-
-    if (!tenant) {
-      return res.status(404).json({ error: 'Tenant not found.' });
-    }
-
     const newLimit = (tenant.licenseLimit || 0) + additionalSeats;
 
     await prisma.tenant.update({
       where: { id: tenantId },
-      data: { licenseLimit: newLimit },
+      data: {
+        licenseLimit: newLimit,
+        planEndsAt: effectiveEndsAt,
+      },
     });
+
+    // If an active subscription exists, expand its seat capacity; otherwise create one co-terminating with the annual cycle
+    const activeSub = tenant.subscriptions?.[0];
+    if (activeSub) {
+      await prisma.subscription.update({
+        where: { id: activeSub.id },
+        data: {
+          seatCount: newLimit,
+          packageName: `${newLimit} Licenses (Annual)`,
+        },
+      });
+    } else {
+      await prisma.subscription.create({
+        data: {
+          tenantId,
+          packageName: `${newLimit} Licenses (Annual)`,
+          seatCount: newLimit,
+          state: 'ACTIVE',
+          startsAt: tenant.createdAt || now,
+          endsAt: effectiveEndsAt,
+        },
+      });
+    }
 
     const stats = await getLicenseStats(tenantId);
 
@@ -1199,7 +1277,10 @@ export async function payAndAddLicenses(req, res, next) {
     try {
       const invCount = await prisma.invoice.count();
       const invoiceNumber = `INV-${new Date().getFullYear()}-${String(invCount + 1).padStart(5, '0')}`;
-      const subtotal = additionalSeats * 499;
+      const effectiveUnitPrice = targetRequest?.unitPrice
+        ? Number(targetRequest.unitPrice)
+        : (totalPaid ? Math.round((totalPaid / (additionalSeats * 1.18)) * 100) / 100 : 499.00);
+      const subtotal = Math.round(additionalSeats * effectiveUnitPrice * 100) / 100;
       const gst = Math.round(subtotal * 0.18 * 100) / 100;
       const total = totalPaid || (subtotal + gst);
       const validMethod = ['UPI', 'CHEQUE', 'BANK_TRANSFER'].includes(paymentMethod)
@@ -1213,24 +1294,24 @@ export async function payAndAddLicenses(req, res, next) {
           state: 'PAID',
           billToName: tenant.companyName || 'Corporate Client',
           billToEmail: req.user.email,
-          issuedAt: new Date(),
-          dueAt: new Date(),
+          issuedAt: now,
+          dueAt: now,
           currency: 'INR',
           quantity: additionalSeats,
-          unitPrice: 499.00,
+          unitPrice: effectiveUnitPrice,
           subtotalAmount: subtotal,
           gstRate: 0.18,
           gstAmount: gst,
           totalAmount: total,
           amountPaid: total,
-          notes: `Employee license expansion (+${additionalSeats} seats). Payment Ref: ${paymentRef || targetRequest?.paymentRef || 'N/A'}`,
+          notes: `Employee license expansion (+${additionalSeats} seats pro-rata for ${remainingMonths}/12 months). Payment Ref: ${paymentRef || targetRequest?.paymentRef || 'N/A'}`,
           payments: {
             create: {
               amount: total,
               method: validMethod,
               reference: paymentRef || targetRequest?.paymentRef || `TXN-${Date.now().toString(36).toUpperCase()}`,
               recordedById: req.user.id,
-              receivedAt: new Date(),
+              receivedAt: now,
               tenantId,
             },
           },

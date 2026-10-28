@@ -13,6 +13,11 @@
 
 import { prisma } from '../lib/prisma.js';
 import { emitToUser, emitToTenant } from '../lib/socket.js';
+import {
+  calculateAnnualCycle,
+  calculateRemainingMonths,
+  calculateProRataLicensePrice,
+} from './billing.service.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -29,16 +34,42 @@ import { emitToUser, emitToTenant } from '../lib/socket.js';
  *   availableLicenses: number,
  *   exEmployees: number,
  *   nonJoiners: number,
- *   databaseIntegrity: number,   // 0–100 % of active users that have a PAN on file
+ *   databaseIntegrity: number,
+ *   billingCycle: string,
+ *   planStartsAt: string | null,
+ *   planEndsAt: string | null,
+ *   renewalDate: string | null,
+ *   daysRemaining: number | null,
+ *   isExpiringSoon: boolean,
+ *   isOverdue: boolean,
+ *   subscriptionState: string,
  * }>}
  */
 export async function getLicenseStats(tenantId) {
   const [tenant, activeEmployees, exEmployees, nonJoiners, verifiedWithPan] =
     await Promise.all([
-      // 1. Tenant row (for licenseLimit)
+      // 1. Tenant row (for licenseLimit, planEndsAt, and active subscription)
       prisma.tenant.findUnique({
         where: { id: tenantId },
-        select: { licenseLimit: true },
+        select: {
+          id: true,
+          licenseLimit: true,
+          planEndsAt: true,
+          createdAt: true,
+          subscriptions: {
+            where: { state: { in: ['ACTIVE', 'PENDING'] } },
+            orderBy: { startsAt: 'desc' },
+            take: 1,
+            select: {
+              id: true,
+              packageName: true,
+              seatCount: true,
+              state: true,
+              startsAt: true,
+              endsAt: true,
+            },
+          },
+        },
       }),
 
       // 2. Active employee count (the canonical licence-consuming count)
@@ -80,6 +111,32 @@ export async function getLicenseStats(tenantId) {
       ? Math.round((verifiedWithPan / activeEmployees) * 1000) / 10  // 1 decimal place
       : 100;
 
+  // Annual Billing Cycle & Renewal calculation
+  const now = new Date();
+  const activeSub = tenant?.subscriptions?.[0] || null;
+  const initialDate = activeSub?.startsAt || tenant?.createdAt || now;
+  const annualCycle = calculateAnnualCycle(initialDate, now);
+
+  const planStartsAt = activeSub?.startsAt || annualCycle.startsAt;
+  const planEndsAt = activeSub?.endsAt || tenant?.planEndsAt || annualCycle.endsAt;
+  const daysRemaining = planEndsAt
+    ? Math.ceil((new Date(planEndsAt).getTime() - now.getTime()) / 86400000)
+    : null;
+
+  const isExpiringSoon = daysRemaining !== null && daysRemaining <= 30 && daysRemaining >= 0;
+  const isOverdue = daysRemaining !== null && daysRemaining < 0;
+
+  const remainingMonths = planEndsAt
+    ? calculateRemainingMonths(planEndsAt, now)
+    : 12;
+
+  const annualUnitPrice = 499.00;
+  const proRataPricing = calculateProRataLicensePrice({
+    annualUnitPrice,
+    remainingMonths,
+    seats: 1,
+  });
+
   return {
     totalCapacity,
     activeEmployees,
@@ -87,6 +144,18 @@ export async function getLicenseStats(tenantId) {
     exEmployees,
     nonJoiners,
     databaseIntegrity,
+    // Annual Billing Cycle & Renewal info
+    billingCycle: 'Annual',
+    annualUnitPrice,
+    proRataUnitPrice: proRataPricing.proRataUnitPrice,
+    remainingMonths,
+    planStartsAt: planStartsAt ? new Date(planStartsAt).toISOString() : null,
+    planEndsAt: planEndsAt ? new Date(planEndsAt).toISOString() : null,
+    renewalDate: planEndsAt ? new Date(planEndsAt).toISOString() : null,
+    daysRemaining,
+    isExpiringSoon,
+    isOverdue,
+    subscriptionState: activeSub?.state || (isOverdue ? 'EXPIRED' : 'ACTIVE'),
   };
 }
 
