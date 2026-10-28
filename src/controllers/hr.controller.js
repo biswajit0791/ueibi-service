@@ -2,6 +2,7 @@ import { prisma } from '../lib/prisma.js';
 import { findActionToken } from '../lib/actionTokens.js';
 import { notifyStakeholders } from '../lib/notify.js';
 import { tokenParamSchema } from '../validations/publicToken.schema.js';
+import { addMonths } from '../services/billing.service.js';
 
 async function resolveHrToken(req, res) {
   const parsedParams = tokenParamSchema.safeParse(req.params);
@@ -61,12 +62,30 @@ export async function activate(req, res, next) {
         data: { status: 'ACTIVE', activatedAt: new Date() },
       });
 
+      const startsAt = new Date();
+      const endsAt = addMonths(startsAt, 12);
+      const licenseLimit = registration.licenseQuantity || 0;
+
       const createdTenant = await tx.tenant.create({
         data: {
           companyName: registration.companyName,
           domainName: registration.domainName,
           tenantCode: registration.tenantCode,
-          licenseLimit: registration.licenseQuantity || 0,
+          licenseLimit,
+          planEndsAt: endsAt,
+          registrationId: registration.id,
+        },
+      });
+
+      // Create initial Annual Subscription for the purchased licenses
+      await tx.subscription.create({
+        data: {
+          tenantId: createdTenant.id,
+          packageName: `${licenseLimit} Licenses (Annual)`,
+          seatCount: licenseLimit,
+          state: 'ACTIVE',
+          startsAt,
+          endsAt,
           registrationId: registration.id,
         },
       });

@@ -36,6 +36,7 @@ import {
 } from '../validations/exit.schema.js';
 import {
   LEGACY_KEYS,
+  SEQUENCE_ORDER,
   createInitialClearances,
   ensureClearanceRows,
   loadApproverContext,
@@ -65,7 +66,12 @@ async function presentExits(tenantId, exits, user) {
   const ctx = await loadApproverContext(tenantId, withRows);
   return withRows.map((exit) => {
     const clearances = [...exit.clearances]
-      .sort((a, b) => a.sortOrder - b.sortOrder)
+      .sort((a, b) => {
+        const idxA = SEQUENCE_ORDER.indexOf(a.key);
+        const idxB = SEQUENCE_ORDER.indexOf(b.key);
+        if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+        return a.sortOrder - b.sortOrder;
+      })
       .map((row) => presentClearance(row, exit, user, ctx));
     return { exit, clearances };
   });
@@ -126,6 +132,17 @@ export async function initiateExit(req, res, next) {
     }
 
     const exitDetails = await prisma.$transaction(async (tx) => {
+      const calculatedNoticeDays = (parsed.data.noticePeriodDays != null)
+        ? parsed.data.noticePeriodDays
+        : (() => {
+            const resDate = new Date(parsed.data.resignationDate);
+            const lwdDate = new Date(parsed.data.lastWorkingDay);
+            if (!isNaN(resDate.getTime()) && !isNaN(lwdDate.getTime())) {
+              return Math.max(0, Math.round((lwdDate.getTime() - resDate.getTime()) / (1000 * 60 * 60 * 24)));
+            }
+            return null;
+          })();
+
       const created = await tx.exitDetails.create({
         data: {
           userId: employeeId,
@@ -134,7 +151,7 @@ export async function initiateExit(req, res, next) {
           lastWorkingDay: new Date(parsed.data.lastWorkingDay),
           exitReason: parsed.data.exitReason,
           feedbackRemarks: parsed.data.feedbackRemarks || null,
-          noticePeriodDays: parsed.data.noticePeriodDays ?? null,
+          noticePeriodDays: calculatedNoticeDays,
           exitStatus: 'INITIATED',
         },
       });
@@ -260,6 +277,25 @@ export async function approveClearance(req, res, next) {
       });
     }
 
+    // ── Sequence enforcement: 1. Manager -> 2. IT -> 3. HR -> 4. Finance -> 5. Product ──
+    const targetSeqIdx = SEQUENCE_ORDER.indexOf(department);
+    if (cleared && targetSeqIdx > 0) {
+      const predKeys = SEQUENCE_ORDER.slice(0, targetSeqIdx);
+      const pendingPredecessor = exitDetails.clearances
+        .filter((c) => predKeys.includes(c.key) && c.status !== 'CLEARED')
+        .sort((a, b) => SEQUENCE_ORDER.indexOf(a.key) - SEQUENCE_ORDER.indexOf(b.key))[0];
+
+      if (pendingPredecessor) {
+        return res.status(400).json({
+          error: `Clearance sequence violation: ${pendingPredecessor.label} (Step ${SEQUENCE_ORDER.indexOf(pendingPredecessor.key) + 1}) must be cleared before ${row.label} (Step ${targetSeqIdx + 1}).`,
+          code: 'SEQUENCE_VIOLATION',
+          waitingOn: pendingPredecessor.label,
+          requiredStep: targetSeqIdx + 1,
+          pendingStep: SEQUENCE_ORDER.indexOf(pendingPredecessor.key) + 1,
+        });
+      }
+    }
+
     const now = new Date();
     const actorName = req.user.name || req.user.email;
 
@@ -270,17 +306,17 @@ export async function approveClearance(req, res, next) {
       legacyUpdate[`${department}Cleared`] = cleared;
       legacyUpdate[`${department}ClearedAt`] = cleared ? now : null;
       legacyUpdate[`${department}ClearedBy`] = cleared ? actorName : null;
-      if (!remarksObj.clearances) remarksObj.clearances = {};
-      remarksObj.clearances[department] = {
-        cleared,
-        remarks: remarks || '',
-        fileUrl: fileUrl || null,
-        fileName: fileName || null,
-        clearedBy: actorName,
-        clearedAt: now.toISOString(),
-      };
-      legacyUpdate.feedbackRemarks = JSON.stringify(remarksObj);
     }
+    if (!remarksObj.clearances) remarksObj.clearances = {};
+    remarksObj.clearances[department] = {
+      cleared,
+      remarks: remarks || '',
+      fileUrl: fileUrl || null,
+      fileName: fileName || null,
+      clearedBy: actorName,
+      clearedAt: now.toISOString(),
+    };
+    legacyUpdate.feedbackRemarks = JSON.stringify(remarksObj);
 
     const otherPending = exitDetails.clearances.some((c) => c.id !== row.id && c.status !== 'CLEARED');
     const allCleared = cleared && !otherPending;

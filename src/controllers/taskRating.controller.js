@@ -106,6 +106,20 @@ export async function rateGoalTask(req, res, next) {
           plannedWeight: planned,
         });
       }
+      if (finalWeight !== null && finalWeight < planned) {
+        const timing = taskTiming(task);
+        const isDelayed = Boolean(
+          (timing.completionDelayDays && timing.completionDelayDays > 0) ||
+          timing.finishedLate ||
+          timing.state === 'COMPLETED_LATE' ||
+          (task.actualCompletionDate && task.dueDate && new Date(task.actualCompletionDate) > new Date(task.dueDate))
+        );
+        if (!isDelayed) {
+          return res.status(400).json({
+            error: 'Task weightage can only be reduced for delayed tasks.',
+          });
+        }
+      }
       const target = await prisma.tenantUser.findUnique({
         where: { id: task.employeeId },
         select: { role: true },

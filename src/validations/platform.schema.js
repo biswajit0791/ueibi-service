@@ -48,7 +48,7 @@ export const platformUserQuerySchema = z.object({
   status: z.enum(['INVITED', 'ACTIVE', 'EXITED']).optional(),
   includeDeleted: z.coerce.boolean().optional().default(false),
   page: z.coerce.number().int().min(1).optional().default(1),
-  limit: z.coerce.number().int().min(1).max(100).optional().default(50),
+  limit: z.coerce.number().int().min(1).max(5000).optional().default(50),
 });
 
 export const platformUserActionSchema = z.object({

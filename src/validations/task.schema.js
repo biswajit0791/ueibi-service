@@ -187,6 +187,8 @@ export const listTasksQuerySchema = z.object({
   // this stays a bounded string rather than a cuid-shaped check.
   employeeId: z.string().max(100).optional(),
   fy: z.string().max(20).optional(),
+  page: z.coerce.number().int().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(500).optional(),
 });
 
 export const taskCommentParamSchema = z.object({
@@ -215,8 +217,16 @@ export const taskCommentAttachmentQuerySchema = z.object({
  * the weightage untouched; `null` clears an earlier downgrade. The upper bound
  * is the task's planned weight, checked in the controller.
  */
+const VALID_TASK_RATINGS = [1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5];
+
 export const managerTaskRatingSchema = z.object({
-  rating: z.coerce.number().int().min(1).max(5),
+  rating: z.coerce
+    .number()
+    .min(1, 'Rating must be at least 1')
+    .max(5, 'Rating cannot exceed 5')
+    .refine((val) => VALID_TASK_RATINGS.includes(Math.round(val * 10) / 10), {
+      message: 'Rating must be in increments of 0.5 (1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5)',
+    }),
   notes: z.string().trim().max(1000).nullable().optional(),
   finalWeight: z.preprocess(
     (v) => (v === undefined || v === null || v === '' ? (v === '' ? null : v) : Math.round(Number(v))),

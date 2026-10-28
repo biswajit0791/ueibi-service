@@ -26,8 +26,8 @@ export const exitInterviewSchema = z.object({
 
 // ── Clearance Approval ──────────────────────────────────────────────────────
 export const clearanceSchema = z.object({
-  department: z.enum(['it', 'hr', 'finance', 'manager', 'dept_head'], {
-    errorMap: () => ({ message: 'Department must be one of: it, hr, finance, manager, dept_head' }),
+  department: z.enum(['it', 'hr', 'finance', 'manager', 'product', 'dept_head'], {
+    errorMap: () => ({ message: 'Department must be one of: it, hr, finance, manager, product, dept_head' }),
   }),
   cleared: z.boolean().default(true),
   remarks: z.string().optional().default(''),
