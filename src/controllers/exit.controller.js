@@ -4,6 +4,10 @@
  *
  * Full lifecycle: Initiate → Interview → Department Clearances → Complete → Generate Certificates
  *
+ * Once every clearance except Finance is done, HR may block the employee's
+ * access (status EXITED, license released) while Finance clearance stays
+ * pending until full-and-final settlement — see blockExitAccess.
+ *
  * The exit process uses the ExitDetails model as the state machine:
  *   INITIATED → INTERVIEW_DONE → PENDING_CLEARANCE → ALL_CLEARED → COMPLETED
  *
@@ -45,6 +49,7 @@ import {
   presentClearance,
   progressOf,
   resolveManagerSubSteps,
+  accessBlockStatus,
 } from '../services/exitClearance.service.js';
 import { publicUploadUrl, buildAttachments } from '../lib/publicFiles.js';
 
@@ -285,7 +290,7 @@ export async function approveClearance(req, res, next) {
       });
     }
 
-    // ── Sequence enforcement: 1. Manager -> 2. IT -> 3. HR -> 4. Finance -> 5. Product ──
+    // ── Sequence enforcement: 1. Manager -> 2. IT -> 3. Product -> 4. HR -> 5. Finance ──
     const targetSeqIdx = SEQUENCE_ORDER.indexOf(department);
     if (cleared && targetSeqIdx > 0) {
       const predKeys = SEQUENCE_ORDER.slice(0, targetSeqIdx);
@@ -397,6 +402,10 @@ export async function approveClearance(req, res, next) {
         legacyUpdate[`${department}Cleared`] = cleared;
         legacyUpdate[`${department}ClearedAt`] = cleared ? now : null;
         legacyUpdate[`${department}ClearedBy`] = cleared ? actorName : null;
+      }
+      // Finance clearance is the full-and-final settlement; nothing else completes it.
+      if (department === 'finance') {
+        legacyUpdate.settlementStatus = cleared ? 'COMPLETED' : 'PENDING';
       }
       remarksObj.clearances[department] = {
         cleared,
@@ -579,6 +588,7 @@ export async function getExitStatus(req, res, next) {
         documentsSentTo: remarksObj.documentsSentTo || null,
       },
       progress: progressOf(clearances),
+      accessBlock: accessBlockStatus(exitDetails, clearances),
     });
   } catch (err) {
     next(err);
@@ -645,6 +655,7 @@ function toListItem(exit, clearances) {
       documentsSentTo: remarksObj.documentsSentTo || null,
     },
     clearanceProgress: progressOf(clearances),
+    accessBlock: accessBlockStatus(exit, clearances),
   };
 }
 
@@ -875,7 +886,8 @@ export async function completeExit(req, res, next) {
         where: { id },
         data: {
           exitStatus: 'COMPLETED',
-          settlementStatus: 'COMPLETED',
+          // Completing with Finance overridden must not claim the settlement is done.
+          settlementStatus: clearanceRows.some((c) => c.key === 'finance' && c.status !== 'CLEARED') ? 'PENDING' : 'COMPLETED',
           ...(clearanceOverride ? {
             feedbackRemarks: JSON.stringify({
               ...parseExitRemarks(exitDetails.feedbackRemarks),
@@ -908,6 +920,74 @@ export async function completeExit(req, res, next) {
         attitudeRating: exitRecord.attitudeRating,
         status: exitRecord.status,
       },
+      licenseStats,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/exit/:id/block-access
+// Release the license and block login on the exit date while Finance
+// clearance (full-and-final settlement) is still pending. Requires every
+// other clearance to be done. The exit stays open; Finance clears later and
+// HR completes the exit as usual.
+// ─────────────────────────────────────────────────────────────────────────────
+export async function blockExitAccess(req, res, next) {
+  try {
+    const parsedParams = exitIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid exit ID', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
+    const tenantId = req.tenantId;
+
+    const found = await prisma.exitDetails.findFirst({
+      where: { id, tenantId },
+      include: { user: { select: { ...EXIT_USER_SELECT, isDeleted: true } }, clearances: true },
+    });
+    if (!found || !found.user || found.user.isDeleted) {
+      return res.status(404).json({ error: 'Exit record not found' });
+    }
+    if (found.exitStatus === 'COMPLETED') {
+      return res.status(409).json({ error: 'Exit process is already completed' });
+    }
+    if (found.accessBlockedAt) {
+      return res.status(409).json({ error: 'Access has already been blocked for this employee' });
+    }
+
+    const [{ exit, clearances }] = await presentExits(tenantId, [found], req.user);
+    const block = accessBlockStatus(exit, clearances);
+    if (!block.eligible) {
+      return res.status(409).json({
+        error: `${block.pendingBeforeBlock.join(', ')} clearance${block.pendingBeforeBlock.length > 1 ? 's are' : ' is'} still pending. All clearances except Finance must be completed before access can be blocked.`,
+        code: 'CLEARANCES_PENDING_FOR_BLOCK',
+        pendingClearances: block.pendingBeforeBlock,
+      });
+    }
+
+    const now = new Date();
+    const actorName = req.user.name || req.user.email;
+
+    await prisma.$transaction([
+      // EXITED blocks login and every authenticated request, and frees the license seat.
+      prisma.tenantUser.update({ where: { id: found.userId }, data: { status: 'EXITED' } }),
+      prisma.exitDetails.update({ where: { id }, data: { accessBlockedAt: now, accessBlockedBy: actorName } }),
+    ]);
+
+    const licenseStats = await getLicenseStats(tenantId);
+
+    emitToTenant(tenantId, 'employee_status_updated', { id: found.userId, status: 'EXITED' });
+    emitToTenant(tenantId, 'exit_access_blocked', { employeeId: found.userId, exitDetailsId: id, blockedAt: now });
+    emitToTenant(tenantId, 'LICENSE_CAPACITY_UPDATED', {
+      licenseStats,
+      message: `License released for ${found.user.name} — access blocked pending Finance clearance.`,
+    });
+
+    res.json({
+      message: `${found.user.name}'s access has been blocked and the license released. Finance clearance remains pending until full-and-final settlement.`,
+      accessBlock: { ...block, blocked: true, eligible: false, blockedAt: now, blockedBy: actorName },
       licenseStats,
     });
   } catch (err) {
