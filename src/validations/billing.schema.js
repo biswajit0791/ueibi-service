@@ -134,6 +134,7 @@ export const subscriptionCreateSchema = z.object({
   couponCode: z.string().max(60).nullish(),
   /// False raises the term without billing for it — for a migration or a gift.
   createInvoice: z.boolean().default(true),
+  applyCreditBalance: z.boolean().default(true).optional(),
   notes: z.string().max(2000).nullish(),
 });
 

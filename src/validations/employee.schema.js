@@ -307,3 +307,8 @@ export const addLicenseSchema = z.object({
 });
 
 
+
+export const retractLicenseSchema = z.object({
+  seats: z.coerce.number().int().min(1, 'Must retract at least 1 license seat').max(10000),
+  reason: z.string().trim().max(500).optional(),
+});

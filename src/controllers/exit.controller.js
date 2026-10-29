@@ -44,6 +44,7 @@ import {
   permissionFor,
   presentClearance,
   progressOf,
+  resolveManagerSubSteps,
 } from '../services/exitClearance.service.js';
 import { publicUploadUrl, buildAttachments } from '../lib/publicFiles.js';
 
@@ -238,7 +239,14 @@ export async function approveClearance(req, res, next) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
 
-    const { department, cleared, remarks, fileUrl, fileName, reason } = parsed.data;
+    const { department, subStep, cleared, remarks, fileUrl, fileName, reason } = parsed.data;
+
+    let normalizedSubStep = null;
+    if (subStep) {
+      const s = String(subStep).toLowerCase().replace(/[-_]/g, '');
+      if (s === 'prehandover' || s === 'pre') normalizedSubStep = 'pre_handover';
+      else if (s === 'posthandover' || s === 'post') normalizedSubStep = 'post_handover';
+    }
 
     const found = await prisma.exitDetails.findFirst({
       where: { id, tenantId: req.tenantId },
@@ -282,14 +290,29 @@ export async function approveClearance(req, res, next) {
     if (cleared && targetSeqIdx > 0) {
       const predKeys = SEQUENCE_ORDER.slice(0, targetSeqIdx);
       const pendingPredecessor = exitDetails.clearances
-        .filter((c) => predKeys.includes(c.key) && c.status !== 'CLEARED')
+        .filter((c) => {
+          if (!predKeys.includes(c.key)) return false;
+          if (c.key === 'manager') {
+            const res = resolveManagerSubSteps(c, exitDetails);
+            return !res.isFullyCleared;
+          }
+          return c.status !== 'CLEARED';
+        })
         .sort((a, b) => SEQUENCE_ORDER.indexOf(a.key) - SEQUENCE_ORDER.indexOf(b.key))[0];
 
       if (pendingPredecessor) {
+        let waitingLabel = pendingPredecessor.label;
+        if (pendingPredecessor.key === 'manager') {
+          const res = resolveManagerSubSteps(pendingPredecessor, exitDetails);
+          const pendingSubs = res.pendingSubStepLabels;
+          if (pendingSubs.length > 0) {
+            waitingLabel = `Reporting Manager (${pendingSubs.join(' & ')} pending)`;
+          }
+        }
         return res.status(400).json({
-          error: `Clearance sequence violation: ${pendingPredecessor.label} (Step ${SEQUENCE_ORDER.indexOf(pendingPredecessor.key) + 1}) must be cleared before ${row.label} (Step ${targetSeqIdx + 1}).`,
+          error: `Clearance sequence violation: ${waitingLabel} (Step ${SEQUENCE_ORDER.indexOf(pendingPredecessor.key) + 1}) must be cleared before ${row.label} (Step ${targetSeqIdx + 1}).`,
           code: 'SEQUENCE_VIOLATION',
-          waitingOn: pendingPredecessor.label,
+          waitingOn: waitingLabel,
           requiredStep: targetSeqIdx + 1,
           pendingStep: SEQUENCE_ORDER.indexOf(pendingPredecessor.key) + 1,
         });
@@ -302,24 +325,100 @@ export async function approveClearance(req, res, next) {
     // Legacy mirrors: boolean columns + the clearances map in feedbackRemarks.
     const legacyUpdate = {};
     const remarksObj = parseExitRemarks(exitDetails.feedbackRemarks);
-    if (LEGACY_KEYS.includes(department)) {
-      legacyUpdate[`${department}Cleared`] = cleared;
-      legacyUpdate[`${department}ClearedAt`] = cleared ? now : null;
-      legacyUpdate[`${department}ClearedBy`] = cleared ? actorName : null;
-    }
     if (!remarksObj.clearances) remarksObj.clearances = {};
-    remarksObj.clearances[department] = {
-      cleared,
-      remarks: remarks || '',
-      fileUrl: fileUrl || null,
-      fileName: fileName || null,
-      clearedBy: actorName,
-      clearedAt: now.toISOString(),
-    };
+
+    let rowCleared = cleared;
+
+    if (department === 'manager') {
+      const currentResolved = resolveManagerSubSteps(row, exitDetails);
+      const subStepsMap = {};
+      currentResolved.subSteps.forEach((s) => {
+        subStepsMap[s.key] = {
+          cleared: s.cleared,
+          remarks: s.remarks,
+          fileUrl: s.fileUrl,
+          fileName: s.fileName,
+          clearedBy: s.by,
+          clearedAt: s.at,
+          onBehalf: s.onBehalf,
+          onBehalfReason: s.onBehalfReason,
+        };
+      });
+
+      if (normalizedSubStep) {
+        subStepsMap[normalizedSubStep] = {
+          cleared,
+          remarks: remarks || '',
+          fileUrl: fileUrl || null,
+          fileName: fileName || null,
+          clearedBy: cleared ? actorName : null,
+          clearedAt: cleared ? now.toISOString() : null,
+          actedByName: actorName,
+          actedAt: now.toISOString(),
+          onBehalf: perm.onBehalf,
+          onBehalfReason: perm.onBehalf ? onBehalfReason : null,
+        };
+      } else {
+        Object.keys(subStepsMap).forEach((k) => {
+          subStepsMap[k] = {
+            cleared,
+            remarks: remarks || '',
+            fileUrl: fileUrl || null,
+            fileName: fileName || null,
+            clearedBy: cleared ? actorName : null,
+            clearedAt: cleared ? now.toISOString() : null,
+            actedByName: actorName,
+            actedAt: now.toISOString(),
+            onBehalf: perm.onBehalf,
+            onBehalfReason: perm.onBehalf ? onBehalfReason : null,
+          };
+        });
+      }
+
+      const preCleared = !!subStepsMap.pre_handover?.cleared;
+      const postCleared = !!subStepsMap.post_handover?.cleared;
+      rowCleared = preCleared && postCleared;
+
+      remarksObj.clearances.manager = {
+        cleared: rowCleared,
+        remarks: remarks || row.remarks || '',
+        fileUrl: fileUrl || row.fileUrl || null,
+        fileName: fileName || row.fileName || null,
+        clearedBy: rowCleared ? actorName : null,
+        clearedAt: rowCleared ? now.toISOString() : null,
+        subSteps: subStepsMap,
+      };
+
+      legacyUpdate.managerCleared = rowCleared;
+      legacyUpdate.managerClearedAt = rowCleared ? now : null;
+      legacyUpdate.managerClearedBy = rowCleared ? actorName : null;
+    } else {
+      if (LEGACY_KEYS.includes(department)) {
+        legacyUpdate[`${department}Cleared`] = cleared;
+        legacyUpdate[`${department}ClearedAt`] = cleared ? now : null;
+        legacyUpdate[`${department}ClearedBy`] = cleared ? actorName : null;
+      }
+      remarksObj.clearances[department] = {
+        cleared,
+        remarks: remarks || '',
+        fileUrl: fileUrl || null,
+        fileName: fileName || null,
+        clearedBy: actorName,
+        clearedAt: now.toISOString(),
+      };
+    }
+
     legacyUpdate.feedbackRemarks = JSON.stringify(remarksObj);
 
-    const otherPending = exitDetails.clearances.some((c) => c.id !== row.id && c.status !== 'CLEARED');
-    const allCleared = cleared && !otherPending;
+    const otherPending = exitDetails.clearances.some((c) => {
+      if (c.id === row.id) return false;
+      if (c.key === 'manager') {
+        const res = resolveManagerSubSteps(c, exitDetails);
+        return !res.isFullyCleared;
+      }
+      return c.status !== 'CLEARED';
+    });
+    const allCleared = rowCleared && !otherPending;
     let exitStatus;
     if (allCleared) {
       exitStatus = 'ALL_CLEARED';
@@ -331,12 +430,12 @@ export async function approveClearance(req, res, next) {
     const updated = await prisma.$transaction(async (tx) => {
       await tx.exitClearance.update({
         where: { id: row.id },
-        data: cleared
+        data: rowCleared
           ? {
               status: 'CLEARED',
-              remarks: remarks || null,
-              fileUrl: fileUrl || null,
-              fileName: fileName || null,
+              remarks: remarks || row.remarks || null,
+              fileUrl: fileUrl || row.fileUrl || null,
+              fileName: fileName || row.fileName || null,
               actedById: req.user.id,
               actedByName: actorName,
               actedAt: now,
@@ -345,23 +444,33 @@ export async function approveClearance(req, res, next) {
             }
           : {
               status: 'PENDING',
-              actedById: null,
-              actedByName: null,
-              actedAt: null,
-              onBehalf: false,
-              onBehalfReason: null,
+              remarks: remarks || row.remarks || null,
+              fileUrl: fileUrl || row.fileUrl || null,
+              fileName: fileName || row.fileName || null,
+              actedById: req.user.id,
+              actedByName: actorName,
+              actedAt: now,
+              onBehalf: perm.onBehalf,
+              onBehalfReason: perm.onBehalf ? onBehalfReason : null,
             },
       });
+
+      const eventAction = normalizedSubStep
+        ? `${normalizedSubStep.toUpperCase()}_${cleared ? 'CLEARED' : 'REVOKED'}`
+        : (cleared ? 'CLEARED' : 'REVOKED');
+
       await tx.exitClearanceEvent.create({
         data: {
           tenantId: req.tenantId,
           clearanceId: row.id,
-          action: cleared ? 'CLEARED' : 'REVOKED',
+          action: eventAction,
           actorId: req.user.id,
           actorName,
           onBehalf: perm.onBehalf,
           reason: perm.onBehalf ? onBehalfReason : null,
-          remarks: remarks || null,
+          remarks: normalizedSubStep
+            ? `[${normalizedSubStep === 'pre_handover' ? 'Pre-Handover' : 'Post-Handover'}] ${remarks || ''}`.trim()
+            : (remarks || null),
         },
       });
       return tx.exitDetails.update({
@@ -373,19 +482,36 @@ export async function approveClearance(req, res, next) {
     emitToTenant(req.tenantId, 'exit_clearance_updated', {
       exitDetailsId: id,
       department,
-      cleared,
+      subStep: normalizedSubStep,
+      cleared: rowCleared,
+      subStepCleared: cleared,
       allCleared,
       remarks: remarks || '',
       fileUrl: fileUrl || null,
       fileName: fileName || null,
+      actedByName: actorName,
+      actedAt: now,
     });
+
+    const subStepLabel = normalizedSubStep === 'pre_handover'
+      ? 'Pre-Handover'
+      : normalizedSubStep === 'post_handover'
+      ? 'Post-Handover'
+      : null;
+
+    const actionMsg = subStepLabel
+      ? `${row.label} (${subStepLabel}) clearance ${cleared ? 'approved' : 'revoked'}`
+      : `${row.label} clearance ${cleared ? 'approved' : 'revoked'}`;
 
     res.json({
       message: allCleared
         ? 'All departments cleared! Ready for final exit completion.'
-        : `${row.label} clearance ${cleared ? 'approved' : 'revoked'}`,
+        : actionMsg,
       exitDetails: updated,
       clearanceDetails: remarksObj.clearances || {},
+      department,
+      subStep: normalizedSubStep,
+      cleared: rowCleared,
       allCleared,
     });
   } catch (err) {
@@ -1122,9 +1248,28 @@ export async function sendExitDocuments(req, res, next) {
     // rows so every clearance an exit has is covered.
     const [withRows] = await ensureClearanceRows([exitDetails]);
     const clearanceRows = [...withRows.clearances].sort((a, b) => a.sortOrder - b.sortOrder);
-    const clearanceFiles = clearanceRows
-      .filter((c) => c.fileUrl)
-      .map((c) => ({ dept: c.label, fileName: c.fileName || `${c.key}_clearance_slip.pdf`, url: c.fileUrl }));
+    const clearanceFiles = [];
+    clearanceRows.forEach((c) => {
+      if (c.key === 'manager') {
+        const mgrSub = resolveManagerSubSteps(c, exitDetails);
+        mgrSub.subSteps.forEach((s) => {
+          if (s.fileUrl) {
+            clearanceFiles.push({
+              dept: `${c.label} (${s.label})`,
+              fileName: s.fileName || `${s.key}_clearance_slip.pdf`,
+              url: s.fileUrl,
+            });
+          }
+        });
+      }
+      if (c.fileUrl && (c.key !== 'manager' || !clearanceFiles.some((f) => f.url === c.fileUrl))) {
+        clearanceFiles.push({
+          dept: c.label,
+          fileName: c.fileName || `${c.key}_clearance_slip.pdf`,
+          url: c.fileUrl,
+        });
+      }
+    });
     const pendingClearances = clearanceRows.filter((c) => c.status !== 'CLEARED').map((c) => c.label);
 
     // Absolute links: an email has no app to resolve "/uploads/..." against.

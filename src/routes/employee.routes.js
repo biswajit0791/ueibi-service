@@ -31,6 +31,10 @@ import {
   requestTenantLicenses,
   payAndAddLicenses,
   rejectLicenseRequest,
+  getRetractionQuote,
+  retractLicenses,
+  getWalletSummary,
+  renewTenantSubscription,
 } from '../controllers/employee.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
@@ -51,6 +55,12 @@ router.post('/employees/request-license', requireAuth, requireTenant, authorize(
 router.post('/employees/pay-license', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'FINANCE', 'CMD'), payAndAddLicenses);
 router.post('/employees/reject-license-request', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'FINANCE', 'CMD'), rejectLicenseRequest);
 router.post('/employees/add-license', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'FINANCE', 'CMD'), addTenantLicenses);
+// License Retraction, Wallet Credit & Renewal Redemption
+router.get('/employees/license-retraction-quote', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'FINANCE', 'CMD'), getRetractionQuote);
+router.post('/employees/retract-licenses', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'FINANCE', 'CMD'), retractLicenses);
+router.get('/employees/wallet', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'FINANCE', 'CMD'), getWalletSummary);
+router.post('/employees/renew-subscription', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'FINANCE', 'CMD'), renewTenantSubscription);
+
 
 // Stats & Handover Status — must be registered BEFORE /:id to avoid route collision
 router.get('/employees/stats', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'MANAGER', 'FINANCE'), getEmployeeStats);
