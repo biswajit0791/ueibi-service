@@ -37,18 +37,21 @@ export const LEGACY_KEYS = ['it', 'hr', 'finance', 'manager'];
 
 /**
  * Enterprise Exit Clearance Sequence:
- * 1. Reporting Manager -> 2. IT Department -> 3. HR -> 4. Finance -> 5. Product Department
+ * 1. Reporting Manager -> 2. IT Department -> 3. Product Department -> 4. HR -> 5. Finance
+ *
+ * Finance is last because full-and-final settlement often lands 15-45 days
+ * after the exit date; access can be blocked before it (see accessBlockStatus).
  */
 export const CLEARANCE_SEQUENCE = [
   { key: 'manager', label: 'Reporting Manager', sortOrder: 1, stepNumber: 1 },
   { key: 'it', label: 'IT Department', sortOrder: 2, stepNumber: 2 },
-  { key: 'hr', label: 'HR', sortOrder: 3, stepNumber: 3 },
-  { key: 'finance', label: 'Finance', sortOrder: 4, stepNumber: 4 },
-  { key: 'product', label: 'Product Department', sortOrder: 5, stepNumber: 5 },
+  { key: 'product', label: 'Product Department', sortOrder: 3, stepNumber: 3 },
+  { key: 'hr', label: 'HR', sortOrder: 4, stepNumber: 4 },
+  { key: 'finance', label: 'Finance', sortOrder: 5, stepNumber: 5 },
 ];
 
 export const BASE_CLEARANCES = CLEARANCE_SEQUENCE;
-export const SEQUENCE_ORDER = ['manager', 'it', 'hr', 'finance', 'product'];
+export const SEQUENCE_ORDER = CLEARANCE_SEQUENCE.map((c) => c.key);
 
 /**
  * Sub-steps under Reporting Manager clearance:
@@ -174,7 +177,7 @@ export function resolveManagerSubSteps(row, exit) {
 
 /**
  * Rows for a newly initiated exit following the 5-step clearance sequence:
- * 1. Reporting Manager -> 2. IT Department -> 3. HR -> 4. Finance -> 5. Product Department
+ * 1. Reporting Manager -> 2. IT Department -> 3. Product Department -> 4. HR -> 5. Finance
  *
  * @param {import('@prisma/client').Prisma.TransactionClient} tx
  * @param {{ id: string, tenantId: string }} exit
@@ -247,7 +250,7 @@ export async function ensureClearanceRows(exits) {
     }
 
     // Synchronize sortOrder and label to adhere strictly to the sequence:
-    // 1. Manager -> 2. IT -> 3. HR -> 4. Finance -> 5. Product
+    // 1. Manager -> 2. IT -> 3. Product -> 4. HR -> 5. Finance
     for (const base of BASE_CLEARANCES) {
       const match = existing.find((c) => c.key === base.key);
       if (match && (match.sortOrder !== base.sortOrder || match.label !== base.label)) {
@@ -437,7 +440,7 @@ export function presentClearance(row, exit, user, ctx) {
 
   const cleared = isFullyCleared;
 
-  // Sequence verification: 1. Manager -> 2. IT -> 3. HR -> 4. Finance -> 5. Product
+  // Sequence verification: 1. Manager -> 2. IT -> 3. Product -> 4. HR -> 5. Finance
   const targetSeqIdx = SEQUENCE_ORDER.indexOf(row.key);
   let isSequenceBlocked = false;
   let waitingOnPredecessor = null;
@@ -504,4 +507,23 @@ export function progressOf(clearances) {
   const total = clearances.length;
   const completed = clearances.filter((c) => c.cleared).length;
   return { total, completed, percentage: total ? Math.round((completed / total) * 100) : 0 };
+}
+
+/**
+ * Can the employee's access be blocked (and their license released) while
+ * Finance is still settling? Every clearance except Finance must be done.
+ *
+ * @param {object} exit - ExitDetails row
+ * @param {Array<{ key: string, label: string, cleared: boolean }>} clearances - presented clearances
+ */
+export function accessBlockStatus(exit, clearances) {
+  const blockedAt = exit?.accessBlockedAt || null;
+  const pending = clearances.filter((c) => c.key !== 'finance' && !c.cleared).map((c) => c.label);
+  return {
+    blocked: !!blockedAt,
+    blockedAt,
+    blockedBy: exit?.accessBlockedBy || null,
+    eligible: !blockedAt && exit?.exitStatus !== 'COMPLETED' && pending.length === 0,
+    pendingBeforeBlock: pending,
+  };
 }

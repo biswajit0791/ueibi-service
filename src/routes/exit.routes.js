@@ -8,6 +8,7 @@ import {
   listPendingExits,
   listMyClearanceInbox,
   completeExit,
+  blockExitAccess,
   generateCertificate,
   sendExitDocuments,
 } from '../controllers/exit.controller.js';
@@ -45,6 +46,9 @@ router.patch('/exit/:id/clearance', requireAuth, requireTenant, authorize('SUPER
 
 // Complete exit (finalize — mark EXITED, free license, archive)
 router.post('/exit/:id/complete', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'FINANCE'), completeExit);
+
+// Block login + release license once every clearance except Finance is done
+router.post('/exit/:id/block-access', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR'), blockExitAccess);
 
 // Generate certificate (relieving / service / termination)
 router.post('/exit/:id/certificate/:type', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'FINANCE'), generateCertificate);

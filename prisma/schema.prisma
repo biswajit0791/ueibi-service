@@ -429,7 +429,12 @@ model ExitDetails {
   managerCleared   Boolean   @default(false)
   managerClearedAt DateTime?
   managerClearedBy String?
-  settlementStatus String    @default("PENDING") // PENDING | COMPLETED
+  settlementStatus String    @default("PENDING") // PENDING | COMPLETED — follows the Finance clearance
+
+  // Login blocked and license released before Finance clearance (full-and-final
+  // settlement) completes. The user is EXITED from this point; the exit stays open.
+  accessBlockedAt DateTime?
+  accessBlockedBy String?
 
   // Generated Certificates
   relievingLetterUrl    String?
