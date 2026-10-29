@@ -51,6 +51,7 @@ export const DASHBOARD_VISIBILITY = {
   // the `|| ['EMPLOYEE']` fallback below would otherwise hand an unrecognised
   // role the employee dashboard.
   PLATFORM_OWNER: [],
+  PLATFORM_SALES: [],
 };
 
 /**
@@ -75,7 +76,7 @@ export function normalizeRole(role) {
   // Returned before the CMD/DIRECTOR/OWNER alias line below, which would
   // otherwise be a trap: 'OWNER' maps to SUPER_ADMIN, and anything resembling
   // it must not pick up company-wide dashboard visibility by accident.
-  if (r === 'PLATFORM_OWNER') return 'PLATFORM_OWNER';
+  if (r === 'PLATFORM_OWNER' || r === 'PLATFORM_SALES') return r;
   if (r === 'CMD' || r === 'DIRECTOR' || r === 'LEADERSHIP' || r === 'OWNER') return 'SUPER_ADMIN';
   if (r === 'STUDENT' || r === 'MENTOR') return 'EMPLOYEE';
   return r;

@@ -640,7 +640,7 @@ export async function listPlatformUsers(req, res, next) {
     const where = {
       // The platform's own operators are not "users of the platform" in this
       // sense, and listing them here invites managing them here.
-      role: { not: 'PLATFORM_OWNER' },
+      role: { notIn: ['PLATFORM_OWNER', 'PLATFORM_SALES'] },
       ...(includeDeleted ? {} : { isDeleted: false }),
       ...(tenantId ? { tenantId } : {}),
       ...(role ? { role } : {}),
@@ -1602,7 +1602,7 @@ export async function listPlatformEmployeeVerifications(req, res, next) {
     const skip = (pageNum - 1) * limitNum;
 
     const baseWhere = {
-      role: { not: 'PLATFORM_OWNER' },
+      role: { notIn: ['PLATFORM_OWNER', 'PLATFORM_SALES'] },
       isDeleted: false,
     };
 
@@ -1640,11 +1640,11 @@ export async function listPlatformEmployeeVerifications(req, res, next) {
     // Counts for stats summary cards
     const [totalAll, pendingUeibiCount, pendingHrCount, verifiedCount] = await Promise.all([
       prisma.tenantUser.count({
-        where: { role: { not: 'PLATFORM_OWNER' }, isDeleted: false, ...(tenantId ? { tenantId } : {}) },
+        where: { role: { notIn: ['PLATFORM_OWNER', 'PLATFORM_SALES'] }, isDeleted: false, ...(tenantId ? { tenantId } : {}) },
       }),
       prisma.tenantUser.count({
         where: {
-          role: { not: 'PLATFORM_OWNER' },
+          role: { notIn: ['PLATFORM_OWNER', 'PLATFORM_SALES'] },
           isDeleted: false,
           verificationStatus: 'PENDING_UEIBI',
           ...(tenantId ? { tenantId } : {}),
@@ -1652,7 +1652,7 @@ export async function listPlatformEmployeeVerifications(req, res, next) {
       }),
       prisma.tenantUser.count({
         where: {
-          role: { not: 'PLATFORM_OWNER' },
+          role: { notIn: ['PLATFORM_OWNER', 'PLATFORM_SALES'] },
           isDeleted: false,
           verificationStatus: 'PENDING_HR',
           ...(tenantId ? { tenantId } : {}),
@@ -1660,7 +1660,7 @@ export async function listPlatformEmployeeVerifications(req, res, next) {
       }),
       prisma.tenantUser.count({
         where: {
-          role: { not: 'PLATFORM_OWNER' },
+          role: { notIn: ['PLATFORM_OWNER', 'PLATFORM_SALES'] },
           isDeleted: false,
           OR: [{ verificationStatus: 'VERIFIED' }, { isVerified: true }],
           ...(tenantId ? { tenantId } : {}),

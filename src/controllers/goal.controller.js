@@ -244,7 +244,7 @@ export async function getEligibleGoalOwners(req, res, next) {
         tenantId,
         status: 'ACTIVE',
         isDeleted: false,
-        role: { not: 'PLATFORM_OWNER' },
+        role: { notIn: ['PLATFORM_OWNER', 'PLATFORM_SALES'] },
       },
       select: {
         id: true,
@@ -264,7 +264,7 @@ export async function getEligibleGoalOwners(req, res, next) {
     // Rule: "An employee cannot be the Goal Owner of a goal."
     // Non-eligible roles for Goal Owner: EMPLOYEE, STUDENT, PLATFORM_OWNER
     const eligibleRoleOwners = allUsers.filter(
-      (u) => !['EMPLOYEE', 'STUDENT', 'PLATFORM_OWNER'].includes(String(u.role || '').toUpperCase())
+      (u) => !['EMPLOYEE', 'STUDENT', 'PLATFORM_OWNER', 'PLATFORM_SALES'].includes(String(u.role || '').toUpperCase())
     );
 
     // Build upline chain for currentUser (managers going up to top)
@@ -431,7 +431,7 @@ export async function createGoal(req, res, next) {
         tenantId: req.tenantId,
         status: 'ACTIVE',
         isDeleted: false,
-        role: { not: 'PLATFORM_OWNER' },
+        role: { notIn: ['PLATFORM_OWNER', 'PLATFORM_SALES'] },
       },
       select: { id: true, name: true, email: true, role: true, department: true, designation: true },
     });
@@ -1253,7 +1253,7 @@ export async function updateGoal(req, res, next) {
           tenantId: req.tenantId,
           status: 'ACTIVE',
           isDeleted: false,
-          role: { not: 'PLATFORM_OWNER' },
+          role: { notIn: ['PLATFORM_OWNER', 'PLATFORM_SALES'] },
         },
         select: { id: true, name: true, email: true, role: true, department: true, designation: true },
       });
