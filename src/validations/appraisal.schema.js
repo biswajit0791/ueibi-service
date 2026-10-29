@@ -76,6 +76,13 @@ export const updateParameterSchema = z.object({
 
 // ── Self Assessment ───────────────────────────────────────────────────────────
 
+// Employee self-rating: 1 to 5 in steps of 0.5 (1, 1.5, 2 … 5).
+const halfStepRating = z
+  .number()
+  .min(1, 'Rating must be at least 1')
+  .max(5, 'Rating cannot exceed 5')
+  .refine((v) => Number.isInteger(v * 2), 'Rating must be in steps of 0.5 (e.g. 3 or 3.5)');
+
 export const selfAssessmentSchema = z.object({
   selfAccomplishments: z
     .string()
@@ -85,6 +92,7 @@ export const selfAssessmentSchema = z.object({
     .string()
     .max(5000, 'Weaknesses must be under 5000 characters')
     .optional(),
+  // The overall figure is the average of the half-step scores, so it is not itself half-step.
   selfRating: z
     .number()
     .min(1, 'Rating must be at least 1')
@@ -95,7 +103,7 @@ export const selfAssessmentSchema = z.object({
     .array(
       z.object({
         parameterId: z.string().min(1, 'Parameter ID is required'),
-        selfScore:   z.number().min(1).max(5),
+        selfScore:   halfStepRating,
       })
     )
     .optional(),
@@ -117,8 +125,8 @@ export const submitSelfRatingSchema = z.object({
     .array(
       z.object({
         parameterId: z.string().min(1, 'Parameter ID is required'),
-        selfScore:   z.number().min(1).max(5).optional(),
-        score:       z.number().min(1).max(5).optional(),
+        selfScore:   halfStepRating.optional(),
+        score:       halfStepRating.optional(),
       })
     )
     .optional(),
