@@ -50,6 +50,8 @@ import {
   progressOf,
   resolveManagerSubSteps,
   accessBlockStatus,
+  documentsUnlocked,
+  documentsLockedReason,
 } from '../services/exitClearance.service.js';
 import { publicUploadUrl, buildAttachments } from '../lib/publicFiles.js';
 
@@ -589,6 +591,7 @@ export async function getExitStatus(req, res, next) {
       },
       progress: progressOf(clearances),
       accessBlock: accessBlockStatus(exitDetails, clearances),
+      documentsUnlocked: documentsUnlocked(exitDetails, _rows),
     });
   } catch (err) {
     next(err);
@@ -656,6 +659,7 @@ function toListItem(exit, clearances) {
     },
     clearanceProgress: progressOf(clearances),
     accessBlock: accessBlockStatus(exit, clearances),
+    documentsUnlocked: documentsUnlocked(exit, _rows),
   };
 }
 
@@ -1030,6 +1034,11 @@ export async function generateCertificate(req, res, next) {
       return res.status(404).json({ error: 'Exit record not found' });
     }
 
+    const lockedReason = await documentsLockedReason(exitDetails.id, req.tenantId);
+    if (lockedReason) {
+      return res.status(409).json({ error: lockedReason, code: 'DOCUMENTS_LOCKED' });
+    }
+
     const employee = exitDetails.user;
     const companyName = employee?.tenant?.companyName || 'UEIBI Organization';
 
@@ -1238,6 +1247,11 @@ export async function sendExitDocuments(req, res, next) {
 
     if (!exitDetails) {
       return res.status(404).json({ error: 'Exit record not found' });
+    }
+
+    const lockedReason = await documentsLockedReason(exitDetails.id, req.tenantId);
+    if (lockedReason) {
+      return res.status(409).json({ error: lockedReason, code: 'DOCUMENTS_LOCKED' });
     }
 
     const employee = exitDetails.user;

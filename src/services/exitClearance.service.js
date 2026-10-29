@@ -527,3 +527,29 @@ export function accessBlockStatus(exit, clearances) {
     pendingBeforeBlock: pending,
   };
 }
+
+/**
+ * Separation documents (relieving letter, service certificate, ref-check,
+ * termination letter) and the "send documents" email unlock once HR has
+ * cleared — Finance may still be settling. Completed exits are always unlocked.
+ *
+ * @param {object} exit - ExitDetails row
+ * @param {Array<{ key: string, status: string }>} clearanceRows - ExitClearance rows
+ */
+export function documentsUnlocked(exit, clearanceRows) {
+  if (exit?.exitStatus === 'COMPLETED') return true;
+  return (clearanceRows || []).some((c) => c.key === 'hr' && c.status === 'CLEARED');
+}
+
+/**
+ * Loads the exit and returns an error message when its documents are still
+ * locked, or null when they may be generated / sent.
+ */
+export async function documentsLockedReason(exitId, tenantId) {
+  const exit = await prisma.exitDetails.findFirst({ where: { id: exitId, tenantId }, include: { clearances: true } });
+  if (!exit) return null; // callers report their own 404
+  const [withRows] = await ensureClearanceRows([exit]);
+  return documentsUnlocked(withRows, withRows.clearances)
+    ? null
+    : 'Separation documents are available after HR clearance is completed.';
+}
