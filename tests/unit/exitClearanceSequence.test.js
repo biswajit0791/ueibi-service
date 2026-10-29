@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { SEQUENCE_ORDER, CLEARANCE_SEQUENCE, accessBlockStatus } from '../../src/services/exitClearance.service.js';
+import { SEQUENCE_ORDER, CLEARANCE_SEQUENCE, accessBlockStatus, documentsUnlocked } from '../../src/services/exitClearance.service.js';
 
 const cl = (key, cleared) => ({ key, label: CLEARANCE_SEQUENCE.find((c) => c.key === key)?.label || key, cleared });
 
@@ -35,4 +35,14 @@ test('already blocked or completed exits are not eligible again', () => {
   assert.equal(blocked.eligible, false);
   assert.equal(blocked.blockedBy, 'HR Admin');
   assert.equal(accessBlockStatus({ exitStatus: 'COMPLETED' }, all).eligible, false);
+});
+
+test('separation documents unlock once HR has cleared, even with Finance pending', () => {
+  const rows = (hr, finance) => [
+    { key: 'manager', status: 'CLEARED' }, { key: 'it', status: 'CLEARED' }, { key: 'product', status: 'CLEARED' },
+    { key: 'hr', status: hr }, { key: 'finance', status: finance },
+  ];
+  assert.equal(documentsUnlocked({ exitStatus: 'PENDING_CLEARANCE' }, rows('PENDING', 'PENDING')), false);
+  assert.equal(documentsUnlocked({ exitStatus: 'PENDING_CLEARANCE' }, rows('CLEARED', 'PENDING')), true);
+  assert.equal(documentsUnlocked({ exitStatus: 'COMPLETED' }, rows('PENDING', 'PENDING')), true);
 });

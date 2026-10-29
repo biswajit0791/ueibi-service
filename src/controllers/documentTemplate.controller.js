@@ -10,6 +10,7 @@ import * as templateService from '../services/documentTemplate.service.js';
 import * as tokenService from '../services/documentToken.service.js';
 import * as rendererService from '../services/documentRenderer.service.js';
 import * as schemas from '../validations/documentTemplate.schema.js';
+import { documentsLockedReason } from '../services/exitClearance.service.js';
 
 /**
  * List all templates for the tenant with optional filtering.
@@ -484,6 +485,14 @@ export async function generateDocument(req, res, next) {
     } = parsed.data;
 
     const normalizedDocType = String(documentType || 'RELIEVING_LETTER').toUpperCase();
+
+    // Exit documents unlock after HR clearance (Finance may still be pending).
+    if (exitDetailsId) {
+      const lockedReason = await documentsLockedReason(exitDetailsId, req.tenantId);
+      if (lockedReason) {
+        return res.status(409).json({ error: lockedReason, code: 'DOCUMENTS_LOCKED' });
+      }
+    }
 
     let safeOverrides = manualOverrides || {};
     if (typeof safeOverrides === 'string') {
