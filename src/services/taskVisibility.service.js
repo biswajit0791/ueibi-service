@@ -19,12 +19,21 @@ import { goalService } from './goal.service.js';
 export async function visibleTaskWhere({ user, tenantId, employeeId, fy }) {
   const targetEmployeeId = employeeId || user.id;
   const callerRole = String(user.role || '').toUpperCase();
-  const isElevated = hasRole(user.role, ELEVATED_ROLES);
+  // Only SUPER_ADMIN, ADMIN, CMD have elevated company-wide task access; HR is restricted to personal tasks
+  const isElevated = hasRole(user.role, ELEVATED_ROLES) && callerRole !== 'HR';
 
-  // A regular employee only ever sees their own tasks.
-  if (callerRole === 'EMPLOYEE' && !isElevated) {
+  // A regular employee or HR user only ever sees their own personal tasks.
+  // Other employees' Task Boards are hidden from HR users; HR can only access/view their own personal Task Board.
+  if ((callerRole === 'EMPLOYEE' && !isElevated) || callerRole === 'HR') {
     if (targetEmployeeId !== 'all' && targetEmployeeId !== user.id) {
-      return { error: { status: 403, message: 'Access forbidden: employees can only view their own tasks' } };
+      return {
+        error: {
+          status: 403,
+          message: callerRole === 'HR'
+            ? 'Access forbidden: HR users can only view their own personal Task Board'
+            : 'Access forbidden: employees can only view their own tasks',
+        },
+      };
     }
     return {
       where: {
