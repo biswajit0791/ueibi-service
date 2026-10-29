@@ -279,6 +279,54 @@ export function calculateRemainingMonths(renewalDate, referenceDate = new Date()
   return Math.min(12, Math.max(1, months));
 }
 
+/** Per-seat annual price used only when nothing the company actually paid is on record. */
+export const DEFAULT_ANNUAL_UNIT_PRICE = 499.00;
+
+/**
+ * The company's current annual licence term — the one place every licence
+ * calculation (stats, pro-rata purchase, retraction credit, renewal) gets its
+ * dates from, so they cannot disagree.
+ *
+ *   1. The subscription in force, while its end date is in the future.
+ *   2. Otherwise tenant.planEndsAt, while in the future (term = the 12 months before it).
+ *   3. Otherwise the current anniversary cycle from the original start, e.g.
+ *      bought January 2025 → renews January 2026 → January 2027 …
+ *
+ * remainingMonths counts the current month as remaining (month-level billing):
+ * a top-up in August against a January renewal pays for Aug–Dec (5), and
+ * licences returned in May against a January renewal are credited for May–Dec (8).
+ */
+export function resolveLicenseTerm({ subscriptionStartsAt, subscriptionEndsAt, planEndsAt, tenantCreatedAt } = {}, now = new Date()) {
+  const future = (d) => d && !Number.isNaN(new Date(d).getTime()) && new Date(d) > now;
+  let startsAt;
+  let endsAt;
+  if (future(subscriptionEndsAt)) {
+    endsAt = new Date(subscriptionEndsAt);
+    startsAt = subscriptionStartsAt ? new Date(subscriptionStartsAt) : addMonths(endsAt, -12);
+  } else if (future(planEndsAt)) {
+    endsAt = new Date(planEndsAt);
+    startsAt = addMonths(endsAt, -12);
+  } else {
+    const cycle = calculateAnnualCycle(subscriptionStartsAt || planEndsAt || tenantCreatedAt || now, now);
+    startsAt = cycle.startsAt;
+    endsAt = cycle.endsAt;
+  }
+  return { startsAt, endsAt, remainingMonths: calculateRemainingMonths(endsAt, now) };
+}
+
+/**
+ * The full-year price per seat the company actually pays: the price on the
+ * term's own invoice (a snapshot, so a later package reprice does not change
+ * what is credited back), then the package price, then the default.
+ */
+export function resolveAnnualUnitPrice({ invoiceUnitPrice, packageUnitPrice } = {}) {
+  for (const v of [invoiceUnitPrice, packageUnitPrice]) {
+    const n = num(v);
+    if (n > 0) return round2(n);
+  }
+  return DEFAULT_ANNUAL_UNIT_PRICE;
+}
+
 /**
  * Calculates pro-rata pricing for additional licenses purchased during the billing year.
  * Licenses purchased mid-cycle are charged ONLY for the remaining months in the billing year.

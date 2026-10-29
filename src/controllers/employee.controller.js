@@ -35,10 +35,9 @@ import {
   calculateLicenseRetractionQuote,
   retractUnusedLicenses,
   getTenantWalletSummary,
+  getLicenseTerm,
 } from '../services/license.service.js';
 import {
-  calculateAnnualCycle,
-  calculateRemainingMonths,
   calculateProRataLicensePrice,
   addMonths,
   round2,
@@ -1063,21 +1062,10 @@ export async function requestTenantLicenses(req, res, next) {
       return res.status(400).json({ error: 'Please specify at least 1 license seat to request.' });
     }
 
-    const tenant = await prisma.tenant.findUnique({
-      where: { id: tenantId },
-      select: { id: true, planEndsAt: true, createdAt: true },
-    });
-
-    const now = new Date();
-    let effectiveEndsAt = tenant?.planEndsAt;
-    if (!effectiveEndsAt || new Date(effectiveEndsAt) < now) {
-      const cycle = calculateAnnualCycle(tenant?.planEndsAt || tenant?.createdAt || now, now);
-      effectiveEndsAt = cycle.endsAt;
-    }
-
-    const remainingMonths = calculateRemainingMonths(effectiveEndsAt, now);
+    // Additional licences are charged only for the months left in the annual term.
+    const { remainingMonths, annualUnitPrice } = await getLicenseTerm(tenantId);
     const pricing = calculateProRataLicensePrice({
-      annualUnitPrice: 499.00,
+      annualUnitPrice,
       remainingMonths,
       seats,
       taxRate: 0.18,
@@ -1165,14 +1153,10 @@ export async function payAndAddLicenses(req, res, next) {
     }
 
     const now = new Date();
-    // Annual cycle: ensure tenant has a fixed annual renewal date
-    let effectiveEndsAt = tenant.planEndsAt;
-    if (!effectiveEndsAt || new Date(effectiveEndsAt) < now) {
-      const annualCycle = calculateAnnualCycle(tenant.planEndsAt || tenant.createdAt || now, now);
-      effectiveEndsAt = annualCycle.endsAt;
-    }
-
-    const remainingMonths = calculateRemainingMonths(effectiveEndsAt, now);
+    // Annual cycle: added seats co-terminate with the current annual term.
+    const term = await getLicenseTerm(tenantId, { now });
+    const effectiveEndsAt = term.endsAt;
+    const { remainingMonths, annualUnitPrice } = term;
 
     if (requestId) {
       targetRequest = await prisma.licenseRequest.findUnique({
@@ -1210,7 +1194,7 @@ export async function payAndAddLicenses(req, res, next) {
 
       additionalSeats = seats;
       const pricing = calculateProRataLicensePrice({
-        annualUnitPrice: 499.00,
+        annualUnitPrice,
         remainingMonths,
         seats: additionalSeats,
         taxRate: 0.18,
@@ -1268,7 +1252,7 @@ export async function payAndAddLicenses(req, res, next) {
           packageName: `${newLimit} Licenses (Annual)`,
           seatCount: newLimit,
           state: 'ACTIVE',
-          startsAt: tenant.createdAt || now,
+          startsAt: term.startsAt,
           endsAt: effectiveEndsAt,
         },
       });
@@ -1283,7 +1267,7 @@ export async function payAndAddLicenses(req, res, next) {
       const invoiceNumber = `INV-${new Date().getFullYear()}-${String(invCount + 1).padStart(5, '0')}`;
       const effectiveUnitPrice = targetRequest?.unitPrice
         ? Number(targetRequest.unitPrice)
-        : (totalPaid ? Math.round((totalPaid / (additionalSeats * 1.18)) * 100) / 100 : 499.00);
+        : (totalPaid ? Math.round((totalPaid / (additionalSeats * 1.18)) * 100) / 100 : annualUnitPrice);
       const subtotal = Math.round(additionalSeats * effectiveUnitPrice * 100) / 100;
       const gst = Math.round(subtotal * 0.18 * 100) / 100;
       const total = totalPaid || (subtotal + gst);
@@ -3026,7 +3010,8 @@ export async function renewTenantSubscription(req, res, next) {
 
     const activeSub = tenant.subscriptions?.[0] || null;
     const seatCount = Math.max(tenant.licenseLimit || 10, activeCount);
-    const annualUnitPrice = 499.00;
+    // Renew at the price of the term being renewed; wallet credit is applied below.
+    const { annualUnitPrice } = await getLicenseTerm(tenantId, { now });
     const subtotal = round2(seatCount * annualUnitPrice);
     const gstRate = 0.18;
     const gstAmount = round2(subtotal * gstRate);
