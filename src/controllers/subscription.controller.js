@@ -27,6 +27,23 @@ import {
 } from '../validations/billing.schema.js';
 import { tenantIdParamSchema } from '../validations/platform.schema.js';
 import { recordPlatformAction, PLATFORM_ACTIONS } from '../services/platformAudit.service.js';
+import { isPlatformSales } from '../lib/roles.js';
+
+/**
+ * Platform Sales/BD sells at the package price and discounts only through a
+ * coupon the owner created, and every term they start must be invoiced.
+ * Returns an error message, or null when the request is allowed.
+ */
+function salesTermRestriction(user, { unitPrice, createInvoice }) {
+  if (!isPlatformSales(user?.role)) return null;
+  if (unitPrice != null) {
+    return 'Sales cannot set a custom price. Sell at the package price and apply a coupon for any discount.';
+  }
+  if (createInvoice === false) {
+    return 'Sales cannot start or renew a term without raising its invoice.';
+  }
+  return null;
+}
 
 const SUBSCRIPTION_SELECT = {
   id: true, tenantId: true, packageId: true, packageName: true, seatCount: true,
@@ -284,6 +301,8 @@ export async function startSubscription(req, res, next) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
     const { packageId, startsAt, seatCount, unitPrice, couponCode, createInvoice } = parsed.data;
+    const salesBlock = salesTermRestriction(req.user, { unitPrice, createInvoice });
+    if (salesBlock) return res.status(403).json({ error: salesBlock, code: 'SALES_RESTRICTED' });
 
     const tenant = await loadBillableTenant(res, parsedParams.data.id);
     if (!tenant) return null;
@@ -408,6 +427,8 @@ export async function renewSubscription(req, res, next) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
     const data = parsed.data;
+    const salesBlock = salesTermRestriction(req.user, data);
+    if (salesBlock) return res.status(403).json({ error: salesBlock, code: 'SALES_RESTRICTED' });
 
     const current = await prisma.subscription.findUnique({
       where: { id: parsedParams.data.id },

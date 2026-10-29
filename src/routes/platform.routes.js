@@ -30,7 +30,8 @@ import {
   resetBranding,
 } from '../controllers/platformBranding.controller.js';
 import { requireAuth } from '../middleware/auth.js';
-import { requirePlatformOwner } from '../middleware/rbac.js';
+import { requirePlatformOwner, requirePlatformStaff } from '../middleware/rbac.js';
+import { listPlatformStaff, createPlatformStaff } from '../controllers/platformStaff.controller.js';
 
 const router = Router();
 
@@ -46,11 +47,11 @@ router.get('/platform/overview', requireAuth, requirePlatformOwner, getPlatformO
 // Computed on every request, never stored: nothing in this product expires on
 // its own, so an alert is a prompt to act rather than a record of an event.
 router.get('/platform/alerts', requireAuth, requirePlatformOwner, getPlatformAlerts);
-router.get('/platform/tenants', requireAuth, requirePlatformOwner, listPlatformTenants);
+router.get('/platform/tenants', requireAuth, requirePlatformStaff, listPlatformTenants);
 
 // Lifecycle. Every mutation writes a PlatformAuditLog row in the same
 // transaction as the change itself.
-router.get('/platform/tenants/:id', requireAuth, requirePlatformOwner, getPlatformTenant);
+router.get('/platform/tenants/:id', requireAuth, requirePlatformStaff, getPlatformTenant);
 router.post('/platform/tenants/:id/lifecycle', requireAuth, requirePlatformOwner, setTenantLifecycle);
 router.patch('/platform/tenants/:id/licences', requireAuth, requirePlatformOwner, updateTenantLicences);
 router.post('/platform/tenants/:id/suspend', requireAuth, requirePlatformOwner, suspendTenant);
@@ -58,6 +59,9 @@ router.post('/platform/tenants/:id/restore', requireAuth, requirePlatformOwner, 
 
 // Global user management — the only cross-tenant view of users. Identity and
 // account state only; no company record is returned.
+// Platform Sales/BD staff — owner only; only PLATFORM_SALES can be created.
+router.get('/platform/staff', requireAuth, requirePlatformOwner, listPlatformStaff);
+router.post('/platform/staff', requireAuth, requirePlatformOwner, createPlatformStaff);
 router.get('/platform/users', requireAuth, requirePlatformOwner, listPlatformUsers);
 router.get('/platform/users/:id', requireAuth, requirePlatformOwner, getPlatformUser);
 router.post('/platform/users/:id/deactivate', requireAuth, requirePlatformOwner, deactivatePlatformUser);
@@ -73,8 +77,8 @@ router.post('/platform/employee-verifications/:id/submit-to-hr', requireAuth, re
 // Onboarding queue and verification review — both read CompanyRegistration.
 // Neither can advance a registration: approval stays with the emailed action
 // links, which is the path live companies are onboarding through right now.
-router.get('/platform/registrations', requireAuth, requirePlatformOwner, listOnboarding);
-router.get('/platform/registrations/:id', requireAuth, requirePlatformOwner, getOnboarding);
+router.get('/platform/registrations', requireAuth, requirePlatformStaff, listOnboarding);
+router.get('/platform/registrations/:id', requireAuth, requirePlatformStaff, getOnboarding);
 router.post('/platform/registrations/:id/resend', requireAuth, requirePlatformOwner, resendOnboardingLink);
 router.get('/platform/registrations/:id/verification', requireAuth, requirePlatformOwner, getRegistrationVerification);
 router.post('/platform/registrations/:id/verify', requireAuth, requirePlatformOwner, verifyRegistration);

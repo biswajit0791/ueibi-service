@@ -39,7 +39,7 @@ import {
 } from '../controllers/invoiceTemplate.controller.js';
 import { getSettings, updateSettings } from '../controllers/invoiceSettings.controller.js';
 import { requireAuth } from '../middleware/auth.js';
-import { requirePlatformOwner } from '../middleware/rbac.js';
+import { requirePlatformOwner, requirePlatformStaff } from '../middleware/rbac.js';
 
 /**
  * Billing routes — packages, subscriptions, invoices, payments and refunds.
@@ -56,18 +56,21 @@ const router = Router();
 // ── Plans & Packages ────────────────────────────────────────────────────────
 // DELETE is permanent and refused once a package has been sold; a sold package
 // is deactivated via PATCH { active: false } instead.
-router.get('/platform/packages', requireAuth, requirePlatformOwner, listPackages);
+// Platform Sales/BD (requirePlatformStaff) may read packages, companies' terms and
+// invoices, start or renew a term with a coupon, and draft an invoice. Issuing,
+// voiding, sending, payments, refunds and all configuration stay owner-only.
+router.get('/platform/packages', requireAuth, requirePlatformStaff, listPackages);
 router.post('/platform/packages', requireAuth, requirePlatformOwner, createPackage);
-router.get('/platform/packages/:id', requireAuth, requirePlatformOwner, getPackage);
+router.get('/platform/packages/:id', requireAuth, requirePlatformStaff, getPackage);
 router.patch('/platform/packages/:id', requireAuth, requirePlatformOwner, updatePackage);
 router.delete('/platform/packages/:id', requireAuth, requirePlatformOwner, deletePackage);
 
 // ── Invoices, payments and refunds ──────────────────────────────────────────
 // The invoice number is allocated at ISSUE, not creation, so an abandoned draft
 // never leaves a gap in the GST series. A voided invoice keeps its number.
-router.get('/platform/invoices', requireAuth, requirePlatformOwner, listInvoices);
-router.post('/platform/invoices', requireAuth, requirePlatformOwner, createInvoice);
-router.get('/platform/invoices/:id', requireAuth, requirePlatformOwner, getInvoice);
+router.get('/platform/invoices', requireAuth, requirePlatformStaff, listInvoices);
+router.post('/platform/invoices', requireAuth, requirePlatformStaff, createInvoice);
+router.get('/platform/invoices/:id', requireAuth, requirePlatformStaff, getInvoice);
 router.post('/platform/invoices/:id/issue', requireAuth, requirePlatformOwner, issueInvoice);
 router.post('/platform/invoices/:id/void', requireAuth, requirePlatformOwner, voidInvoice);
 router.post('/platform/invoices/:id/send', requireAuth, requirePlatformOwner, sendInvoice);
@@ -80,10 +83,10 @@ router.post('/platform/invoices/:id/refunds', requireAuth, requirePlatformOwner,
 // A renewal creates a NEW term linked to the old one; nothing is overwritten,
 // so the chain IS the history. Starting or renewing sets Tenant.licenseLimit
 // from the seats sold, which license.service.js then enforces.
-router.get('/platform/subscriptions', requireAuth, requirePlatformOwner, listSubscriptions);
-router.get('/platform/subscriptions/:id', requireAuth, requirePlatformOwner, getSubscription);
-router.post('/platform/tenants/:id/subscription', requireAuth, requirePlatformOwner, startSubscription);
-router.post('/platform/subscriptions/:id/renew', requireAuth, requirePlatformOwner, renewSubscription);
+router.get('/platform/subscriptions', requireAuth, requirePlatformStaff, listSubscriptions);
+router.get('/platform/subscriptions/:id', requireAuth, requirePlatformStaff, getSubscription);
+router.post('/platform/tenants/:id/subscription', requireAuth, requirePlatformStaff, startSubscription);
+router.post('/platform/subscriptions/:id/renew', requireAuth, requirePlatformStaff, renewSubscription);
 router.post('/platform/subscriptions/:id/cancel', requireAuth, requirePlatformOwner, cancelSubscription);
 
 // ── Revenue ─────────────────────────────────────────────────────────────────

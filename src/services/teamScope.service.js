@@ -16,7 +16,7 @@ import { ELEVATED_ROLES, hasRole } from '../lib/roles.js';
 // in a directory, assignee picker or goal dropdown. Tenant scoping already keeps
 // them out (they live in their own tenant); this is the belt-and-braces check,
 // so the guarantee does not depend on that placement staying true.
-const NOT_PLATFORM_USER = { role: { not: 'PLATFORM_OWNER' } };
+const NOT_PLATFORM_USER = { role: { notIn: ['PLATFORM_OWNER', 'PLATFORM_SALES'] } };
 
 export function buildTeamScopeWhere(user, tenantId, { search, department, role, includeSelf = false } = {}) {
   const userRole = (user.role || '').toUpperCase();

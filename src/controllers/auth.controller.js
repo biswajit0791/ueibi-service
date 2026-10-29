@@ -1,11 +1,11 @@
-import crypto from 'node:crypto';
 import { ACCOUNT_EXITED } from '../lib/accountAccess.js';
+import { issuePasswordResetLink } from '../services/passwordReset.service.js';
 import bcrypt from 'bcryptjs';
 import { prisma } from '../lib/prisma.js';
 import { signToken } from '../lib/jwt.js';
 import { loadCapabilities } from '../lib/capabilities.js';
 import { env } from '../config/env.js';
-import { generateRawToken, hashToken } from '../lib/tokens.js';
+import { hashToken } from '../lib/tokens.js';
 import { sendMail } from '../lib/mailer.js';
 import { renderPasswordResetEmail } from '../lib/emailTemplates.js';
 import { loginSchema, forgotPasswordSchema, resetPasswordSchema } from '../validations/auth.schema.js';
@@ -287,35 +287,7 @@ export async function forgotPassword(req, res, next) {
       return res.status(403).json({ error: ACCOUNT_EXITED.message, code: ACCOUNT_EXITED.code });
     }
 
-    // Generate high-entropy 32-byte raw token and SHA-256 hash
-    const rawToken = generateRawToken();
-    const tokenHash = hashToken(rawToken);
-
-    const expiresMinutes = env.passwordResetTokenExpiresMinutes || 30;
-    const expiresAt = new Date(Date.now() + expiresMinutes * 60 * 1000);
-    const tokenId = `prt_${crypto.randomBytes(12).toString('hex')}`;
-
-    // Atomically invalidate old tokens for this user and store new token hash
-    await prisma.$transaction(async (tx) => {
-      await tx.$executeRawUnsafe(
-        `UPDATE "password_reset_tokens"
-         SET "usedAt" = CURRENT_TIMESTAMP
-         WHERE "userId" = $1 AND "usedAt" IS NULL`,
-        user.id
-      );
-
-      await tx.$executeRawUnsafe(
-        `INSERT INTO "password_reset_tokens" ("id", "userId", "tokenHash", "expiresAt", "usedAt", "createdAt")
-         VALUES ($1, $2, $3, $4, NULL, CURRENT_TIMESTAMP)`,
-        tokenId,
-        user.id,
-        tokenHash,
-        expiresAt
-      );
-    });
-
-    // Build reset URL using environment frontend origin
-    const resetUrl = `${env.frontendOrigin}/reset-password?token=${rawToken}`;
+    const { resetUrl, expiresMinutes } = await issuePasswordResetLink(user.id);
 
     // Prepare and dispatch password reset email
     const { html, text } = renderPasswordResetEmail({

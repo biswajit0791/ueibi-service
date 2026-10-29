@@ -48,6 +48,10 @@ enum UserRole {
   STUDENT
   MENTOR
   PLATFORM_OWNER
+  // Sales / Business Development on the platform side: applies coupons the
+  // platform owner created to company deals. Like PLATFORM_OWNER, it holds no
+  // company-level permissions.
+  PLATFORM_SALES
 }
 
 enum UserStatus {

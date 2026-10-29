@@ -1,4 +1,4 @@
-import { isPlatformOwner } from '../lib/roles.js';
+import { isPlatformUser } from '../lib/roles.js';
 
 export function requireTenant(req, res, next) {
   if (!req.tenantId) {
@@ -11,7 +11,7 @@ export function requireTenant(req, res, next) {
   //
   // Platform routes deliberately do NOT use requireTenant, and /auth/me is
   // guarded by requireAuth alone, so sign-in and session refresh are unaffected.
-  if (isPlatformOwner(req.user?.role)) {
+  if (isPlatformUser(req.user?.role)) {
     return res.status(403).json({
       error: 'Access forbidden: the platform owner is not a member of any company',
     });

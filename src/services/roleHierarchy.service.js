@@ -269,7 +269,7 @@ export async function getOrgHierarchyTree(tenantId, { department, search } = {},
       tenantId,
       isDeleted: false,
       status: { in: ['ACTIVE', 'INVITED'] },
-      role: { not: 'PLATFORM_OWNER' },
+      role: { notIn: ['PLATFORM_OWNER', 'PLATFORM_SALES'] },
     },
     select: {
       id: true,

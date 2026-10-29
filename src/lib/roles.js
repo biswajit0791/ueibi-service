@@ -38,11 +38,25 @@ export const MANAGER_OR_ELEVATED_ROLES = [...ELEVATED_ROLES, 'MANAGER'];
  * ELEVATED_ROLES would silently grant it HR powers in whichever tenant row it
  * happens to live in, which is exactly what this separation avoids.
  */
-export const PLATFORM_ROLES = ['PLATFORM_OWNER'];
+export const PLATFORM_ROLES = ['PLATFORM_OWNER', 'PLATFORM_SALES'];
 
-/** True for the platform operator — see PLATFORM_ROLES. */
+/**
+ * True for the platform operator only. PLATFORM_SALES is a platform role too
+ * but must never pass an owner check — it cannot create coupons, packages or
+ * platform users, issue invoices or record money.
+ */
 export function isPlatformOwner(role) {
+  return hasRole(role, ['PLATFORM_OWNER']);
+}
+
+/** True for anyone on the platform side (owner or sales) — never a company member. */
+export function isPlatformUser(role) {
   return hasRole(role, PLATFORM_ROLES);
+}
+
+/** Platform Sales / Business Development. */
+export function isPlatformSales(role) {
+  return hasRole(role, ['PLATFORM_SALES']);
 }
 
 /**

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { list, create, get, update, remove, removePermanently } from '../controllers/coupon.controller.js';
 import { listRegistrations, getRegistration } from '../controllers/adminRegistrations.controller.js';
 import { requireAuth } from '../middleware/auth.js';
-import { requirePlatformOwner } from '../middleware/rbac.js';
+import { requirePlatformOwner, requirePlatformStaff } from '../middleware/rbac.js';
 
 /**
  * Platform-operator routes for company registrations and discount coupons.
@@ -23,9 +23,10 @@ router.get('/admin/registrations', requireAuth, requirePlatformOwner, listRegist
 router.get('/admin/registrations/:id', requireAuth, requirePlatformOwner, getRegistration);
 
 // Discount coupons. Every mutation writes a PlatformAuditLog row.
-router.get('/admin/coupons', requireAuth, requirePlatformOwner, list);
+// Sales/BD may read coupons to apply them; only the owner creates, edits or removes them.
+router.get('/admin/coupons', requireAuth, requirePlatformStaff, list);
 router.post('/admin/coupons', requireAuth, requirePlatformOwner, create);
-router.get('/admin/coupons/:id', requireAuth, requirePlatformOwner, get);
+router.get('/admin/coupons/:id', requireAuth, requirePlatformStaff, get);
 router.patch('/admin/coupons/:id', requireAuth, requirePlatformOwner, update);
 // DELETE deactivates (the row must survive so past redemptions still resolve).
 // /permanent removes it outright, and refuses once a coupon has been used.

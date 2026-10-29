@@ -14,11 +14,55 @@
 import { prisma } from '../lib/prisma.js';
 import { emitToUser, emitToTenant } from '../lib/socket.js';
 import {
-  calculateAnnualCycle,
-  calculateRemainingMonths,
   calculateProRataLicensePrice,
+  resolveLicenseTerm,
+  resolveAnnualUnitPrice,
   round2,
 } from './billing.service.js';
+
+/**
+ * Loads a tenant's current annual licence term and per-seat annual price.
+ * Pass `client: tx` inside a transaction.
+ *
+ * @returns {Promise<{ startsAt: Date, endsAt: Date, remainingMonths: number, annualUnitPrice: number, subscription: object|null }>}
+ */
+export async function getLicenseTerm(tenantId, { client = prisma, now = new Date() } = {}) {
+  const tenant = await client.tenant.findUnique({
+    where: { id: tenantId },
+    select: {
+      createdAt: true,
+      planEndsAt: true,
+      // The term in force now — never a renewal queued to start later.
+      subscriptions: {
+        where: { state: { in: ['ACTIVE', 'PENDING'] }, startsAt: { lte: now } },
+        orderBy: { startsAt: 'desc' },
+        take: 1,
+        select: {
+          id: true, packageName: true, seatCount: true, state: true, startsAt: true, endsAt: true,
+          package: { select: { unitPrice: true } },
+          invoices: {
+            where: { state: { not: 'VOID' } },
+            orderBy: { createdAt: 'asc' },
+            take: 1,
+            select: { unitPrice: true },
+          },
+        },
+      },
+    },
+  });
+  const sub = tenant?.subscriptions?.[0] || null;
+  const term = resolveLicenseTerm({
+    subscriptionStartsAt: sub?.startsAt,
+    subscriptionEndsAt: sub?.endsAt,
+    planEndsAt: tenant?.planEndsAt,
+    tenantCreatedAt: tenant?.createdAt,
+  }, now);
+  const annualUnitPrice = resolveAnnualUnitPrice({
+    invoiceUnitPrice: sub?.invoices?.[0]?.unitPrice,
+    packageUnitPrice: sub?.package?.unitPrice,
+  });
+  return { ...term, annualUnitPrice, subscription: sub };
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -113,14 +157,12 @@ export async function getLicenseStats(tenantId) {
       ? Math.round((verifiedWithPan / activeEmployees) * 1000) / 10  // 1 decimal place
       : 100;
 
-  // Annual Billing Cycle & Renewal calculation
+  // Annual Billing Cycle & Renewal calculation — shared with purchase, retraction and renewal.
   const now = new Date();
   const activeSub = tenant?.subscriptions?.[0] || null;
-  const initialDate = activeSub?.startsAt || tenant?.createdAt || now;
-  const annualCycle = calculateAnnualCycle(initialDate, now);
-
-  const planStartsAt = activeSub?.startsAt || annualCycle.startsAt;
-  const planEndsAt = activeSub?.endsAt || tenant?.planEndsAt || annualCycle.endsAt;
+  const term = await getLicenseTerm(tenantId, { now });
+  const planStartsAt = term.startsAt;
+  const planEndsAt = term.endsAt;
   const daysRemaining = planEndsAt
     ? Math.ceil((new Date(planEndsAt).getTime() - now.getTime()) / 86400000)
     : null;
@@ -128,11 +170,7 @@ export async function getLicenseStats(tenantId) {
   const isExpiringSoon = daysRemaining !== null && daysRemaining <= 30 && daysRemaining >= 0;
   const isOverdue = daysRemaining !== null && daysRemaining < 0;
 
-  const remainingMonths = planEndsAt
-    ? calculateRemainingMonths(planEndsAt, now)
-    : 12;
-
-  const annualUnitPrice = 499.00;
+  const { remainingMonths, annualUnitPrice } = term;
   const proRataPricing = calculateProRataLicensePrice({
     annualUnitPrice,
     remainingMonths,
@@ -636,16 +674,10 @@ export async function retractUnusedLicenses({ tenantId, seatsToRetract, actor, r
       throw err;
     }
 
-    // Determine cycle and remaining months
+    // Months already used are consumed; the remaining months of the annual term are credited
+    // at the price the company paid. E.g. bought in January, returned in May → May–Dec (8/12) back.
     const activeSub = tenant.subscriptions?.[0] || null;
-    let effectiveEndsAt = activeSub?.endsAt || tenant.planEndsAt;
-    if (!effectiveEndsAt || new Date(effectiveEndsAt) < now) {
-      const annualCycle = calculateAnnualCycle(tenant.createdAt || now, now);
-      effectiveEndsAt = annualCycle.endsAt;
-    }
-
-    const remainingMonths = calculateRemainingMonths(effectiveEndsAt, now);
-    const annualUnitPrice = 499.00;
+    const { remainingMonths, annualUnitPrice } = await getLicenseTerm(tenantId, { client: tx, now });
     const unitCredit = round2((annualUnitPrice * remainingMonths) / 12);
     const totalCreditAmount = round2(seats * unitCredit);
 
