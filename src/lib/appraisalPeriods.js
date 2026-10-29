@@ -150,3 +150,21 @@ export function getFiscalYearPeriods(frequency, fiscalYearStartYear, settings) {
   }
   return [getPeriodMetadata('ANNUAL', new Date(), null, fiscalYearStartYear, null, settings)];
 }
+
+/**
+ * When a Monthly or Quarterly appraisal can be submitted: only once its period
+ * has ended. January's monthly appraisal opens on 1 February; with an April
+ * financial year, Q1 (Apr–Jun) opens on 1 July. Annual appraisals are not
+ * gated here.
+ *
+ * @param {{ frequency: string, endDate: Date|string }} cycle
+ * @returns {{ available: boolean, opensAt: Date|null }}
+ */
+export function appraisalAvailability(cycle, now = new Date()) {
+  const frequency = String(cycle?.frequency || '').toUpperCase();
+  if (!['MONTHLY', 'QUARTERLY'].includes(frequency) || !cycle?.endDate) {
+    return { available: true, opensAt: null };
+  }
+  const opensAt = new Date(new Date(cycle.endDate).getTime() + 1);
+  return { available: now >= opensAt, opensAt };
+}

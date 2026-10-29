@@ -5,7 +5,8 @@ import { goalService } from '../services/goal.service.js';
 import { buildTeamScopeWhere, buildExplicitReportsWhere } from '../services/teamScope.service.js';
 import { computeCycleRollup } from '../services/reportAggregation.service.js';
 import { getCompanySettings } from '../services/companySettings.service.js';
-import { APPRAISAL_MONTH_NAMES, getFiscalYearPeriods, getPeriodMetadata } from '../lib/appraisalPeriods.js';
+import { APPRAISAL_MONTH_NAMES, getFiscalYearPeriods, getPeriodMetadata, appraisalAvailability } from '../lib/appraisalPeriods.js';
+import { getTeamTableMetrics } from '../services/appraisalMetrics.service.js';
 import { ELEVATED_ROLES, HR_ROLES, MANAGER_OR_ELEVATED_ROLES, SUPER_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
 
 async function pushNotification({ tenantId, recipientId, type, title, body, entityType, entityId }) {
@@ -910,72 +911,104 @@ export async function updateParameter(req, res, next) {
 // PHASE 3: SELF ASSESSMENT (EMPLOYEE)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const TASK_RATING_FREQUENCIES = new Set(['MONTHLY', 'QUARTERLY']);
+// Monthly and Quarterly appraisals: open once the period has ended, show the
+// Team-table Final Weightage and Manager Rating read-only, and go straight to
+// HR on submission (the manager's input is those task-level figures).
+const PERIODIC_FREQUENCIES = new Set(['MONTHLY', 'QUARTERLY']);
+const isPeriodic = (cycle) => PERIODIC_FREQUENCIES.has(String(cycle?.frequency || '').toUpperCase());
 
-async function getManagerTaskRatingSummary(tenantId, employeeId, cycle) {
-  const frequency = String(cycle?.frequency || '').toUpperCase();
-  if (!TASK_RATING_FREQUENCIES.has(frequency)) return null;
+const fmtOpensAt = (d) => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 
-  const startDate = new Date(cycle.startDate);
-  const endDate = new Date(cycle.endDate);
-  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
-    throw new Error(`Appraisal cycle ${cycle.id} has invalid dates`);
+/** Tell HR that a monthly / quarterly appraisal is waiting for them. Falls back to admins when the company has no HR user. */
+async function notifyHrOfSubmission({ tenantId, review, cycle, employeeName }) {
+  let recipients = await prisma.tenantUser.findMany({
+    where: { tenantId, role: 'HR', isDeleted: false, status: 'ACTIVE', id: { not: review.employeeId } },
+    select: { id: true },
+  });
+  if (recipients.length === 0) {
+    recipients = await prisma.tenantUser.findMany({
+      where: { tenantId, role: { in: ['SUPER_ADMIN', 'ADMIN'] }, isDeleted: false, status: 'ACTIVE', id: { not: review.employeeId } },
+      select: { id: true },
+    });
+  }
+  await Promise.all(recipients.map((r) => pushNotification({
+    tenantId,
+    recipientId: r.id,
+    type: 'appraisal_submitted',
+    title: `${cycle.frequency === 'QUARTERLY' ? 'Quarterly' : 'Monthly'} appraisal submitted`,
+    body: `${employeeName} submitted the ${cycle.name} appraisal for HR review.`,
+    entityType: 'review',
+    entityId: review.id,
+  })));
+}
+
+/**
+ * The one path an employee's self-assessment is saved or submitted through
+ * (PATCH /performance-reviews/:id/self and POST /appraisals/submit).
+ * Returns { status, body } for the caller to send.
+ */
+async function saveSelfAssessment(req, review, cycle, { selfAccomplishments, selfWeaknesses, selfRating, scores, submit }) {
+  if (SELF_LOCKED_STATUSES.includes(review.status) || review.hrSignoffStatus === 'RELEASED') {
+    return { status: 409, body: { error: 'Your self-assessment is locked because it has already been reviewed.' } };
   }
 
-  const tasks = await prisma.task.findMany({
-    where: {
-      tenantId,
-      employeeId,
-      goalId: { not: null },
-      managerRating: { not: null },
-      AND: [
-        { OR: [{ status: { in: ['done', 'completed'] } }, { progress: 100 }] },
-        {
-          OR: [
-            { actualCompletionDate: { gte: startDate, lte: endDate } },
-            {
-              actualCompletionDate: null,
-              managerRatedAt: { gte: startDate, lte: endDate },
-            },
-          ],
+  const periodic = isPeriodic(cycle);
+  if (periodic) {
+    const { available, opensAt } = appraisalAvailability(cycle);
+    if (!available) {
+      return {
+        status: 409,
+        body: {
+          error: `The ${cycle.name} appraisal opens on ${fmtOpensAt(opensAt)}, once the ${cycle.frequency === 'QUARTERLY' ? 'quarter' : 'month'} has ended.`,
+          code: 'APPRAISAL_NOT_OPEN',
+          opensAt,
         },
-      ],
+      };
+    }
+  }
+
+  let totalScore = 0;
+  let scoreCount = 0;
+  for (const item of Array.isArray(scores) ? scores : []) {
+    const raw = item.selfScore ?? item.score;
+    if (!item.parameterId || raw === undefined) continue;
+    const scoreVal = Number(raw);
+    totalScore += scoreVal;
+    scoreCount += 1;
+    await prisma.reviewScore.upsert({
+      where: { reviewId_parameterId: { reviewId: review.id, parameterId: item.parameterId } },
+      create: { reviewId: review.id, parameterId: item.parameterId, selfScore: scoreVal },
+      update: { selfScore: scoreVal },
+    });
+  }
+  const finalRating = scoreCount > 0
+    ? Number((totalScore / scoreCount).toFixed(2))
+    : (selfRating !== undefined ? Number(selfRating) : null);
+
+  // Freeze what the employee saw at submission, so HR reviews the same figures.
+  const metrics = submit && periodic ? await getTeamTableMetrics(req.tenantId, review.employeeId, cycle) : null;
+
+  const updated = await prisma.performanceReview.update({
+    where: { id: review.id },
+    data: {
+      ...(selfAccomplishments !== undefined && { selfAccomplishments }),
+      ...(selfWeaknesses !== undefined && { selfWeaknesses }),
+      ...(finalRating !== null && { selfRating: finalRating }),
+      ...(metrics && {
+        managerTaskRatingSnapshot: { ...metrics, snapshotAt: new Date().toISOString() },
+        workScore: metrics.finalWeight,
+        averageManagerRating: metrics.managerRating,
+      }),
+      ...(submit && { status: 'SUBMITTED', selfSubmittedAt: new Date() }),
     },
-    select: {
-      id: true,
-      title: true,
-      goalId: true,
-      managerRating: true,
-      managerRatingNotes: true,
-      managerRatedAt: true,
-      managerRatedBy: { select: { id: true, name: true } },
-      goal: { select: { title: true } },
-    },
-    orderBy: [{ managerRatedAt: 'asc' }, { createdAt: 'asc' }],
+    include: { cycle: true, scores: { include: { parameter: true } } },
   });
 
-  const ratedTasks = tasks.map((task) => ({
-    taskId: task.id,
-    taskTitle: task.title,
-    goalId: task.goalId,
-    goalTitle: task.goal?.title || 'Goal',
-    rating: Number(task.managerRating),
-    notes: task.managerRatingNotes,
-    ratedAt: task.managerRatedAt,
-    ratedBy: task.managerRatedBy?.name || null,
-  }));
-  const averageRating = ratedTasks.length > 0
-    ? Number((ratedTasks.reduce((sum, task) => sum + task.rating, 0) / ratedTasks.length).toFixed(2))
-    : null;
+  if (submit && periodic) {
+    await notifyHrOfSubmission({ tenantId: req.tenantId, review, cycle, employeeName: req.user.name || req.user.email });
+  }
 
-  return {
-    frequency,
-    cycleId: cycle.id,
-    cycleName: cycle.name,
-    averageRating,
-    taskCount: ratedTasks.length,
-    tasks: ratedTasks,
-  };
+  return { status: 200, body: updated };
 }
 
 export async function getMyReview(req, res, next) {
@@ -1014,16 +1047,16 @@ export async function getMyReview(req, res, next) {
       where: { cycleId, isActive: true },
       orderBy: { order: 'asc' },
     });
-    const managerTaskRatingSummary = await getManagerTaskRatingSummary(
-      req.tenantId,
-      req.user.id,
-      activeCycle,
-    );
+    // Live Team-table figures until submission; the frozen snapshot after.
+    const teamMetrics = isPeriodic(activeCycle) && review.status === 'DRAFT'
+      ? await getTeamTableMetrics(req.tenantId, req.user.id, activeCycle)
+      : (review.managerTaskRatingSnapshot?.source === 'TEAM_TABLE' ? review.managerTaskRatingSnapshot : null);
 
     res.json({
-      review: { ...review, managerTaskRatingSummary },
+      review: { ...review, teamMetrics },
       activeParameters,
       cycle: activeCycle,
+      availability: appraisalAvailability(activeCycle),
     });
   } catch (err) {
     next(err);
@@ -1042,8 +1075,6 @@ export async function updateSelfAssessment(req, res, next) {
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.errors });
     }
-    const { selfAccomplishments, selfWeaknesses, scores, submit } = parsed.data;
-
     const review = await prisma.performanceReview.findUnique({
       where: { id },
       include: { employee: true, cycle: true },
@@ -1057,75 +1088,8 @@ export async function updateSelfAssessment(req, res, next) {
       return res.status(403).json({ error: 'Forbidden: You can only update your own self-assessment' });
     }
 
-    if (SELF_LOCKED_STATUSES.includes(review.status) || review.hrSignoffStatus === 'RELEASED') {
-      return res.status(409).json({ error: 'Your self-assessment is locked because it has already been reviewed.' });
-    }
-
-    const taskRatingSummary = submit
-      ? await getManagerTaskRatingSummary(req.tenantId, review.employeeId, review.cycle)
-      : null;
-
-    // Upsert scores if provided
-    let totalScore = 0;
-    let scoreCount = 0;
-
-    if (Array.isArray(scores)) {
-      for (const item of scores) {
-        if (item.parameterId && item.selfScore !== undefined) {
-          const scoreVal = parseFloat(item.selfScore);
-          totalScore += scoreVal;
-          scoreCount++;
-
-          await prisma.reviewScore.upsert({
-            where: {
-              reviewId_parameterId: {
-                reviewId: id,
-                parameterId: item.parameterId,
-              },
-            },
-            create: {
-              reviewId: id,
-              parameterId: item.parameterId,
-              selfScore: scoreVal,
-            },
-            update: {
-              selfScore: scoreVal,
-            },
-          });
-        }
-      }
-    }
-
-    const avgRating = scoreCount > 0 ? (totalScore / scoreCount).toFixed(2) : review.selfRating;
-
-    const updated = await prisma.performanceReview.update({
-      where: { id },
-      data: {
-        ...(selfAccomplishments !== undefined && { selfAccomplishments }),
-        ...(selfWeaknesses !== undefined && { selfWeaknesses }),
-        ...(scoreCount > 0 && { selfRating: parseFloat(avgRating) }),
-        ...(taskRatingSummary && {
-          managerTaskRatingSnapshot: {
-            ...taskRatingSummary,
-            snapshotAt: new Date().toISOString(),
-          },
-          averageManagerRating: taskRatingSummary.averageRating,
-        }),
-        ...(submit && {
-          status: 'SUBMITTED',
-          selfSubmittedAt: new Date(),
-        }),
-      },
-      include: {
-        scores: {
-          include: {
-            parameter: true,
-          },
-        },
-      },
-    });
-
-    res.json(updated);
+    const result = await saveSelfAssessment(req, review, review.cycle, parsed.data);
+    res.status(result.status).json(result.body);
   } catch (err) {
     next(err);
   }
@@ -1451,17 +1415,32 @@ export async function getDirectReports(req, res, next) {
     const { where, isHrOrAdmin } = buildTeamScopeWhere(req.user, req.tenantId, { search, department });
 
     if (!isHrOrAdmin) {
-      // First check if manager has direct reports explicitly assigned with managerId
-      const explicitReports = await prisma.tenantUser.findMany({
-        where: buildExplicitReportsWhere(req.user, req.tenantId, { search, department }),
-        select: DIRECT_REPORT_SELECT,
-        orderBy: { name: 'asc' },
+      // A manager's appraisal team is their reporting downline — direct reports
+      // and everyone below them — and nobody else. There is deliberately no
+      // fallback to a wider group: a manager without reports has no team here.
+      const people = await prisma.tenantUser.findMany({
+        where: { tenantId: req.tenantId, isDeleted: false },
+        select: { id: true, managerId: true },
       });
-
-      if (explicitReports.length > 0) {
-        return res.json({ directReports: explicitReports });
+      const childrenOf = {};
+      people.forEach((u) => { if (u.managerId) (childrenOf[u.managerId] ||= []).push(u.id); });
+      const downline = new Set();
+      const queue = [req.user.id];
+      while (queue.length) {
+        for (const child of childrenOf[queue.shift()] || []) {
+          if (!downline.has(child) && child !== req.user.id) { downline.add(child); queue.push(child); }
+        }
       }
-      // Fall through to the broader buildTeamScopeWhere fallback below.
+      const explicitWhere = buildExplicitReportsWhere(req.user, req.tenantId, { search, department });
+      delete explicitWhere.managerId;
+      const directReports = downline.size
+        ? await prisma.tenantUser.findMany({
+            where: { ...explicitWhere, id: { in: [...downline] } },
+            select: DIRECT_REPORT_SELECT,
+            orderBy: { name: 'asc' },
+          })
+        : [];
+      return res.json({ directReports });
     }
 
     const directReports = await prisma.tenantUser.findMany({
@@ -1538,19 +1517,32 @@ export async function getEmployeeReviewForManager(req, res, next) {
       },
     };
 
-    const review = await getOrCreateReview(
-      cycleId,
-      employeeId,
-      { reviewType: activeCycle.frequency || 'MONTHLY', dueDate: activeCycle.endDate },
-      reviewInclude,
-    );
+    // Viewing must not create anything: before the employee starts, there is no review.
+    const review = await prisma.performanceReview.findFirst({
+      where: { cycleId, employeeId },
+      include: reviewInclude,
+    });
 
     const activeParameters = await prisma.appraisalParameter.findMany({
       where: { cycleId, isActive: true },
       orderBy: { order: 'asc' },
     });
 
-    res.json({ review, activeParameters });
+    const periodic = isPeriodic(activeCycle);
+    const teamMetrics = periodic
+      ? (review?.managerTaskRatingSnapshot?.source === 'TEAM_TABLE'
+          ? review.managerTaskRatingSnapshot
+          : await getTeamTableMetrics(req.tenantId, employeeId, activeCycle))
+      : null;
+
+    res.json({
+      review: review ? { ...review, teamMetrics } : null,
+      teamMetrics,
+      activeParameters,
+      // Monthly / quarterly go straight to HR; the manager's input is the task ratings and final weightage.
+      managerReviewRequired: !periodic,
+      availability: appraisalAvailability(activeCycle),
+    });
   } catch (err) {
     next(err);
   }
@@ -1573,7 +1565,7 @@ export async function updateManagerReview(req, res, next) {
 
     const review = await prisma.performanceReview.findUnique({
       where: { id },
-      include: { employee: true },
+      include: { employee: true, cycle: true },
     });
 
     if (!review || review.employee.tenantId !== req.tenantId) {
@@ -1582,6 +1574,13 @@ export async function updateManagerReview(req, res, next) {
 
     if (!(await canManagerReview(req.user, review.employee, req.tenantId))) {
       return res.status(403).json({ error: 'Access forbidden: you are not authorized to evaluate this employee' });
+    }
+
+    if (isPeriodic(review.cycle)) {
+      return res.status(409).json({
+        error: 'Monthly and quarterly appraisals go straight to HR. Your rating comes from the task ratings and final weightage you give in the Team table.',
+        code: 'NO_MANAGER_REVIEW_FOR_PERIODIC',
+      });
     }
 
     // Stage gating: the employee must have submitted their self-assessment, and a
@@ -2174,11 +2173,15 @@ export async function getHrAuditReview(req, res, next) {
       orderBy: { order: 'asc' },
     });
 
-    const managerTaskRatingSummary = await getManagerTaskRatingSummary(req.tenantId, employeeId, activeCycle);
+    // What the employee saw when they submitted; live Team-table figures before that.
+    const teamMetrics = review.managerTaskRatingSnapshot?.source === 'TEAM_TABLE'
+      ? review.managerTaskRatingSnapshot
+      : await getTeamTableMetrics(req.tenantId, employeeId, activeCycle);
     res.json({
-      review: { ...review, managerTaskRatingSummary },
+      review: { ...review, teamMetrics },
       employee,
       activeParameters,
+      availability: appraisalAvailability(activeCycle),
     });
   } catch (err) {
     next(err);
@@ -2531,11 +2534,7 @@ export async function getReviewById(req, res, next) {
 
     let taskRatingSummary = review.managerTaskRatingSnapshot || null;
     if (!taskRatingSummary && review.cycle) {
-      try {
-        taskRatingSummary = await getManagerTaskRatingSummary(req.tenantId, review.employeeId, review.cycle);
-      } catch (_) {
-        taskRatingSummary = null;
-      }
+      taskRatingSummary = await getTeamTableMetrics(req.tenantId, review.employeeId, review.cycle);
     }
 
     res.json({
@@ -2544,6 +2543,7 @@ export async function getReviewById(req, res, next) {
         averageSelfScore: avgSelf,
         averageManagerScore: avgMgr,
         averageHrScore: avgHr,
+        teamMetrics: taskRatingSummary?.source === 'TEAM_TABLE' ? taskRatingSummary : null,
         managerTaskRatingSummary: taskRatingSummary,
         managerTaskRatingSnapshot: taskRatingSummary || review.managerTaskRatingSnapshot,
       },
@@ -2593,77 +2593,14 @@ export async function submitSelfRating(req, res, next) {
       dueDate: activeCycle.endDate,
     });
 
-    if (SELF_LOCKED_STATUSES.includes(review.status) || review.hrSignoffStatus === 'RELEASED') {
-      return res.status(409).json({ error: 'Your self-assessment is locked because it has already been reviewed.' });
-    }
-
-    const taskRatingSummary = submit
-      ? await getManagerTaskRatingSummary(req.tenantId, req.user.id, activeCycle)
-      : null;
-
-    let totalScore = 0;
-    let scoreCount = 0;
-
-    if (Array.isArray(scores)) {
-      for (const item of scores) {
-        if (item.parameterId && (item.selfScore !== undefined || item.score !== undefined)) {
-          const scoreVal = parseFloat(item.selfScore ?? item.score);
-          totalScore += scoreVal;
-          scoreCount++;
-
-          await prisma.reviewScore.upsert({
-            where: {
-              reviewId_parameterId: {
-                reviewId: review.id,
-                parameterId: item.parameterId,
-              },
-            },
-            create: {
-              reviewId: review.id,
-              parameterId: item.parameterId,
-              selfScore: scoreVal,
-            },
-            update: {
-              selfScore: scoreVal,
-            },
-          });
-        }
-      }
-    }
-
-    const finalRating = scoreCount > 0
-      ? parseFloat((totalScore / scoreCount).toFixed(2))
-      : (selfRating !== undefined ? parseFloat(selfRating) : review.selfRating);
-
-    const updated = await prisma.performanceReview.update({
-      where: { id: review.id },
-      data: {
-        ...(selfAccomplishments !== undefined && { selfAccomplishments }),
-        ...(selfWeaknesses !== undefined && { selfWeaknesses }),
-        ...(finalRating !== undefined && finalRating !== null && { selfRating: finalRating }),
-        ...(taskRatingSummary && {
-          managerTaskRatingSnapshot: {
-            ...taskRatingSummary,
-            snapshotAt: new Date().toISOString(),
-          },
-          averageManagerRating: taskRatingSummary.averageRating,
-        }),
-        ...(submit && {
-          status: 'SUBMITTED',
-          selfSubmittedAt: new Date(),
-        }),
-      },
-      include: {
-        cycle: true,
-        scores: {
-          include: {
-            parameter: true,
-          },
-        },
-      },
+    const result = await saveSelfAssessment(req, review, activeCycle, {
+      selfAccomplishments,
+      selfWeaknesses,
+      selfRating,
+      scores,
+      submit,
     });
-
-    res.json(updated);
+    res.status(result.status).json(result.body);
   } catch (err) {
     next(err);
   }
