@@ -17,6 +17,7 @@ import {
   calculateAnnualCycle,
   calculateRemainingMonths,
   calculateProRataLicensePrice,
+  round2,
 } from './billing.service.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -54,6 +55,7 @@ export async function getLicenseStats(tenantId) {
         select: {
           id: true,
           licenseLimit: true,
+          creditBalance: true,
           planEndsAt: true,
           createdAt: true,
           subscriptions: {
@@ -140,6 +142,11 @@ export async function getLicenseStats(tenantId) {
   return {
     totalCapacity,
     activeEmployees,
+    creditBalance: Number(tenant?.creditBalance || 0),
+    unusedLicenses: availableLicenses,
+    maxRetractableSeats: availableLicenses,
+    retractionUnitCredit: proRataPricing.proRataUnitPrice,
+    eligibleRetractionCredit: round2(availableLicenses * proRataPricing.proRataUnitPrice),
     availableLicenses,
     exEmployees,
     nonJoiners,
@@ -356,6 +363,17 @@ export async function notifyLicensingActivity({
           title = `Licenses Approved & Purchased (+${seats} Seats)`;
           body = `Finance has completed payment for ${seats} new employee licenses. Total capacity is now ${newCapacity}. You may now invite and onboard employees.`;
         }
+      } else if (action === 'RETRACTED') {
+        if (isCeo(u)) {
+          title = `License Retraction Processed (-${seats} Seats)`;
+          body = `Finance (${actor?.name || 'Finance'}) retracted ${seats} unused license(s). ₹${formattedAmount} converted to Company Wallet Credit for renewal. Capacity is now ${newCapacity} seats.`;
+        } else if (isFinance(u)) {
+          title = `Unused Licenses Retracted & Credited (-${seats} Seats)`;
+          body = `Successfully retracted ${seats} unused license(s). Converted to ₹${formattedAmount} wallet credit balance redeemable against upcoming renewal.`;
+        } else if (isHr(u)) {
+          title = `License Capacity Adjusted (-${seats} Seats)`;
+          body = `Company license capacity was reduced by ${seats} unused seat(s). New seat capacity is ${newCapacity}.`;
+        }
       } else if (action === 'REJECTED') {
         if (isHr(u) || isCeo(u)) {
           title = `License Request Declined (${seats} Seats)`;
@@ -491,3 +509,273 @@ export async function checkAndNotifyLowLicenseCapacity(tenantId) {
 }
 
 
+
+
+/**
+ * Calculates a detailed quote for retracting unused licenses and converting them into wallet credit.
+ *
+ * @param {string} tenantId
+ * @returns {Promise<{
+ *   totalCapacity: number,
+ *   activeEmployees: number,
+ *   unusedLicenses: number,
+ *   maxRetractableSeats: number,
+ *   annualUnitPrice: number,
+ *   remainingMonths: number,
+ *   unitCreditValue: number,
+ *   maxCreditValue: number,
+ *   currentWalletBalance: number,
+ *   renewalDate: string | null,
+ *   daysRemaining: number | null,
+ *   isExpiringSoon: boolean,
+ * }>}
+ */
+export async function calculateLicenseRetractionQuote(tenantId) {
+  const stats = await getLicenseStats(tenantId);
+  const {
+    totalCapacity,
+    activeEmployees,
+    availableLicenses,
+    annualUnitPrice,
+    remainingMonths,
+    proRataUnitPrice,
+    renewalDate,
+    daysRemaining,
+    isExpiringSoon,
+    creditBalance,
+  } = stats;
+
+  const unusedLicenses = availableLicenses;
+  const unitCreditValue = proRataUnitPrice;
+  const maxCreditValue = round2(unusedLicenses * unitCreditValue);
+
+  return {
+    totalCapacity,
+    activeEmployees,
+    unusedLicenses,
+    maxRetractableSeats: unusedLicenses,
+    annualUnitPrice,
+    remainingMonths,
+    unitCreditValue,
+    maxCreditValue,
+    currentWalletBalance: creditBalance,
+    renewalDate,
+    daysRemaining,
+    isExpiringSoon,
+  };
+}
+
+/**
+ * Retracts unused license seats from a tenant, reducing licenseLimit and converting the
+ * eligible prorated value of those seats into a wallet credit balance redeemable against renewal.
+ *
+ * @param {Object} params
+ * @param {string} params.tenantId
+ * @param {number} params.seatsToRetract
+ * @param {Object} params.actor - Authenticated user performing retraction
+ * @param {string} [params.reason]
+ */
+export async function retractUnusedLicenses({ tenantId, seatsToRetract, actor, reason }) {
+  const seats = parseInt(seatsToRetract, 10);
+  if (!seats || isNaN(seats) || seats <= 0) {
+    const err = new Error('Please specify a positive integer of licenses to retract.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const now = new Date();
+
+  // Interactive transaction ensuring atomicity and avoiding race conditions
+  const txResult = await prisma.$transaction(async (tx) => {
+    const tenant = await tx.tenant.findUnique({
+      where: { id: tenantId },
+      select: {
+        id: true,
+        companyName: true,
+        licenseLimit: true,
+        creditBalance: true,
+        planEndsAt: true,
+        createdAt: true,
+        subscriptions: {
+          where: { state: { in: ['ACTIVE', 'PENDING'] } },
+          orderBy: { startsAt: 'desc' },
+          take: 1,
+        },
+      },
+    });
+
+    if (!tenant) {
+      const err = new Error('Tenant not found.');
+      err.statusCode = 404;
+      throw err;
+    }
+
+    const activeCount = await tx.tenantUser.count({
+      where: {
+        tenantId,
+        isDeleted: false,
+        status: { in: ['ACTIVE', 'INVITED'] },
+      },
+    });
+
+    const totalCapacity = tenant.licenseLimit ?? 0;
+    const availableUnused = Math.max(0, totalCapacity - activeCount);
+
+    if (seats > availableUnused) {
+      const err = new Error(
+        `Cannot retract ${seats} license(s). Only ${availableUnused} unused license(s) available. Active employees (${activeCount} seats) cannot have their licenses retracted.`
+      );
+      err.statusCode = 400;
+      err.code = 'EXCEEDS_UNUSED_CAPACITY';
+      err.details = {
+        totalCapacity,
+        activeEmployees: activeCount,
+        availableUnused,
+        requestedRetraction: seats,
+      };
+      throw err;
+    }
+
+    // Determine cycle and remaining months
+    const activeSub = tenant.subscriptions?.[0] || null;
+    let effectiveEndsAt = activeSub?.endsAt || tenant.planEndsAt;
+    if (!effectiveEndsAt || new Date(effectiveEndsAt) < now) {
+      const annualCycle = calculateAnnualCycle(tenant.createdAt || now, now);
+      effectiveEndsAt = annualCycle.endsAt;
+    }
+
+    const remainingMonths = calculateRemainingMonths(effectiveEndsAt, now);
+    const annualUnitPrice = 499.00;
+    const unitCredit = round2((annualUnitPrice * remainingMonths) / 12);
+    const totalCreditAmount = round2(seats * unitCredit);
+
+    const newLimit = totalCapacity - seats;
+    const currentBalance = Number(tenant.creditBalance || 0);
+    const newCreditBalance = round2(currentBalance + totalCreditAmount);
+
+    // Update tenant license limit & credit balance
+    await tx.tenant.update({
+      where: { id: tenantId },
+      data: {
+        licenseLimit: newLimit,
+        creditBalance: newCreditBalance,
+      },
+    });
+
+    // Update active subscription seat capacity
+    if (activeSub) {
+      await tx.subscription.update({
+        where: { id: activeSub.id },
+        data: {
+          seatCount: newLimit,
+          packageName: `${newLimit} Licenses (Annual)`,
+        },
+      });
+    }
+
+    // Record wallet ledger transaction
+    const walletTx = await tx.walletTransaction.create({
+      data: {
+        tenantId,
+        type: 'RETRACTION_CREDIT',
+        amount: totalCreditAmount,
+        balanceAfter: newCreditBalance,
+        seatsRetracted: seats,
+        unitCredit,
+        remainingMonths,
+        description: reason?.trim() || `Retracted ${seats} unused license(s) @ ₹${unitCredit}/seat (${remainingMonths}/12 mo pro-rata). Converted to wallet credit balance for renewal.`,
+        createdById: actor?.id || null,
+      },
+    });
+
+    return {
+      newLimit,
+      totalCreditAmount,
+      newCreditBalance,
+      seatsRetracted: seats,
+      unitCredit,
+      remainingMonths,
+      walletTx,
+    };
+  });
+
+  // Post-transaction notifications and events
+  await notifyLicensingActivity({
+    tenantId,
+    actor,
+    action: 'RETRACTED',
+    seats: txResult.seatsRetracted,
+    totalAmount: txResult.totalCreditAmount,
+    reason,
+    newCapacity: txResult.newLimit,
+  });
+
+  const stats = await getLicenseStats(tenantId);
+
+  emitToTenant(tenantId, 'LICENSE_CAPACITY_UPDATED', {
+    licenseStats: stats,
+    message: `Tenant license capacity retracted by ${seats} unused seat(s). ₹${txResult.totalCreditAmount} converted to wallet credit.`,
+  });
+
+  emitToTenant(tenantId, 'WALLET_BALANCE_UPDATED', {
+    creditBalance: txResult.newCreditBalance,
+    transaction: txResult.walletTx,
+  });
+
+  return {
+    success: true,
+    message: `Successfully retracted ${seats} unused license seat(s). ₹${txResult.totalCreditAmount.toLocaleString('en-IN')} has been credited to your company wallet balance and is redeemable against your next renewal.`,
+    retractedSeats: seats,
+    creditAmount: txResult.totalCreditAmount,
+    newCapacity: txResult.newLimit,
+    walletBalance: txResult.newCreditBalance,
+    licenseStats: stats,
+    transaction: txResult.walletTx,
+  };
+}
+
+/**
+ * Returns complete tenant wallet summary: current balance, recent ledger transactions, and retraction eligibility.
+ *
+ * @param {string} tenantId
+ */
+export async function getTenantWalletSummary(tenantId) {
+  const [tenant, transactions, stats] = await Promise.all([
+    prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: {
+        id: true,
+        companyName: true,
+        creditBalance: true,
+        licenseLimit: true,
+        planEndsAt: true,
+      },
+    }),
+    prisma.walletTransaction.findMany({
+      where: { tenantId },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+      include: {
+        createdBy: {
+          select: { id: true, name: true, email: true, role: true },
+        },
+      },
+    }),
+    getLicenseStats(tenantId),
+  ]);
+
+  if (!tenant) {
+    const err = new Error('Tenant not found');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const quote = await calculateLicenseRetractionQuote(tenantId);
+
+  return {
+    creditBalance: Number(tenant.creditBalance || 0),
+    transactions,
+    licenseStats: stats,
+    retractionQuote: quote,
+  };
+}

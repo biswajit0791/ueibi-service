@@ -32,7 +32,7 @@ const SUBSCRIPTION_SELECT = {
   id: true, tenantId: true, packageId: true, packageName: true, seatCount: true,
   state: true, startsAt: true, endsAt: true, renewedFromId: true,
   registrationId: true, cancelledAt: true, cancelReason: true, createdAt: true,
-  tenant: { select: { id: true, companyName: true, tenantCode: true, status: true } },
+  tenant: { select: { id: true, companyName: true, tenantCode: true, status: true, creditBalance: true } },
   package: { select: { id: true, name: true, interval: true, termMonths: true } },
 };
 
@@ -85,8 +85,29 @@ async function raiseInvoiceFor(tx, {
       billToGstin: tenant.registration?.gstin || null,
       billToEmail,
       ...priced,
+      creditRedeemed,
+      totalAmount: finalTotal,
     },
   });
+
+  if (creditRedeemed > 0) {
+    const newCreditBal = Math.round(((tenantCredit - creditRedeemed) + Number.EPSILON) * 100) / 100;
+    await tx.tenant.update({
+      where: { id: tenant.id },
+      data: { creditBalance: newCreditBal },
+    });
+    await tx.walletTransaction.create({
+      data: {
+        tenantId: tenant.id,
+        type: 'RENEWAL_REDEMPTION',
+        amount: -creditRedeemed,
+        balanceAfter: newCreditBal,
+        description: `Wallet credit redeemed against renewal invoice ${invoiceNumber}`,
+        referenceId: invoice.id,
+        createdById: req.user?.id || null,
+      },
+    });
+  }
 
   if (coupon) {
     await tx.coupon.update({ where: { id: coupon.id }, data: { timesUsed: { increment: 1 } } });
@@ -121,7 +142,7 @@ async function loadBillableTenant(res, tenantId) {
   const tenant = await prisma.tenant.findUnique({
     where: { id: tenantId },
     select: {
-      id: true, companyName: true, isPlatform: true, licenseLimit: true, planEndsAt: true,
+      id: true, companyName: true, isPlatform: true, licenseLimit: true, planEndsAt: true, creditBalance: true,
       registration: { select: { email: true, gstin: true } },
       users: {
         where: { role: { in: ['SUPER_ADMIN', 'ADMIN'] }, isDeleted: false, status: 'ACTIVE' },

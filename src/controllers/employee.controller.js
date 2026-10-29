@@ -32,12 +32,16 @@ import {
   listEligibleManagers,
   notifyLicensingActivity,
   checkAndNotifyLowLicenseCapacity,
+  calculateLicenseRetractionQuote,
+  retractUnusedLicenses,
+  getTenantWalletSummary,
 } from '../services/license.service.js';
 import {
   calculateAnnualCycle,
   calculateRemainingMonths,
   calculateProRataLicensePrice,
   addMonths,
+  round2,
 } from '../services/billing.service.js';
 import { generateReferenceCheckProfile } from '../services/pdf.service.js';
 
@@ -2934,6 +2938,237 @@ export async function generateExEmployeeRefCheckPdf(req, res, next) {
     res.json({
       message: 'Reference check & verified profile dossier generated successfully',
       pdfUrl,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+
+/**
+ * GET /api/employees/license-retraction-quote
+ * Returns real-time quota, max retractable seats, pro-rata rate, and wallet credit estimate.
+ */
+export async function getRetractionQuote(req, res, next) {
+  try {
+    const tenantId = req.tenantId;
+    const quote = await calculateLicenseRetractionQuote(tenantId);
+    res.json(quote);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /api/employees/retract-licenses
+ * Allows Finance / Leadership to retract unused licenses and convert their prorated
+ * value into wallet credit balance redeemable against upcoming renewal.
+ */
+export async function retractLicenses(req, res, next) {
+  try {
+    const tenantId = req.tenantId;
+    const { seats, reason } = req.body;
+    const result = await retractUnusedLicenses({
+      tenantId,
+      seatsToRetract: seats,
+      actor: req.user,
+      reason,
+    });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /api/employees/wallet
+ * Returns company wallet credit balance, ledger transaction history, and live stats.
+ */
+export async function getWalletSummary(req, res, next) {
+  try {
+    const tenantId = req.tenantId;
+    const wallet = await getTenantWalletSummary(tenantId);
+    res.json(wallet);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /api/employees/renew-subscription
+ * Allows Finance / Leadership to process annual renewal, automatically applying available
+ * wallet credit balance towards the renewal bill.
+ */
+export async function renewTenantSubscription(req, res, next) {
+  try {
+    const tenantId = req.tenantId;
+    const { paymentMethod = 'ONLINE', paymentRef, notes } = req.body;
+    const now = new Date();
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      include: {
+        subscriptions: {
+          where: { state: 'ACTIVE' },
+          orderBy: { startsAt: 'desc' },
+          take: 1,
+        },
+      },
+    });
+
+    if (!tenant) {
+      return res.status(404).json({ error: 'Tenant not found.' });
+    }
+
+    const activeCount = await prisma.tenantUser.count({
+      where: { tenantId, isDeleted: false, status: { in: ['ACTIVE', 'INVITED'] } },
+    });
+
+    const activeSub = tenant.subscriptions?.[0] || null;
+    const seatCount = Math.max(tenant.licenseLimit || 10, activeCount);
+    const annualUnitPrice = 499.00;
+    const subtotal = round2(seatCount * annualUnitPrice);
+    const gstRate = 0.18;
+    const gstAmount = round2(subtotal * gstRate);
+    const grossTotal = round2(subtotal + gstAmount);
+
+    const availableCredit = Number(tenant.creditBalance || 0);
+    const creditToRedeem = Math.min(availableCredit, grossTotal);
+    const netPayable = round2(grossTotal - creditToRedeem);
+    const newCreditBalance = round2(availableCredit - creditToRedeem);
+
+    // Calculate new start and end dates (12 months extension)
+    const currentEnd = activeSub?.endsAt || tenant.planEndsAt;
+    const startsAt = (currentEnd && new Date(currentEnd) > now) ? new Date(currentEnd) : now;
+    const endsAt = addMonths(startsAt, 12);
+
+    let generatedInvoiceNumber = null;
+    let invRecord = null;
+
+    await prisma.$transaction(async (tx) => {
+      // 1. Update tenant credit balance and planEndsAt
+      await tx.tenant.update({
+        where: { id: tenantId },
+        data: {
+          licenseLimit: seatCount,
+          planEndsAt: endsAt,
+          creditBalance: newCreditBalance,
+        },
+      });
+
+      // 2. Mark old subscription EXPIRED and create new term
+      if (activeSub) {
+        await tx.subscription.update({
+          where: { id: activeSub.id },
+          data: { state: 'EXPIRED' },
+        });
+      }
+
+      const renewedSub = await tx.subscription.create({
+        data: {
+          tenantId,
+          packageName: `${seatCount} Licenses (Annual Renewal)`,
+          seatCount,
+          state: 'ACTIVE',
+          startsAt,
+          endsAt,
+          renewedFromId: activeSub?.id || null,
+        },
+      });
+
+      // 3. Generate invoice
+      const invCount = await tx.invoice.count();
+      const invoiceNumber = `INV-${now.getFullYear()}-${String(invCount + 1).padStart(5, '0')}`;
+      generatedInvoiceNumber = invoiceNumber;
+
+      const isFullyCovered = netPayable === 0;
+
+      invRecord = await tx.invoice.create({
+        data: {
+          invoiceNumber,
+          tenantId,
+          subscriptionId: renewedSub.id,
+          state: isFullyCovered ? 'PAID' : 'ISSUED',
+          billToName: tenant.companyName || 'Corporate Client',
+          billToEmail: req.user.email,
+          issuedAt: now,
+          dueAt: now,
+          currency: 'INR',
+          quantity: seatCount,
+          unitPrice: annualUnitPrice,
+          subtotalAmount: subtotal,
+          discountAmount: 0,
+          creditRedeemed: creditToRedeem,
+          gstRate,
+          gstAmount,
+          totalAmount: netPayable,
+          amountPaid: isFullyCovered ? 0 : 0,
+          notes: `Annual Subscription Renewal (${seatCount} seats). ${creditToRedeem > 0 ? `Wallet credit redeemed: ₹${creditToRedeem.toFixed(2)}. ` : ''}${notes || ''}`,
+        },
+      });
+
+      // 4. Record wallet transaction if credit was redeemed
+      if (creditToRedeem > 0) {
+        await tx.walletTransaction.create({
+          data: {
+            tenantId,
+            type: 'RENEWAL_REDEMPTION',
+            amount: -creditToRedeem,
+            balanceAfter: newCreditBalance,
+            description: `Wallet credit redeemed against Annual Renewal Invoice ${invoiceNumber}`,
+            referenceId: invRecord.id,
+            createdById: req.user.id,
+          },
+        });
+      }
+
+      // 5. If net payable > 0 and marked paid, record payment
+      if (netPayable > 0 && req.body.isPaid) {
+        await tx.invoice.update({
+          where: { id: invRecord.id },
+          data: {
+            state: 'PAID',
+            amountPaid: netPayable,
+          },
+        });
+        await tx.payment.create({
+          data: {
+            invoiceId: invRecord.id,
+            tenantId,
+            amount: netPayable,
+            method: ['UPI', 'CHEQUE', 'BANK_TRANSFER'].includes(paymentMethod) ? paymentMethod : 'ONLINE',
+            reference: paymentRef || `RENEW-${Date.now().toString(36).toUpperCase()}`,
+            recordedById: req.user.id,
+            receivedAt: now,
+          },
+        });
+      }
+    });
+
+    const stats = await getLicenseStats(tenantId);
+
+    emitToTenant(tenantId, 'LICENSE_CAPACITY_UPDATED', {
+      licenseStats: stats,
+      message: `Annual subscription renewed for ${seatCount} seats until ${endsAt.toISOString().split('T')[0]}.`,
+    });
+
+    if (creditToRedeem > 0) {
+      emitToTenant(tenantId, 'WALLET_BALANCE_UPDATED', {
+        creditBalance: newCreditBalance,
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `Annual subscription successfully renewed for ${seatCount} seats until ${endsAt.toISOString().split('T')[0]}. ${creditToRedeem > 0 ? `₹${creditToRedeem.toLocaleString('en-IN')} wallet credit redeemed. ` : ''}Invoice ${generatedInvoiceNumber} generated.`,
+      invoiceNumber: generatedInvoiceNumber,
+      seatCount,
+      grossTotal,
+      creditRedeemed: creditToRedeem,
+      netPayable,
+      newWalletBalance: newCreditBalance,
+      renewalDate: endsAt,
+      licenseStats: stats,
     });
   } catch (err) {
     next(err);

@@ -29,6 +29,7 @@ export const clearanceSchema = z.object({
   department: z.enum(['it', 'hr', 'finance', 'manager', 'product', 'dept_head'], {
     errorMap: () => ({ message: 'Department must be one of: it, hr, finance, manager, product, dept_head' }),
   }),
+  subStep: z.enum(['pre_handover', 'post_handover', 'preHandover', 'postHandover']).optional().nullable(),
   cleared: z.boolean().default(true),
   remarks: z.string().optional().default(''),
   fileUrl: z.string().optional().nullable(),

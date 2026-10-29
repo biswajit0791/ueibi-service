@@ -9,6 +9,7 @@
  *   hr         any HR / Admin
  *   finance    any Finance user (or HR / Admin)
  *   manager    the exiting employee's reporting manager (or HR / Admin)
+ *              Has two independent sub-steps: Pre-Handover and Post-Handover.
  *   dept_head  head of the employee's own department — only when that
  *              department exists in the master list and is not IT itself
  *
@@ -49,6 +50,25 @@ export const CLEARANCE_SEQUENCE = [
 export const BASE_CLEARANCES = CLEARANCE_SEQUENCE;
 export const SEQUENCE_ORDER = ['manager', 'it', 'hr', 'finance', 'product'];
 
+/**
+ * Sub-steps under Reporting Manager clearance:
+ * Pre-Handover and Post-Handover are tracked and marked completed independently.
+ */
+export const MANAGER_SUB_STEPS = [
+  {
+    key: 'pre_handover',
+    label: 'Pre-Handover',
+    subStepNumber: '1.1',
+    description: 'Handover plan, knowledge transfer sessions, project task allocations, and transition roadmap.',
+  },
+  {
+    key: 'post_handover',
+    label: 'Post-Handover',
+    subStepNumber: '1.2',
+    description: 'Final deliverable handovers, codebase & repository access transfers, client transition, and sign-off.',
+  },
+];
+
 const lower = (s) => String(s || '').trim().toLowerCase();
 const isItDepartment = (name) => IT_DEPARTMENT_NAMES.includes(lower(name));
 const isProductDepartment = (name) => PRODUCT_DEPARTMENT_NAMES.includes(lower(name));
@@ -60,6 +80,96 @@ function parseRemarks(raw) {
   } catch {
     return {};
   }
+}
+
+/**
+ * Resolves Pre-Handover and Post-Handover sub-steps for a reporting manager clearance.
+ *
+ * @param {object} row - ExitClearance row
+ * @param {object} exit - ExitDetails object
+ */
+export function resolveManagerSubSteps(row, exit) {
+  const cd = parseRemarks(exit?.feedbackRemarks).clearances || {};
+  const mgrData = cd.manager || {};
+  const storedSubs = mgrData.subSteps || {};
+
+  const hasStoredPre = storedSubs.pre_handover !== undefined || storedSubs.preHandover !== undefined;
+  const hasStoredPost = storedSubs.post_handover !== undefined || storedSubs.postHandover !== undefined;
+
+  let preData;
+  let postData;
+
+  if (hasStoredPre || hasStoredPost) {
+    preData = storedSubs.pre_handover || storedSubs.preHandover || {};
+    postData = storedSubs.post_handover || storedSubs.postHandover || {};
+  } else {
+    const isCleared = row?.status === 'CLEARED' || !!exit?.managerCleared;
+    preData = {
+      cleared: isCleared,
+      remarks: isCleared ? (row?.remarks || mgrData.remarks || '') : '',
+      fileUrl: isCleared ? (row?.fileUrl || mgrData.fileUrl || null) : null,
+      fileName: isCleared ? (row?.fileName || mgrData.fileName || null) : null,
+      clearedBy: isCleared ? (row?.actedByName || mgrData.clearedBy || exit?.managerClearedBy || null) : null,
+      clearedAt: isCleared ? (row?.actedAt || mgrData.clearedAt || exit?.managerClearedAt || null) : null,
+    };
+    postData = {
+      cleared: isCleared,
+      remarks: isCleared ? (row?.remarks || mgrData.remarks || '') : '',
+      fileUrl: isCleared ? (row?.fileUrl || mgrData.fileUrl || null) : null,
+      fileName: isCleared ? (row?.fileName || mgrData.fileName || null) : null,
+      clearedBy: isCleared ? (row?.actedByName || mgrData.clearedBy || exit?.managerClearedBy || null) : null,
+      clearedAt: isCleared ? (row?.actedAt || mgrData.clearedAt || exit?.managerClearedAt || null) : null,
+    };
+  }
+
+  const preCleared = !!preData.cleared;
+  const postCleared = !!postData.cleared;
+
+  const subSteps = [
+    {
+      key: 'pre_handover',
+      label: 'Pre-Handover',
+      subStepNumber: '1.1',
+      description: 'Handover plan, knowledge transfer sessions, project task allocations, and transition roadmap.',
+      cleared: preCleared,
+      by: preCleared ? (preData.clearedBy || preData.by || preData.actedByName || null) : null,
+      at: preCleared ? (preData.clearedAt || preData.at || preData.actedAt || null) : null,
+      remarks: preData.remarks || '',
+      fileUrl: preData.fileUrl || null,
+      fileName: preData.fileName || null,
+      onBehalf: !!preData.onBehalf,
+      onBehalfReason: preData.onBehalfReason || null,
+    },
+    {
+      key: 'post_handover',
+      label: 'Post-Handover',
+      subStepNumber: '1.2',
+      description: 'Final deliverable handovers, codebase & repository access transfers, client transition, and sign-off.',
+      cleared: postCleared,
+      by: postCleared ? (postData.clearedBy || postData.by || postData.actedByName || null) : null,
+      at: postCleared ? (postData.clearedAt || postData.at || postData.actedAt || null) : null,
+      remarks: postData.remarks || '',
+      fileUrl: postData.fileUrl || null,
+      fileName: postData.fileName || null,
+      onBehalf: !!postData.onBehalf,
+      onBehalfReason: postData.onBehalfReason || null,
+    },
+  ];
+
+  const completedCount = (preCleared ? 1 : 0) + (postCleared ? 1 : 0);
+  const isFullyCleared = preCleared && postCleared;
+  const pendingSubStepLabels = subSteps.filter((s) => !s.cleared).map((s) => s.label);
+
+  return {
+    subSteps,
+    subStepsProgress: {
+      total: 2,
+      completed: completedCount,
+      percentage: completedCount * 50,
+    },
+    isFullyCleared,
+    pendingSubStepLabels,
+  };
 }
 
 /**
@@ -112,7 +222,12 @@ export async function ensureClearanceRows(exits) {
     if (missingBase.length > 0) {
       const cd = parseRemarks(exit.feedbackRemarks).clearances || {};
       const newRows = missingBase.map((c) => {
-        const cleared = !!exit[`${c.key}Cleared`];
+        let cleared = !!exit[`${c.key}Cleared`];
+        if (c.key === 'manager' && cd.manager?.subSteps) {
+          const preCleared = !!cd.manager.subSteps.pre_handover?.cleared;
+          const postCleared = !!cd.manager.subSteps.post_handover?.cleared;
+          cleared = preCleared && postCleared;
+        }
         return {
           key: c.key,
           label: c.label,
@@ -305,7 +420,22 @@ export function presentClearance(row, exit, user, ctx) {
   const perm = exit.exitStatus === 'COMPLETED'
     ? { allowed: false, onBehalf: false }
     : permissionFor(user, row, approvers);
-  const cleared = row.status === 'CLEARED';
+
+  let subSteps = null;
+  let subStepsProgress = null;
+  let isFullyCleared = row.status === 'CLEARED';
+
+  if (row.key === 'manager') {
+    const resolved = resolveManagerSubSteps(row, exit);
+    subSteps = resolved.subSteps.map((s) => ({
+      ...s,
+      canAct: perm.allowed && exit.exitStatus !== 'COMPLETED',
+    }));
+    subStepsProgress = resolved.subStepsProgress;
+    isFullyCleared = resolved.isFullyCleared;
+  }
+
+  const cleared = isFullyCleared;
 
   // Sequence verification: 1. Manager -> 2. IT -> 3. HR -> 4. Finance -> 5. Product
   const targetSeqIdx = SEQUENCE_ORDER.indexOf(row.key);
@@ -315,12 +445,27 @@ export function presentClearance(row, exit, user, ctx) {
   if (targetSeqIdx > 0 && !cleared) {
     const predKeys = SEQUENCE_ORDER.slice(0, targetSeqIdx);
     const pendingPredecessor = (exit.clearances || [])
-      .filter((c) => predKeys.includes(c.key) && c.status !== 'CLEARED')
+      .filter((c) => {
+        if (!predKeys.includes(c.key)) return false;
+        if (c.key === 'manager') {
+          const res = resolveManagerSubSteps(c, exit);
+          return !res.isFullyCleared;
+        }
+        return c.status !== 'CLEARED';
+      })
       .sort((a, b) => SEQUENCE_ORDER.indexOf(a.key) - SEQUENCE_ORDER.indexOf(b.key))[0];
 
     if (pendingPredecessor) {
       isSequenceBlocked = true;
-      waitingOnPredecessor = pendingPredecessor.label;
+      if (pendingPredecessor.key === 'manager') {
+        const res = resolveManagerSubSteps(pendingPredecessor, exit);
+        const pendingSubs = res.pendingSubStepLabels;
+        waitingOnPredecessor = pendingSubs.length > 0
+          ? `Reporting Manager (${pendingSubs.join(' & ')} pending)`
+          : pendingPredecessor.label;
+      } else {
+        waitingOnPredecessor = pendingPredecessor.label;
+      }
     }
   }
 
@@ -350,6 +495,8 @@ export function presentClearance(row, exit, user, ctx) {
     canAct: perm.allowed && !isSequenceBlocked,
     requiresReason: perm.allowed && perm.onBehalf,
     assignedToMe: exit.exitStatus !== 'COMPLETED' && isAssignedTo(user, row, approvers),
+    subSteps,
+    subStepsProgress,
   };
 }
 

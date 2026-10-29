@@ -62,6 +62,7 @@ model Tenant {
   domainName           String                   @unique
   tenantCode           String                   @unique
   licenseLimit         Int                      @default(0)
+  creditBalance        Decimal                  @default(0.00) @db.Decimal(10, 2)
   // True only for the single internal tenant that houses PLATFORM_OWNER users.
   // Never set on a customer company.
   isPlatform           Boolean                  @default(false)
@@ -124,6 +125,7 @@ model Tenant {
   permissionAuditLogs  PermissionAuditLog[]
   followers            Follower[]
   reviewConcerns       ReviewConcern[]
+  walletTransactions   WalletTransaction[]
 
   @@index([isPlatform])
   @@index([status])
@@ -324,6 +326,7 @@ model TenantUser {
   galleryComments     GalleryComment[]     @relation("GalleryCommentAuthor")
   licenseRequests     LicenseRequest[]     @relation("UserLicenseRequests")
   paidLicenseRequests LicenseRequest[]     @relation("PaidLicenseRequests")
+  createdWalletTransactions WalletTransaction[] @relation("CreatedWalletTransactions")
   permissionAuditsActed PermissionAuditLog[] @relation("PermissionAuditActor")
 
   remarks   String?
@@ -730,6 +733,7 @@ model Invoice {
   couponId       String?
   couponCode     String?
   discountAmount Decimal @default(0) @db.Decimal(10, 2)
+  creditRedeemed Decimal @default(0) @db.Decimal(10, 2)
   gstRate        Decimal @db.Decimal(5, 4)
   gstAmount      Decimal @db.Decimal(10, 2)
   totalAmount    Decimal @db.Decimal(10, 2)
@@ -2720,6 +2724,28 @@ model LicenseRequest {
 
   @@index([tenantId, status])
   @@map("license_requests")
+}
+
+/// Ledger tracking all wallet balance credit and redemption events.
+/// Generated when unused licenses are retracted or when credit is redeemed against renewals.
+model WalletTransaction {
+  id              String      @id @default(cuid())
+  tenantId        String
+  tenant          Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  type            String      // RETRACTION_CREDIT | RENEWAL_REDEMPTION | MANUAL_CREDIT | MANUAL_DEBIT
+  amount          Decimal     @db.Decimal(10, 2)
+  balanceAfter    Decimal     @db.Decimal(10, 2)
+  seatsRetracted  Int?
+  unitCredit      Decimal?    @db.Decimal(10, 2)
+  remainingMonths Int?
+  description     String?     @db.Text
+  referenceId     String?
+  createdById     String?
+  createdBy       TenantUser? @relation("CreatedWalletTransactions", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt       DateTime    @default(now())
+
+  @@index([tenantId, createdAt])
+  @@map("wallet_transactions")
 }
 
 /// A single department clearance an exit needs. Rows are created when the exit
