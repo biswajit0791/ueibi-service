@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { ACCOUNT_EXITED } from '../lib/accountAccess.js';
 import bcrypt from 'bcryptjs';
 import { prisma } from '../lib/prisma.js';
 import { signToken } from '../lib/jwt.js';
@@ -47,7 +48,7 @@ export async function login(req, res, next) {
     // ── Exited or Deactivated Account ─────────────────────────────────────────
     if (user.status === 'EXITED' || user.isDeleted) {
       console.warn(`[AUTH] 403: Attempted login by exited/inactive user "${cleanEmail}"`);
-      return res.status(403).json({ error: 'Access forbidden: account is inactive/exited', code: 'ACCOUNT_EXITED' });
+      return res.status(403).json({ error: ACCOUNT_EXITED.message, code: ACCOUNT_EXITED.code });
     }
 
     // ── Suspended company ────────────────────────────────────────────────────
@@ -185,7 +186,7 @@ export async function me(req, res, next) {
     }
 
     if (user.status === 'EXITED') {
-      return res.status(403).json({ error: 'Access forbidden: this account is inactive/exited' });
+      return res.status(403).json({ error: ACCOUNT_EXITED.message, code: ACCOUNT_EXITED.code });
     }
 
     const userCapabilities = await loadCapabilities(user.id);
@@ -274,9 +275,16 @@ export async function forgotPassword(req, res, next) {
       },
     });
 
-    // If account does not exist or is inactive/exited, respond with generic message (anti-enumeration)
-    if (!user || user.isDeleted || user.status === 'EXITED') {
+    // Unknown email: generic message (anti-enumeration).
+    if (!user) {
       return res.status(200).json({ message: genericMessage });
+    }
+
+    // Exited / deactivated employee: say so plainly instead of pretending a
+    // link was sent. Product decision — this reveals that the address belongs
+    // to an ex-employee, in exchange for not leaving them waiting on an email.
+    if (user.isDeleted || user.status === 'EXITED') {
+      return res.status(403).json({ error: ACCOUNT_EXITED.message, code: ACCOUNT_EXITED.code });
     }
 
     // Generate high-entropy 32-byte raw token and SHA-256 hash
@@ -375,7 +383,7 @@ export async function resetPassword(req, res, next) {
       }
 
       if (tokenRecord.isDeleted || tokenRecord.status === 'EXITED') {
-        return { ok: false, error: 'Account is inactive or not found.' };
+        return { ok: false, error: ACCOUNT_EXITED.message, code: ACCOUNT_EXITED.code, status: 403 };
       }
 
       // Atomic conditional update to mark token as used
@@ -415,7 +423,7 @@ export async function resetPassword(req, res, next) {
     });
 
     if (!resetResult.ok) {
-      return res.status(400).json({ error: resetResult.error });
+      return res.status(resetResult.status || 400).json({ error: resetResult.error, ...(resetResult.code ? { code: resetResult.code } : {}) });
     }
 
     // Clear session cookie if any

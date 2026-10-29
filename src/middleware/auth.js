@@ -1,4 +1,5 @@
 import { verifyToken } from '../lib/jwt.js';
+import { ACCOUNT_EXITED } from '../lib/accountAccess.js';
 import { parseCookies } from '../lib/cookies.js';
 import { prisma } from '../lib/prisma.js';
 import { loadCapabilities } from '../lib/capabilities.js';
@@ -48,7 +49,7 @@ export async function requireAuth(req, res, next) {
       return res.status(401).json({ error: 'Account is no longer active' });
     }
     if (user.status === 'EXITED') {
-      return res.status(403).json({ error: 'Access forbidden: this account is inactive/exited' });
+      return res.status(403).json({ error: ACCOUNT_EXITED.message, code: ACCOUNT_EXITED.code });
     }
     const denial = tenantAccessDenial(user.tenant?.status);
     if (denial) {
