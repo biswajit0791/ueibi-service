@@ -374,10 +374,11 @@ export async function getDashboardSummary(req, res, next) {
     // Tasks marked private belong to their owner alone, so an aggregate shown to
     // a manager or HR must exclude everyone else's. The viewer's own private
     // tasks still count towards their own numbers.
+    const taskUserFilter = role === 'HR' ? { in: [viewerId] } : userFilter;
     const taskWhere = {
       tenantId,
-      ...(userFilter ? { employeeId: userFilter } : {}),
-      ...(audience === 'SELF'
+      ...(taskUserFilter ? { employeeId: taskUserFilter } : {}),
+      ...(audience === 'SELF' || role === 'HR'
         ? {}
         : { OR: [{ isPrivate: false }, { employeeId: viewerId }] }),
     };

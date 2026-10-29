@@ -37,9 +37,20 @@ export async function loadTaskForUser(taskId, user, tenantId) {
     throw { status: 404, message: 'Task not found' };
   }
 
-  if (hasRole(user.role, ELEVATED_ROLES)) return task;
+  const callerRole = String(user.role || '').toUpperCase();
+  // Elevated roles (SUPER_ADMIN, ADMIN, CMD) have full org-wide task access; HR is restricted to personal tasks
+  if (hasRole(user.role, ELEVATED_ROLES) && callerRole !== 'HR') return task;
   if (task.employeeId === user.id) return task;
   if (Array.isArray(task.assigneeIds) && task.assigneeIds.includes(user.id)) return task;
+
+  // HR users are restricted to their own personal tasks only
+  if (callerRole === 'HR') {
+    if (task.isDependencyOf) {
+      const parent = await prisma.task.findFirst({ where: { id: task.isDependencyOf, tenantId } });
+      if (parent && parent.employeeId === user.id) return task;
+    }
+    throw { status: 403, message: 'Access forbidden: you are not authorized to act on this task' };
+  }
 
   if (task.employeeId && await goalService.isSubordinate(user.id, task.employeeId, tenantId)) {
     return task;
