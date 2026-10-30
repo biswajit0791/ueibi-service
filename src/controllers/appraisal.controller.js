@@ -59,6 +59,51 @@ export async function canManagerReview(user, employee, tenantId) {
 // Self-assessment can no longer be edited once the manager (or HR) has acted.
 const SELF_LOCKED_STATUSES = ['MANAGER_REVIEWED', 'COMPLETED'];
 
+const isAnnualReview = (review) => String(review?.cycle?.frequency || review?.reviewType || '').toUpperCase() === 'ANNUAL';
+
+/**
+ * Annual appraisals run in order: employee self-appraisal → manager review → HR.
+ * Returns the reason `actor` ('MANAGER' | 'HR') can't act yet, or null.
+ */
+export function annualStageBlock(review, actor) {
+  if (!isAnnualReview(review)) return null;
+  const selfDone = ['SUBMITTED', 'MANAGER_REVIEWED', 'COMPLETED'].includes(review.status);
+  if (!selfDone) {
+    return {
+      code: 'SELF_APPRAISAL_PENDING',
+      error: actor === 'HR'
+        ? 'The employee has not submitted their self-appraisal and the manager has not reviewed it yet. HR can act once both are done.'
+        : 'The employee has not submitted their self-appraisal yet. You can rate them once they submit it.',
+    };
+  }
+  if (actor === 'HR' && review.status === 'SUBMITTED') {
+    return { code: 'MANAGER_REVIEW_PENDING', error: 'The manager has not reviewed this appraisal yet. HR can act once the manager review is submitted.' };
+  }
+  return null;
+}
+
+const CONCERN_INCLUDE = {
+  raisedBy: { select: { id: true, name: true, role: true, email: true } },
+  respondedBy: { select: { id: true, name: true, role: true, email: true } },
+  managerRespondedBy: { select: { id: true, name: true } },
+  escalatedTo: { select: { id: true, name: true, designation: true } },
+};
+
+const concernEvent = (type, user, extra = {}) => ({ type, byId: user.id, byName: user.name, at: new Date().toISOString(), ...extra });
+
+/** Keep the review's sign-off status in step with its concerns. */
+async function syncConcernStatus(review) {
+  const fresh = await prisma.performanceReview.findUnique({ where: { id: review.id }, select: { hrSignoffStatus: true, resultsSharedAt: true } });
+  if (!fresh || ['FINALISED', 'RELEASED'].includes(fresh.hrSignoffStatus)) return;
+  // Annual: a concern stays live until the employee accepts or HR gives the final decision.
+  const live = isAnnualReview(review) ? ['OPEN', 'RESOLVED', 'ESCALATED'] : ['OPEN'];
+  const liveCount = await prisma.reviewConcern.count({ where: { reviewId: review.id, status: { in: live } } });
+  const next = liveCount > 0 ? 'CONCERN_RAISED' : (fresh.resultsSharedAt ? 'SHARED' : 'PENDING_RELEASE');
+  if (next !== fresh.hrSignoffStatus) {
+    await prisma.performanceReview.update({ where: { id: review.id }, data: { hrSignoffStatus: next } });
+  }
+}
+
 /**
  * Fetch the review for (cycle, employee) or create a DRAFT — race-safe against
  * the unique constraint on (cycleId, employeeId, reviewType).
@@ -1144,17 +1189,15 @@ export async function getMyReview(req, res, next) {
         hrSignedOffBy: { select: { id: true, name: true } },
         resultsSharedBy: { select: { id: true, name: true } },
         finalisedBy: { select: { id: true, name: true } },
-        concerns: {
-          orderBy: { createdAt: 'asc' },
-          include: { raisedBy: { select: { id: true, name: true } }, respondedBy: { select: { id: true, name: true } } },
-        },
+        concerns: { include: CONCERN_INCLUDE, orderBy: { createdAt: 'asc' } },
       },
     );
 
     // HR's outcome is the employee's to see only once HR shares it (or
     // releases / finalises); until then the trail just shows "with HR".
+    // (A concern can be raised before HR shares, so CONCERN_RAISED alone doesn't count.)
     const hrVisible = Boolean(review.resultsSharedAt)
-      || ['SHARED', 'CONCERN_RAISED', 'RELEASED', 'FINALISED'].includes(review.hrSignoffStatus);
+      || ['SHARED', 'RELEASED', 'FINALISED'].includes(review.hrSignoffStatus);
     if (!hrVisible) {
       review.hrRating = null;
       review.hrRemarks = null;
@@ -1643,6 +1686,7 @@ export async function getEmployeeReviewForManager(req, res, next) {
       scores: {
         include: { parameter: true },
       },
+      concerns: { include: CONCERN_INCLUDE, orderBy: { createdAt: 'asc' } },
     };
 
     // Viewing must not create anything: before the employee starts, there is no review.
@@ -1688,7 +1732,7 @@ export async function updateManagerReview(req, res, next) {
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.errors });
     }
-    const { managerRemarks, managerComments, managerRating, scores } = parsed.data;
+    const { managerRemarks, managerComments, managerRating, scores, submit = true } = parsed.data;
     const remarks = managerRemarks || managerComments;
 
     const review = await prisma.performanceReview.findUnique({
@@ -1716,9 +1760,9 @@ export async function updateManagerReview(req, res, next) {
     if (review.hrSignoffStatus === 'RELEASED' || review.status === 'COMPLETED') {
       return res.status(409).json({ error: 'This appraisal has been finalised and can no longer be changed by the manager.' });
     }
-    if (!['SUBMITTED', 'MANAGER_REVIEWED'].includes(review.status) && !hasRole(req.user.role, ELEVATED_ROLES)) {
-      return res.status(409).json({ error: 'The employee has not submitted their self-assessment yet.' });
-    }
+    // Annual: no one (HR / CMD included) rates before the employee submits.
+    const stageBlock = annualStageBlock(review, 'MANAGER');
+    if (stageBlock) return res.status(409).json(stageBlock);
 
     let totalScore = 0;
     let scoreCount = 0;
@@ -1759,8 +1803,9 @@ export async function updateManagerReview(req, res, next) {
       data: {
         ...(remarks !== undefined && { managerRemarks: remarks }),
         ...(avgRating !== null && avgRating !== undefined && { managerRating: parseFloat(avgRating) }),
-        status: 'MANAGER_REVIEWED',
-        managerSubmittedAt: new Date(),
+        // A draft save keeps the review where it is; only a submit hands it to HR.
+        ...((submit || review.status === 'MANAGER_REVIEWED') && { status: 'MANAGER_REVIEWED' }),
+        ...(submit && { managerSubmittedAt: new Date() }),
       },
       include: {
         scores: {
@@ -1769,12 +1814,26 @@ export async function updateManagerReview(req, res, next) {
       },
     });
 
+    // A re-rating while the employee's concern is live goes on that concern's record.
+    const newRating = updated.managerRating;
+    if (review.status === 'MANAGER_REVIEWED' && newRating != null && review.managerRating != null && newRating !== review.managerRating) {
+      const live = await prisma.reviewConcern.findMany({ where: { reviewId: id, status: { in: ['OPEN', 'RESOLVED', 'ESCALATED'] } } });
+      for (const c of live) {
+        await prisma.reviewConcern.update({
+          where: { id: c.id },
+          data: { history: [...(Array.isArray(c.history) ? c.history : []), concernEvent('MANAGER_REVISED', req.user, { from: review.managerRating, to: newRating })] },
+        });
+      }
+    }
+
     // Trigger notification
-    await AppraisalNotificationService.notifyManagerReviewSubmitted({
-      tenantId: req.tenantId,
-      employeeId: review.employeeId,
-      reviewId: id,
-    });
+    if (submit) {
+      await AppraisalNotificationService.notifyManagerReviewSubmitted({
+        tenantId: req.tenantId,
+        employeeId: review.employeeId,
+        reviewId: id,
+      });
+    }
 
     res.json(updated);
   } catch (err) {
@@ -2293,6 +2352,7 @@ export async function getHrAuditReview(req, res, next) {
         employee: { select: { id: true, name: true, email: true, designation: true, department: true, band: true } },
         hrSignedOffBy: { select: { id: true, name: true, email: true } },
         scores: { include: { parameter: true } },
+        concerns: { include: CONCERN_INCLUDE, orderBy: { createdAt: 'asc' } },
       },
     );
 
@@ -2363,6 +2423,8 @@ export async function updateHrAuditReview(req, res, next) {
     if (review.hrSignoffStatus === 'RELEASED') {
       return res.status(409).json({ error: 'Appraisal audit sign-off has already been released and cannot be modified' });
     }
+    const stageBlock = annualStageBlock(review, 'HR');
+    if (stageBlock) return res.status(409).json(stageBlock);
 
     if (Array.isArray(scores)) {
       for (const item of scores) {
@@ -2618,13 +2680,7 @@ export async function getReviewById(req, res, next) {
         finalisedBy: {
           select: { id: true, name: true, email: true },
         },
-        concerns: {
-          include: {
-            raisedBy: { select: { id: true, name: true, role: true, email: true } },
-            respondedBy: { select: { id: true, name: true, role: true, email: true } },
-          },
-          orderBy: { createdAt: 'asc' },
-        },
+        concerns: { include: CONCERN_INCLUDE, orderBy: { createdAt: 'asc' } },
       },
     });
 
@@ -2879,12 +2935,18 @@ export async function updateReview(req, res, next) {
     }
 
     if (isManager || isElevated) {
+      if (managerRemarks !== undefined || managerRating !== undefined) {
+        const stageBlock = annualStageBlock(review, 'MANAGER');
+        if (stageBlock) return res.status(409).json(stageBlock);
+      }
       if (managerRemarks !== undefined) dataToUpdate.managerRemarks = managerRemarks;
       if (managerRating !== undefined) dataToUpdate.managerRating = Number(managerRating);
     }
 
     if (isElevated) {
       if (hikePercentage !== undefined) {
+        const stageBlock = annualStageBlock(review, 'HR');
+        if (stageBlock) return res.status(409).json(stageBlock);
         if (review.cycle?.frequency !== 'ANNUAL') {
           return res.status(400).json({ error: 'Hike percentage can only be set on the annual appraisal review.' });
         }
@@ -2946,6 +3008,8 @@ export async function shareReviewResults(req, res, next) {
     if (review.hrSignoffStatus === 'FINALISED' || review.hrSignoffStatus === 'RELEASED') {
       return res.status(409).json({ error: 'This review has already been finalised.' });
     }
+    const stageBlock = annualStageBlock(review, 'HR');
+    if (stageBlock) return res.status(409).json(stageBlock);
 
     const { hrRating, hrRemarks, workScore: manualWorkScore, averageManagerRating: manualAvgRating } = req.body || {};
 
@@ -2993,7 +3057,8 @@ export async function shareReviewResults(req, res, next) {
     const updated = await prisma.performanceReview.update({
       where: { id },
       data: {
-        hrSignoffStatus: 'SHARED',
+        // Re-sharing while a concern is live keeps it flagged.
+        hrSignoffStatus: review.hrSignoffStatus === 'CONCERN_RAISED' ? 'CONCERN_RAISED' : 'SHARED',
         resultsSharedAt: new Date(),
         resultsSharedById: req.user.id,
         workScore: calculatedWorkScore,
@@ -3004,12 +3069,7 @@ export async function shareReviewResults(req, res, next) {
       include: {
         resultsSharedBy: { select: { id: true, name: true, email: true } },
         scores: { include: { parameter: true } },
-        concerns: {
-          include: {
-            raisedBy: { select: { id: true, name: true, role: true } },
-            respondedBy: { select: { id: true, name: true, role: true } },
-          },
-        },
+        concerns: { include: CONCERN_INCLUDE, orderBy: { createdAt: 'asc' } },
       },
     });
 
@@ -3030,9 +3090,42 @@ export async function shareReviewResults(req, res, next) {
   }
 }
 
+async function notifyConcernHr(req, reviewId, body, excludeIds = []) {
+  const hrUsers = await prisma.tenantUser.findMany({
+    where: { tenantId: req.tenantId, role: { in: ['HR', 'ADMIN', 'SUPER_ADMIN'] } },
+    select: { id: true },
+  });
+  for (const hr of hrUsers) {
+    if (!excludeIds.includes(hr.id)) {
+      await pushNotification({
+        tenantId: req.tenantId,
+        recipientId: hr.id,
+        type: 'review_concern',
+        title: 'Review Concern Update',
+        body,
+        entityType: 'review',
+        entityId: reviewId,
+      });
+    }
+  }
+}
+
+async function notifyConcernOwner(req, concern, body) {
+  await pushNotification({
+    tenantId: req.tenantId,
+    recipientId: concern.raisedById,
+    type: 'concern_responded',
+    title: 'Concern Response Received',
+    body,
+    entityType: 'review',
+    entityId: concern.reviewId,
+  });
+}
+
 /**
  * POST /performance-reviews/:id/concerns
- * Employee raises a concern on their shared review results.
+ * The employee raises a concern about their ratings. On the annual appraisal this
+ * is possible as soon as the manager has rated them; HR then answers it.
  */
 export async function raiseReviewConcern(req, res, next) {
   try {
@@ -3049,7 +3142,7 @@ export async function raiseReviewConcern(req, res, next) {
 
     const review = await prisma.performanceReview.findUnique({
       where: { id },
-      include: { employee: true },
+      include: { employee: true, cycle: { select: { frequency: true } } },
     });
 
     if (!review || review.employee.tenantId !== req.tenantId) {
@@ -3063,18 +3156,22 @@ export async function raiseReviewConcern(req, res, next) {
     if (review.hrSignoffStatus === 'FINALISED' || review.hrSignoffStatus === 'RELEASED') {
       return res.status(409).json({ error: 'Cannot raise concerns on a finalised review.' });
     }
+    if (isAnnualReview(review) && !['MANAGER_REVIEWED', 'COMPLETED'].includes(review.status)) {
+      return res.status(409).json({ error: 'You can raise a concern once your manager has rated your appraisal.' });
+    }
 
+    const text = comment.trim();
     const concern = await prisma.reviewConcern.create({
       data: {
         tenantId: req.tenantId,
         reviewId: id,
         raisedById: req.user.id,
-        comment: comment.trim(),
+        subject: text.length > 80 ? `${text.slice(0, 77)}...` : text,
+        details: text,
         status: 'OPEN',
+        history: [concernEvent('RAISED', req.user, { text })],
       },
-      include: {
-        raisedBy: { select: { id: true, name: true, role: true, email: true } },
-      },
+      include: CONCERN_INCLUDE,
     });
 
     await prisma.performanceReview.update({
@@ -3090,29 +3187,13 @@ export async function raiseReviewConcern(req, res, next) {
         recipientId: managerId,
         type: 'review_concern',
         title: 'Review Concern Raised',
-        body: `${req.user.name} raised a concern on their performance review: "${comment.trim().slice(0, 80)}..."`,
+        body: `${req.user.name} raised a concern on their performance review: "${text.slice(0, 80)}..."`,
         entityType: 'review',
         entityId: id,
       });
     }
 
-    const hrUsers = await prisma.tenantUser.findMany({
-      where: { tenantId: req.tenantId, role: { in: ['HR', 'ADMIN', 'SUPER_ADMIN'] } },
-      select: { id: true },
-    });
-    for (const hr of hrUsers) {
-      if (hr.id !== req.user.id && hr.id !== managerId) {
-        await pushNotification({
-          tenantId: req.tenantId,
-          recipientId: hr.id,
-          type: 'review_concern',
-          title: 'Review Concern Raised',
-          body: `${req.user.name} raised a concern on their performance review.`,
-          entityType: 'review',
-          entityId: id,
-        });
-      }
-    }
+    await notifyConcernHr(req, id, `${req.user.name} raised a concern on their performance review.`, [req.user.id, managerId]);
 
     res.status(201).json({ success: true, concern });
   } catch (err) {
@@ -3136,6 +3217,7 @@ export async function listReviewConcerns(req, res, next) {
       where: { id },
       include: { employee: true },
     });
+
     if (!review || review.employee.tenantId !== req.tenantId) {
       return res.status(404).json({ error: 'Review not found' });
     }
@@ -3148,10 +3230,7 @@ export async function listReviewConcerns(req, res, next) {
 
     const concerns = await prisma.reviewConcern.findMany({
       where: { reviewId: id, tenantId: req.tenantId },
-      include: {
-        raisedBy: { select: { id: true, name: true, role: true, email: true } },
-        respondedBy: { select: { id: true, name: true, role: true, email: true } },
-      },
+      include: CONCERN_INCLUDE,
       orderBy: { createdAt: 'asc' },
     });
 
@@ -3163,69 +3242,222 @@ export async function listReviewConcerns(req, res, next) {
 
 /**
  * POST /performance-reviews/:id/concerns/:cid/respond
- * Manager or HR responds to a raised concern.
+ *
+ * Annual appraisal:
+ * - The reporting manager adds their side; this does not close the concern.
+ * - The skip-level manager, once the employee has escalated, adds a note.
+ * - HR (not the employee's own manager) answers with an outcome — RATING_KEPT or
+ *   RATING_REVISED (with the new rating). A first answer goes back to the employee
+ *   to accept or dispute; the answer after an escalation is final.
+ * Monthly / quarterly: the manager or HR replies and the concern is resolved.
  */
 export async function respondReviewConcern(req, res, next) {
   try {
     const { id, cid } = req.params;
-    const { response, markResolved = true } = req.body || {};
+    const { response, markResolved = true, outcome, revisedRating } = req.body || {};
 
     if (!response || typeof response !== 'string' || response.trim().length === 0) {
       return res.status(400).json({ error: 'Response content is required.' });
     }
+    const text = response.trim();
 
     const concern = await prisma.reviewConcern.findFirst({
       where: { id: cid, reviewId: id, tenantId: req.tenantId },
-      include: { review: { include: { employee: true } } },
+      include: { review: { include: { employee: true, cycle: { select: { frequency: true } } } } },
     });
 
     if (!concern) {
       return res.status(404).json({ error: 'Review concern not found.' });
     }
 
+    const { review } = concern;
     const isElevated = hasRole(req.user.role, ELEVATED_ROLES);
-    const isManager = concern.review.employee?.managerId === req.user.id;
-    if (!isElevated && !isManager) {
-      return res.status(403).json({ error: 'Only reporting managers or HR can respond to review concerns.' });
+    const isManager = review.employee?.managerId === req.user.id;
+
+    if (!isAnnualReview(review)) {
+      if (!isElevated && !isManager) {
+        return res.status(403).json({ error: 'Only reporting managers or HR can respond to review concerns.' });
+      }
+      const updatedConcern = await prisma.reviewConcern.update({
+        where: { id: cid },
+        data: {
+          response: text,
+          respondedById: req.user.id,
+          respondedAt: new Date(),
+          status: markResolved ? 'RESOLVED' : 'OPEN',
+        },
+        include: CONCERN_INCLUDE,
+      });
+      if (markResolved) await syncConcernStatus(review);
+      await notifyConcernOwner(req, concern, `${req.user.name} responded to your review concern: "${text.slice(0, 80)}..."`);
+      return res.json({ success: true, concern: updatedConcern });
     }
 
+    if (['CLOSED', 'RESOLVED'].includes(concern.status)) {
+      return res.status(409).json({ error: concern.status === 'CLOSED' ? 'This concern is closed.' : 'HR has answered this concern; it is now with the employee.' });
+    }
+    const history = Array.isArray(concern.history) ? concern.history : [];
+
+    // The skip-level manager adds a note (even if they are CMD); HR still decides.
+    if (concern.status === 'ESCALATED' && concern.escalatedToId === req.user.id) {
+      const updatedConcern = await prisma.reviewConcern.update({
+        where: { id: cid },
+        data: {
+          escalationNote: text,
+          escalationNoteAt: new Date(),
+          history: [...history, concernEvent('SKIP_LEVEL_NOTE', req.user, { text })],
+        },
+        include: CONCERN_INCLUDE,
+      });
+      await notifyConcernHr(req, id, `${req.user.name} added a note on ${review.employee.name}'s escalated appraisal concern.`, [req.user.id]);
+      return res.json({ success: true, concern: updatedConcern });
+    }
+
+    // HR decides — but never on their own review, and not as the manager being challenged.
+    const canDecide = isElevated && !isManager && review.employeeId !== req.user.id;
+    if (canDecide) {
+      if (!['RATING_KEPT', 'RATING_REVISED'].includes(outcome)) {
+        return res.status(400).json({ error: 'Choose an outcome: keep the rating or revise it.' });
+      }
+      const from = review.hrRating ?? review.managerRating ?? null;
+      let to = null;
+      if (outcome === 'RATING_REVISED') {
+        to = Number(revisedRating);
+        if (!Number.isFinite(to) || to < 1 || to > 5 || Math.round(to * 2) !== to * 2) {
+          return res.status(400).json({ error: 'Enter the revised rating between 1 and 5, in steps of 0.5.' });
+        }
+        await prisma.performanceReview.update({ where: { id }, data: { hrRating: to } });
+      }
+      const isFinal = concern.status === 'ESCALATED';
+      const updatedConcern = await prisma.reviewConcern.update({
+        where: { id: cid },
+        data: {
+          response: text,
+          respondedById: req.user.id,
+          respondedAt: new Date(),
+          outcome,
+          previousRating: from,
+          revisedRating: to,
+          status: isFinal ? 'CLOSED' : 'RESOLVED',
+          history: [...history, concernEvent(isFinal ? 'HR_FINAL' : 'HR_RESPONSE', req.user, { text, outcome, from, to })],
+        },
+        include: CONCERN_INCLUDE,
+      });
+      await syncConcernStatus(review);
+      const ratingNote = outcome === 'RATING_REVISED' ? ` Your rating was revised from ${from ?? '—'} to ${to}.` : ' Your rating was kept.';
+      await notifyConcernOwner(req, concern, isFinal
+        ? `HR gave the final decision on your concern.${ratingNote}`
+        : `HR answered your concern.${ratingNote} Please accept it, or tell us if you are still not satisfied.`);
+      return res.json({ success: true, concern: updatedConcern });
+    }
+
+    if (isManager || (!isElevated && await canManagerReview(req.user, review.employee, req.tenantId))) {
+      const updatedConcern = await prisma.reviewConcern.update({
+        where: { id: cid },
+        data: {
+          managerResponse: text,
+          managerRespondedById: req.user.id,
+          managerRespondedAt: new Date(),
+          history: [...history, concernEvent('MANAGER_REPLY', req.user, { text })],
+        },
+        include: CONCERN_INCLUDE,
+      });
+      await notifyConcernOwner(req, concern, `${req.user.name} replied to your appraisal concern. HR will give the outcome.`);
+      await notifyConcernHr(req, id, `${req.user.name} replied to ${review.employee.name}'s appraisal concern — it is waiting for HR's outcome.`, [req.user.id]);
+      return res.json({ success: true, concern: updatedConcern });
+    }
+
+    return res.status(403).json({ error: 'Only HR, the reporting manager or the escalation manager can respond to this concern.' });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /performance-reviews/:id/concerns/:cid/decision
+ * Annual appraisal: after HR answers, the employee accepts (concern closed) or says
+ * they are still not satisfied — the concern is escalated to their manager's manager
+ * and comes back to HR for a final decision.
+ */
+export async function decideReviewConcern(req, res, next) {
+  try {
+    const { id, cid } = req.params;
+    const { decision, note } = req.body || {};
+    if (!['ACCEPT', 'DISPUTE'].includes(decision)) {
+      return res.status(400).json({ error: 'Decision must be ACCEPT or DISPUTE.' });
+    }
+    const text = typeof note === 'string' ? note.trim() : '';
+    if (decision === 'DISPUTE' && text.length < 5) {
+      return res.status(400).json({ error: 'Please say why you are still not satisfied (at least 5 characters).' });
+    }
+
+    const concern = await prisma.reviewConcern.findFirst({
+      where: { id: cid, reviewId: id, tenantId: req.tenantId },
+      include: { review: { include: { employee: { include: { manager: { select: { id: true, managerId: true } } } }, cycle: { select: { frequency: true } } } } },
+    });
+    if (!concern) {
+      return res.status(404).json({ error: 'Review concern not found.' });
+    }
+    if (concern.raisedById !== req.user.id) {
+      return res.status(403).json({ error: 'Only the person who raised this concern can accept or dispute the answer.' });
+    }
+    if (!isAnnualReview(concern.review) || concern.status !== 'RESOLVED') {
+      return res.status(409).json({ error: 'There is no HR answer waiting for your decision on this concern.' });
+    }
+    const { review } = concern;
+    if (review.hrSignoffStatus === 'FINALISED' || review.hrSignoffStatus === 'RELEASED') {
+      return res.status(409).json({ error: 'This review has already been finalised.' });
+    }
+
+    const history = Array.isArray(concern.history) ? concern.history : [];
+    const now = new Date();
+    if (decision === 'ACCEPT') {
+      const updatedConcern = await prisma.reviewConcern.update({
+        where: { id: cid },
+        data: {
+          status: 'CLOSED',
+          employeeDecision: 'ACCEPTED',
+          employeeDecisionNote: text || null,
+          employeeDecisionAt: now,
+          history: [...history, concernEvent('ACCEPTED', req.user, text ? { text } : {})],
+        },
+        include: CONCERN_INCLUDE,
+      });
+      await syncConcernStatus(review);
+      await notifyConcernHr(req, id, `${req.user.name} accepted HR's answer to their appraisal concern.`, [req.user.id]);
+      return res.json({ success: true, concern: updatedConcern });
+    }
+
+    // The manager being challenged can't be the escalation point; go one level up.
+    const skipLevelId = review.employee?.manager?.managerId || null;
+    const escalatedToId = skipLevelId && skipLevelId !== req.user.id ? skipLevelId : null;
     const updatedConcern = await prisma.reviewConcern.update({
       where: { id: cid },
       data: {
-        response: response.trim(),
-        respondedById: req.user.id,
-        respondedAt: new Date(),
-        status: markResolved ? 'RESOLVED' : 'OPEN',
+        status: 'ESCALATED',
+        employeeDecision: 'DISPUTED',
+        employeeDecisionNote: text,
+        employeeDecisionAt: now,
+        escalatedToId,
+        escalatedAt: now,
+        history: [...history, concernEvent('DISPUTED', req.user, { text })],
       },
-      include: {
-        raisedBy: { select: { id: true, name: true, role: true, email: true } },
-        respondedBy: { select: { id: true, name: true, role: true, email: true } },
-      },
+      include: CONCERN_INCLUDE,
     });
+    await syncConcernStatus(review);
 
-    // If marked resolved, check if all concerns on this review are now resolved
-    if (markResolved) {
-      const openCount = await prisma.reviewConcern.count({
-        where: { reviewId: id, status: 'OPEN' },
+    if (escalatedToId) {
+      await pushNotification({
+        tenantId: req.tenantId,
+        recipientId: escalatedToId,
+        type: 'review_concern',
+        title: 'Appraisal Concern Escalated to You',
+        body: `${req.user.name} is not satisfied with the answer to their appraisal concern and it has been escalated to you as the skip-level manager.`,
+        entityType: 'review',
+        entityId: id,
       });
-      if (openCount === 0) {
-        await prisma.performanceReview.update({
-          where: { id },
-          data: { hrSignoffStatus: 'SHARED' },
-        });
-      }
     }
-
-    // Notify employee of resolution response
-    await pushNotification({
-      tenantId: req.tenantId,
-      recipientId: concern.raisedById,
-      type: 'concern_responded',
-      title: 'Concern Response Received',
-      body: `${req.user.name} responded to your review concern: "${response.trim().slice(0, 80)}..."`,
-      entityType: 'review',
-      entityId: id,
-    });
+    await notifyConcernHr(req, id, `${req.user.name} is still not satisfied with their appraisal outcome — the concern is escalated and needs HR's final decision.`, [req.user.id, escalatedToId]);
 
     res.json({ success: true, concern: updatedConcern });
   } catch (err) {
@@ -3251,20 +3483,34 @@ export async function finaliseReview(req, res, next) {
 
     const review = await prisma.performanceReview.findUnique({
       where: { id },
-      include: { employee: true },
+      include: { employee: true, cycle: { select: { frequency: true } } },
     });
 
     if (!review || review.employee.tenantId !== req.tenantId) {
       return res.status(404).json({ error: 'Performance review not found' });
     }
+    const stageBlock = annualStageBlock(review, 'HR');
+    if (stageBlock) return res.status(409).json(stageBlock);
 
-    // Check if open concerns remain
+    // Concerns still with HR (or escalated) must be answered first.
     const openConcernsCount = await prisma.reviewConcern.count({
-      where: { reviewId: id, status: 'OPEN' },
+      where: { reviewId: id, status: { in: ['OPEN', 'ESCALATED'] } },
     });
     if (openConcernsCount > 0) {
       return res.status(400).json({
         error: `Cannot finalise review: There are ${openConcernsCount} open concern(s) that must be addressed or resolved first.`,
+      });
+    }
+
+    // Answers the employee never accepted or disputed are closed with the review.
+    const awaiting = await prisma.reviewConcern.findMany({ where: { reviewId: id, status: 'RESOLVED' } });
+    for (const c of awaiting) {
+      await prisma.reviewConcern.update({
+        where: { id: c.id },
+        data: {
+          status: 'CLOSED',
+          history: [...(Array.isArray(c.history) ? c.history : []), concernEvent('CLOSED_ON_FINALISE', req.user)],
+        },
       });
     }
 

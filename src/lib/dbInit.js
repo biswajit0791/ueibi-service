@@ -906,6 +906,24 @@ export async function ensurePerformanceColumns() {
     } catch {
       // index already exists
     }
+    // Annual appraisal dispute flow (HR outcome, employee accept/dispute, skip-level escalation)
+    await prisma.$executeRawUnsafe(`
+      ALTER TABLE "review_concerns"
+        ADD COLUMN IF NOT EXISTS "outcome" TEXT,
+        ADD COLUMN IF NOT EXISTS "previousRating" DOUBLE PRECISION,
+        ADD COLUMN IF NOT EXISTS "revisedRating" DOUBLE PRECISION,
+        ADD COLUMN IF NOT EXISTS "managerResponse" TEXT,
+        ADD COLUMN IF NOT EXISTS "managerRespondedById" TEXT REFERENCES "tenant_users"("id") ON DELETE SET NULL,
+        ADD COLUMN IF NOT EXISTS "managerRespondedAt" TIMESTAMP(3),
+        ADD COLUMN IF NOT EXISTS "employeeDecision" TEXT,
+        ADD COLUMN IF NOT EXISTS "employeeDecisionNote" TEXT,
+        ADD COLUMN IF NOT EXISTS "employeeDecisionAt" TIMESTAMP(3),
+        ADD COLUMN IF NOT EXISTS "escalatedToId" TEXT REFERENCES "tenant_users"("id") ON DELETE SET NULL,
+        ADD COLUMN IF NOT EXISTS "escalatedAt" TIMESTAMP(3),
+        ADD COLUMN IF NOT EXISTS "escalationNote" TEXT,
+        ADD COLUMN IF NOT EXISTS "escalationNoteAt" TIMESTAMP(3),
+        ADD COLUMN IF NOT EXISTS "history" JSONB NOT NULL DEFAULT '[]'::jsonb;
+    `);
 
     // 10. Ensure tasks.assigneeIds column and backfill exist
     await prisma.$executeRawUnsafe(`
