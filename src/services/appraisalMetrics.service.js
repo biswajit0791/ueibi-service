@@ -48,35 +48,52 @@ export function monthWindowsOf(cycle) {
 }
 
 /**
+ * Team-table Final Weightage and Manager Rating for many employees over a
+ * Monthly or Quarterly cycle, with one task query per month for the whole
+ * group. Returns a Map employeeId → metrics (null for other frequencies).
+ */
+export async function getTeamTableMetricsBulk(tenantId, employeeIds, cycle) {
+  const frequency = String(cycle?.frequency || '').toUpperCase();
+  const result = new Map();
+  if (!['MONTHLY', 'QUARTERLY'].includes(frequency) || employeeIds.length === 0) return result;
+
+  const windows = monthWindowsOf(cycle);
+  const summaries = await Promise.all(windows.map(async (window) => {
+    const tasks = await prisma.task.findMany({
+      where: { AND: [{ tenantId, employeeId: { in: employeeIds } }, dateRangeFilter(window.from, window.to)] },
+      select: WEIGHTAGE_TASK_SELECT,
+    });
+    return new Map(summariseByEmployee(tasks).map((s) => [s.employeeId, s]));
+  }));
+
+  for (const employeeId of employeeIds) {
+    const months = windows.map((window, i) => {
+      const summary = summaries[i].get(employeeId) || null;
+      return {
+        ...window,
+        finalWeight: summary?.avgFinalWeight ?? null,
+        managerRating: summary?.managerRating ?? null,
+        completedCount: summary?.completedCount ?? 0,
+        ratedCount: summary?.ratedCount ?? 0,
+      };
+    });
+    result.set(employeeId, {
+      source: 'TEAM_TABLE',
+      frequency,
+      cycleId: cycle.id,
+      cycleName: cycle.name,
+      months,
+      finalWeight: frequency === 'MONTHLY' ? months[0].finalWeight : averageOfMonths(months.map((m) => m.finalWeight)),
+      managerRating: frequency === 'MONTHLY' ? months[0].managerRating : averageOfMonths(months.map((m) => m.managerRating)),
+    });
+  }
+  return result;
+}
+
+/**
  * Team-table Final Weightage and Manager Rating for one employee over a
  * Monthly or Quarterly cycle. Returns null for any other frequency.
  */
 export async function getTeamTableMetrics(tenantId, employeeId, cycle) {
-  const frequency = String(cycle?.frequency || '').toUpperCase();
-  if (!['MONTHLY', 'QUARTERLY'].includes(frequency)) return null;
-
-  const months = await Promise.all(monthWindowsOf(cycle).map(async (window) => {
-    const tasks = await prisma.task.findMany({
-      where: { AND: [{ tenantId, employeeId }, dateRangeFilter(window.from, window.to)] },
-      select: WEIGHTAGE_TASK_SELECT,
-    });
-    const summary = summariseByEmployee(tasks).find((s) => s.employeeId === employeeId) || null;
-    return {
-      ...window,
-      finalWeight: summary?.avgFinalWeight ?? null,
-      managerRating: summary?.managerRating ?? null,
-      completedCount: summary?.completedCount ?? 0,
-      ratedCount: summary?.ratedCount ?? 0,
-    };
-  }));
-
-  return {
-    source: 'TEAM_TABLE',
-    frequency,
-    cycleId: cycle.id,
-    cycleName: cycle.name,
-    months,
-    finalWeight: frequency === 'MONTHLY' ? months[0].finalWeight : averageOfMonths(months.map((m) => m.finalWeight)),
-    managerRating: frequency === 'MONTHLY' ? months[0].managerRating : averageOfMonths(months.map((m) => m.managerRating)),
-  };
+  return (await getTeamTableMetricsBulk(tenantId, [employeeId], cycle)).get(employeeId) || null;
 }

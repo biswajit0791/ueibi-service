@@ -43,11 +43,15 @@ import {
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
 import { authorize } from '../middleware/rbac.js';
+import { listPeriodicSubmissions, hrReviewPeriodicAppraisal } from '../controllers/periodicAppraisal.controller.js';
 
 const router = Router();
 
 // ── Appraisal Submissions & Reviews ──────────────────────────────────────────
 router.post('/appraisals/submit', requireAuth, requireTenant, submitSelfRating);
+// Monthly / quarterly submissions: HR sees everyone and comments / locks; managers see their team.
+router.get('/appraisals/periodic-submissions', requireAuth, requireTenant, listPeriodicSubmissions);
+router.patch('/appraisals/:id/hr-review', requireAuth, requireTenant, authorize('HR', 'SUPER_ADMIN', 'CMD', 'ADMIN'), hrReviewPeriodicAppraisal);
 router.patch('/appraisals/:id/manager-review', requireAuth, requireTenant, submitManagerRating);
 router.get('/appraisals', requireAuth, requireTenant, listAppraisals);
 router.get('/appraisals/:id', requireAuth, requireTenant, getReviewById);
