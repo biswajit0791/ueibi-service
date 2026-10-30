@@ -66,3 +66,11 @@ test('a year given as text builds the same period as a number', () => {
   assert.equal(getPeriodMetadata('ANNUAL', new Date(), null, '2025', null, april).name, 'FY 2025-26');
   assert.equal(getPeriodMetadata('QUARTERLY', new Date(), null, '2025', 'Q2', april).name, 'Q2 FY 2025-26');
 });
+
+test('an annual cycle covers its twelve months for the yearly averages', () => {
+  const fy = getPeriodMetadata('ANNUAL', new Date(), null, 2025, null, april);
+  const months = monthWindowsOf(fy);
+  assert.equal(months.length, 12);
+  assert.equal(months[0].label, 'April 2025');
+  assert.equal(months[11].label, 'March 2026');
+});
