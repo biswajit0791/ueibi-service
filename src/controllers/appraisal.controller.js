@@ -7,6 +7,7 @@ import { computeCycleRollup } from '../services/reportAggregation.service.js';
 import { getCompanySettings } from '../services/companySettings.service.js';
 import { APPRAISAL_MONTH_NAMES, getFiscalYearPeriods, getPeriodMetadata, appraisalAvailability } from '../lib/appraisalPeriods.js';
 import { getTeamTableMetrics } from '../services/appraisalMetrics.service.js';
+import { getTenantFinancialYear } from '../lib/financialYear.js';
 import { ELEVATED_ROLES, HR_ROLES, MANAGER_OR_ELEVATED_ROLES, SUPER_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
 
 async function pushNotification({ tenantId, recipientId, type, title, body, entityType, entityId }) {
@@ -985,6 +986,14 @@ async function saveSelfAssessment(req, review, cycle, { selfAccomplishments, sel
     ? Number((totalScore / scoreCount).toFixed(2))
     : (selfRating !== undefined ? Number(selfRating) : null);
 
+  // A single overall rating (Appraisal Center) uses the same 1–5, half-step scale as parameter scores.
+  if (periodic && scoreCount === 0 && finalRating !== null && !Number.isInteger(finalRating * 2)) {
+    return { status: 400, body: { error: 'Self rating must be between 1 and 5 in steps of 0.5 (e.g. 3 or 3.5).' } };
+  }
+  if (periodic && submit && finalRating === null) {
+    return { status: 400, body: { error: 'Please give your self rating (1 to 5) before submitting.' } };
+  }
+
   // Freeze what the employee saw at submission, so HR reviews the same figures.
   const metrics = submit && periodic ? await getTeamTableMetrics(req.tenantId, review.employeeId, cycle) : null;
 
@@ -1009,6 +1018,77 @@ async function saveSelfAssessment(req, review, cycle, { selfAccomplishments, sel
   }
 
   return { status: 200, body: updated };
+}
+
+const REVIEW_PERIOD_SELECT = {
+  id: true, cycleId: true, status: true, selfRating: true, selfAccomplishments: true,
+  selfSubmittedAt: true, hrSignoffStatus: true, hrRemarks: true, managerTaskRatingSnapshot: true,
+};
+
+/**
+ * GET /api/performance-reviews/mine/periods?fiscalYear=2026
+ * Every monthly and quarterly appraisal period of a financial year for the
+ * caller — whether it has opened yet, what they have done with it, and the
+ * read-only Team-table figures. Lists only; it creates nothing.
+ */
+export async function getMyAppraisalPeriods(req, res, next) {
+  try {
+    const settings = await getCompanySettings(req.tenantId);
+    const current = getTenantFinancialYear(settings);
+    const requested = parseInt(req.query.fiscalYear, 10);
+    const fiscalYear = Number.isInteger(requested) && requested > 2000 && requested < 2100 ? requested : current.startYear;
+
+    const periods = [
+      ...getFiscalYearPeriods('MONTHLY', fiscalYear, settings),
+      ...getFiscalYearPeriods('QUARTERLY', fiscalYear, settings),
+    ];
+    const cycles = await prisma.appraisalCycle.findMany({
+      where: { tenantId: req.tenantId, frequency: { in: ['MONTHLY', 'QUARTERLY'] }, name: { in: periods.map((p) => p.name) } },
+      select: { id: true, name: true, frequency: true },
+    });
+    const cycleByKey = new Map(cycles.map((c) => [`${c.frequency}:${c.name}`, c]));
+    const reviews = cycles.length
+      ? await prisma.performanceReview.findMany({
+          where: { employeeId: req.user.id, cycleId: { in: cycles.map((c) => c.id) } },
+          select: REVIEW_PERIOD_SELECT,
+        })
+      : [];
+    const reviewByCycle = new Map(reviews.map((r) => [r.cycleId, r]));
+
+    const items = await Promise.all(periods.map(async (period) => {
+      const cycle = cycleByKey.get(`${period.frequency}:${period.name}`) || null;
+      const review = cycle ? reviewByCycle.get(cycle.id) || null : null;
+      const availability = appraisalAvailability(period);
+      const snapshot = review?.managerTaskRatingSnapshot?.source === 'TEAM_TABLE' ? review.managerTaskRatingSnapshot : null;
+      const teamMetrics = snapshot
+        || (availability.available ? await getTeamTableMetrics(req.tenantId, req.user.id, { ...period, id: cycle?.id || null }) : null);
+      const { managerTaskRatingSnapshot, ...reviewOut } = review || {};
+      return {
+        frequency: period.frequency,
+        name: period.name,
+        periodLabel: period.periodLabel,
+        year: period.year,
+        month: period.month,
+        monthNumber: period.monthNumber,
+        startDate: period.startDate,
+        endDate: period.endDate,
+        availability,
+        review: review ? reviewOut : null,
+        teamMetrics,
+      };
+    }));
+
+    res.json({
+      fiscalYear,
+      fiscalYearLabel: `FY ${fiscalYear}-${String((fiscalYear + 1) % 100).padStart(2, '0')}`,
+      currentFiscalYear: current.startYear,
+      financialYearStartMonth: current.startMonth,
+      monthly: items.filter((i) => i.frequency === 'MONTHLY'),
+      quarterly: items.filter((i) => i.frequency === 'QUARTERLY'),
+    });
+  } catch (err) {
+    next(err);
+  }
 }
 
 export async function getMyReview(req, res, next) {
