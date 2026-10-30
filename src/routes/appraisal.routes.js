@@ -39,6 +39,7 @@ import {
   listReviewConcerns,
   respondReviewConcern,
   finaliseReview,
+  decideReviewConcern,
 } from '../controllers/appraisal.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
@@ -108,6 +109,7 @@ router.post('/performance-reviews/:id/share-results', requireAuth, requireTenant
 router.post('/performance-reviews/:id/concerns', requireAuth, requireTenant, raiseReviewConcern);
 router.get('/performance-reviews/:id/concerns', requireAuth, requireTenant, listReviewConcerns);
 router.post('/performance-reviews/:id/concerns/:cid/respond', requireAuth, requireTenant, respondReviewConcern);
+router.post('/performance-reviews/:id/concerns/:cid/decision', requireAuth, requireTenant, decideReviewConcern);
 router.post('/performance-reviews/:id/finalise', requireAuth, requireTenant, authorize('HR', 'SUPER_ADMIN', 'CMD', 'ADMIN'), finaliseReview);
 
 export default router;

@@ -272,6 +272,8 @@ model TenantUser {
   hrFinalisedReviews         PerformanceReview[]      @relation("HrFinalisedBy")
   concernsRaised             ReviewConcern[]          @relation("ConcernRaisedBy")
   concernsResponded          ReviewConcern[]          @relation("ConcernRespondedBy")
+  concernsManagerReplied     ReviewConcern[]          @relation("ConcernManagerRespondedBy")
+  concernsEscalatedTo        ReviewConcern[]          @relation("ConcernEscalatedTo")
   leaveRequests              LeaveRequest[]           @relation("EmployeeLeaves")
   approvedLeaves             LeaveRequest[]           @relation("ApprovedLeaves")
   createdLeaveTypes          LeaveType[]              @relation("LeaveTypeCreator")
@@ -1624,6 +1626,25 @@ model ReviewConcern {
   respondedById String?
   respondedBy   TenantUser?       @relation("ConcernRespondedBy", fields: [respondedById], references: [id], onDelete: SetNull)
   respondedAt   DateTime?
+  // Annual appraisal dispute flow: OPEN (with HR) → RESOLVED (HR answered, employee to accept
+  // or dispute) → ESCALATED (skip-level involved, HR to give a final decision) → CLOSED.
+  outcome              String? // RATING_KEPT | RATING_REVISED
+  previousRating       Float?
+  revisedRating        Float?
+  managerResponse      String?     @db.Text
+  managerRespondedById String?
+  managerRespondedBy   TenantUser? @relation("ConcernManagerRespondedBy", fields: [managerRespondedById], references: [id], onDelete: SetNull)
+  managerRespondedAt   DateTime?
+  employeeDecision     String? // ACCEPTED | DISPUTED
+  employeeDecisionNote String?     @db.Text
+  employeeDecisionAt   DateTime?
+  escalatedToId        String?
+  escalatedTo          TenantUser? @relation("ConcernEscalatedTo", fields: [escalatedToId], references: [id], onDelete: SetNull)
+  escalatedAt          DateTime?
+  escalationNote       String?     @db.Text
+  escalationNoteAt     DateTime?
+  // Every step of the thread, oldest first: { type, byId, byName, at, text?, outcome?, from?, to? }
+  history              Json        @default("[]")
   createdAt     DateTime          @default(now())
   updatedAt     DateTime          @updatedAt
 
