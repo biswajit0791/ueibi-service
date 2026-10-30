@@ -1136,8 +1136,31 @@ export async function getMyReview(req, res, next) {
       cycleId,
       req.user.id,
       { reviewType: activeCycle.frequency || 'MONTHLY', dueDate: activeCycle.endDate },
-      { cycle: true, scores: { include: { parameter: true } } },
+      {
+        cycle: true,
+        scores: { include: { parameter: true } },
+        // For the employee's progress trail: who acted, and the concern thread.
+        employee: { select: { manager: { select: { id: true, name: true, designation: true } } } },
+        hrSignedOffBy: { select: { id: true, name: true } },
+        resultsSharedBy: { select: { id: true, name: true } },
+        finalisedBy: { select: { id: true, name: true } },
+        concerns: {
+          orderBy: { createdAt: 'asc' },
+          include: { raisedBy: { select: { id: true, name: true } }, respondedBy: { select: { id: true, name: true } } },
+        },
+      },
     );
+
+    // HR's outcome is the employee's to see only once HR shares it (or
+    // releases / finalises); until then the trail just shows "with HR".
+    const hrVisible = Boolean(review.resultsSharedAt)
+      || ['SHARED', 'CONCERN_RAISED', 'RELEASED', 'FINALISED'].includes(review.hrSignoffStatus);
+    if (!hrVisible) {
+      review.hrRating = null;
+      review.hrRemarks = null;
+      review.hikePercentage = null;
+      review.scores = (review.scores || []).map((sc) => ({ ...sc, hrScore: null }));
+    }
 
     // Ensure all active parameters have a score slot
     const activeParameters = await prisma.appraisalParameter.findMany({
@@ -1152,7 +1175,7 @@ export async function getMyReview(req, res, next) {
       : (review.managerTaskRatingSnapshot?.source === 'TEAM_TABLE' ? review.managerTaskRatingSnapshot : null);
 
     res.json({
-      review: { ...review, teamMetrics },
+      review: { ...review, teamMetrics, hrResultsVisible: hrVisible },
       activeParameters,
       cycle: activeCycle,
       availability: appraisalAvailability(activeCycle),
