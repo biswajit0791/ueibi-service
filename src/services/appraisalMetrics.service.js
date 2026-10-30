@@ -34,7 +34,8 @@ export function averageOfMonths(values) {
  */
 export function monthWindowsOf(cycle) {
   const start = new Date(cycle.startDate);
-  const count = String(cycle.frequency).toUpperCase() === 'QUARTERLY' ? 3 : 1;
+  const frequency = String(cycle.frequency).toUpperCase();
+  const count = frequency === 'ANNUAL' ? 12 : frequency === 'QUARTERLY' ? 3 : 1;
   return Array.from({ length: count }, (_, i) => {
     const from = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + i, start.getUTCDate()));
     const nextFrom = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + i + 1, start.getUTCDate()));
@@ -49,13 +50,13 @@ export function monthWindowsOf(cycle) {
 
 /**
  * Team-table Final Weightage and Manager Rating for many employees over a
- * Monthly or Quarterly cycle, with one task query per month for the whole
+ * Monthly, Quarterly or Annual cycle (annual = average of its 12 months), with one task query per month for the whole
  * group. Returns a Map employeeId → metrics (null for other frequencies).
  */
 export async function getTeamTableMetricsBulk(tenantId, employeeIds, cycle) {
   const frequency = String(cycle?.frequency || '').toUpperCase();
   const result = new Map();
-  if (!['MONTHLY', 'QUARTERLY'].includes(frequency) || employeeIds.length === 0) return result;
+  if (!['MONTHLY', 'QUARTERLY', 'ANNUAL'].includes(frequency) || employeeIds.length === 0) return result;
 
   const windows = monthWindowsOf(cycle);
   const summaries = await Promise.all(windows.map(async (window) => {

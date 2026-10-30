@@ -1145,7 +1145,9 @@ export async function getMyReview(req, res, next) {
       orderBy: { order: 'asc' },
     });
     // Live Team-table figures until submission; the frozen snapshot after.
-    const teamMetrics = isPeriodic(activeCycle) && review.status === 'DRAFT'
+    // Annual: the year's Team-table averages, always live (read-only for the employee).
+    const isAnnual = String(activeCycle.frequency).toUpperCase() === 'ANNUAL';
+    const teamMetrics = (isPeriodic(activeCycle) && review.status === 'DRAFT') || isAnnual
       ? await getTeamTableMetrics(req.tenantId, req.user.id, activeCycle)
       : (review.managerTaskRatingSnapshot?.source === 'TEAM_TABLE' ? review.managerTaskRatingSnapshot : null);
 
