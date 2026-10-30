@@ -26,6 +26,7 @@ import {
   getLeaveOverviewStats,
   getLeaveCalendarView,
   getLeaveAuditLogs,
+  getLeaveTimingPolicy,
 } from '../controllers/leave.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
@@ -50,6 +51,7 @@ router.get('/leave-types', requireAuth, requireTenant, listActiveLeaveTypes);
 router.get('/leave-types/:id', requireAuth, requireTenant, getLeaveTypeById);
 
 // ── 3. Dynamic Balances ─────────────────────────────────────────────────────
+router.get('/leaves/timing-policy', requireAuth, requireTenant, getLeaveTimingPolicy);
 router.get('/leaves/balances', requireAuth, requireTenant, getMyLeaveBalances);
 router.get('/leave-balances/me', requireAuth, requireTenant, getMyLeaveBalances); // Alias
 router.get('/admin/leave-balances', requireAuth, requireTenant, authorize(...hrRoles), listEmployeeBalances);

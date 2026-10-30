@@ -1,3 +1,4 @@
+import { getLeaveTimingPolicy as fetchTimingPolicy } from '../services/workSchedule.service.js';
 import { leaveService } from '../services/leave.service.js';
 import {
   createLeaveTypeSchema,
@@ -617,6 +618,19 @@ export async function getLeaveAuditLogs(req, res, next) {
     res.json(logs);
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+}
+
+export async function getLeaveTimingPolicy(req, res, next) {
+  try {
+    const targetDate = req.query.date || null;
+    const policy = await fetchTimingPolicy({
+      tenantId: req.tenantId,
+      targetDate,
+    });
+    res.json(policy);
+  } catch (err) {
     next(err);
   }
 }

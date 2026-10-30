@@ -1330,6 +1330,9 @@ model TenantSettings {
   /// Dynamic role-based dashboard widget and navigation configuration
   dashboardConfig     Json?
 
+  /// Office working hours, break timings, timezone and holiday configuration
+  workingHours        Json?
+
   /// Financial Year start configuration (default: 4 for April, 1 for 1st)
   financialYearStartMonth Int? @default(4)
   financialYearStartDay   Int? @default(1)
