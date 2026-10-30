@@ -7,6 +7,7 @@ import { computeCycleRollup } from '../services/reportAggregation.service.js';
 import { getCompanySettings } from '../services/companySettings.service.js';
 import { APPRAISAL_MONTH_NAMES, getFiscalYearPeriods, getPeriodMetadata, appraisalAvailability, isQuarterEndMonth } from '../lib/appraisalPeriods.js';
 import { getTeamTableMetrics } from '../services/appraisalMetrics.service.js';
+import { financialYearFilter } from '../services/taskWeightage.service.js';
 import { getTenantFinancialYear } from '../lib/financialYear.js';
 import { ELEVATED_ROLES, HR_ROLES, MANAGER_OR_ELEVATED_ROLES, SUPER_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
 
@@ -1202,7 +1203,7 @@ export async function getMyGoals(req, res, next) {
       return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
     }
 
-    const { page, limit, search, status, category } = parsedQuery.data;
+    const { page, limit, search, status, category, financialYear } = parsedQuery.data;
     let targetEmpId = parsedQuery.data.employeeId;
     if (!targetEmpId || targetEmpId === 'mine' || targetEmpId === 'undefined' || targetEmpId === 'null') {
       targetEmpId = req.user.id;
@@ -1248,14 +1249,23 @@ export async function getMyGoals(req, res, next) {
       whereClause.category = { equals: category, mode: 'insensitive' };
     }
 
+    // Year and search are ANDed with the employee filter above — assigning
+    // whereClause.OR here used to replace it, so a search returned any goal
+    // in the company.
+    const fyWhere = financialYearFilter(financialYear);
+    const extra = [];
+    if (Object.keys(fyWhere).length) extra.push(fyWhere);
     if (search && search.trim()) {
       const s = search.trim();
-      whereClause.OR = [
-        { title: { contains: s, mode: 'insensitive' } },
-        { description: { contains: s, mode: 'insensitive' } },
-        { category: { contains: s, mode: 'insensitive' } },
-      ];
+      extra.push({
+        OR: [
+          { title: { contains: s, mode: 'insensitive' } },
+          { description: { contains: s, mode: 'insensitive' } },
+          { category: { contains: s, mode: 'insensitive' } },
+        ],
+      });
     }
+    if (extra.length) whereClause.AND = extra;
 
     // Total matching count for pagination
     const total = await prisma.goal.count({ where: whereClause });
@@ -1268,6 +1278,7 @@ export async function getMyGoals(req, res, next) {
         assignments: {
           where: { employeeId: targetEmpId },
         },
+        ownerManager: { select: { id: true, name: true } },
         tasks: {
           select: {
             id: true,
@@ -1276,6 +1287,10 @@ export async function getMyGoals(req, res, next) {
             priority: true,
             dueDate: true,
             employeeId: true,
+            weight: true,
+            progress: true,
+            managerFinalWeight: true,
+            actualCompletionDate: true,
             managerRating: true,
             managerRatingNotes: true,
             managerRatedAt: true,
@@ -1302,7 +1317,7 @@ export async function getMyGoals(req, res, next) {
       };
     });
 
-    // Rollup Synchronization Metrics across all goals of this employee
+    // Rollup Synchronization Metrics across all goals of this employee (in the chosen year)
     const allUserGoals = await prisma.goal.findMany({
       where: {
         tenantId: req.tenantId,
@@ -1310,6 +1325,7 @@ export async function getMyGoals(req, res, next) {
           { employeeId: targetEmpId },
           { assignments: { some: { employeeId: targetEmpId } } },
         ],
+        ...(Object.keys(fyWhere).length ? { AND: [fyWhere] } : {}),
       },
       include: {
         assignments: { where: { employeeId: targetEmpId } },
@@ -1338,9 +1354,14 @@ export async function getMyGoals(req, res, next) {
     ).length;
     const totalProgressSum = userGoalMetrics.reduce((acc, g) => acc + (g.progress || 0), 0);
     const averageProgress = totalGoals > 0 ? Math.round(totalProgressSum / totalGoals) : 0;
+    // No goals means no score — not a perfect 5.0.
     const alignmentScore = totalGoals > 0
       ? Math.min(5.0, Math.max(1.0, +(averageProgress / 20).toFixed(1)))
-      : 5.0;
+      : null;
+    const ratedGoals = allUserGoals.filter((g) => g.managerRating != null);
+    const averageGoalRating = ratedGoals.length
+      ? Number((ratedGoals.reduce((sum, g) => sum + Number(g.managerRating), 0) / ratedGoals.length).toFixed(2))
+      : null;
 
     const milestonesTotal = userGoalMetrics.reduce((acc, g) => acc + (g.milestones || 0), 0);
     const milestonesCompleted = userGoalMetrics.reduce((acc, g) => acc + (g.completedMilestones || 0), 0);
@@ -1361,6 +1382,8 @@ export async function getMyGoals(req, res, next) {
         inProgressGoals,
         averageProgress,
         alignmentScore,
+        averageGoalRating,
+        ratedGoals: ratedGoals.length,
         milestonesTotal,
         milestonesCompleted,
         completionRate: totalGoals > 0 ? Math.round((completedGoals / totalGoals) * 100) : 0,
@@ -1390,51 +1413,6 @@ export async function syncGoalsToAppraisal(req, res, next) {
     const { reviewId, cycleId, frequency, periodName, year, month } = parsed.data;
     const employeeId = req.user.id;
 
-    // Fetch employee's goals
-    const rawGoals = await prisma.goal.findMany({
-      where: {
-        tenantId: req.tenantId,
-        OR: [
-          { employeeId },
-          { assignments: { some: { employeeId } } },
-        ],
-      },
-      include: {
-        assignments: { where: { employeeId } },
-      },
-      orderBy: [{ progress: 'desc' }, { priority: 'asc' }],
-    });
-
-    const goals = rawGoals.map(g => {
-      const a = g.assignments?.[0];
-      return {
-        ...g,
-        progress: a ? a.progress : g.progress,
-        status: a ? a.status : g.status,
-        milestones: a ? a.milestones : g.milestones,
-        completedMilestones: a ? a.completedMilestones : g.completedMilestones,
-      };
-    });
-
-    if (goals.length === 0) {
-      return res.status(400).json({ error: 'No goals found to sync with appraisal.' });
-    }
-
-    // Build accomplishments text from delivered goals
-    const summaryLines = goals.map(g => {
-      const statusLabel = g.progress >= 100 ? 'Completed' : `${g.progress}% completed`;
-      const milestoneText = g.milestones > 0 ? ` [${g.completedMilestones}/${g.milestones} milestones reached]` : '';
-      return `• ${g.title} (${statusLabel}${milestoneText}) — ${g.description || 'Delivered on schedule'}`;
-    });
-
-    const accomplishmentsText = `Key Delivered Objectives & Goal Alignments:\n` + summaryLines.join('\n');
-
-    // Calculate suggested self-rating based on average progress
-    const totalGoals = goals.length;
-    const totalProgress = goals.reduce((acc, g) => acc + (g.progress || 0), 0);
-    const avgProgress = totalGoals > 0 ? totalProgress / totalGoals : 75;
-    const suggestedRating = Math.min(5.0, Math.max(1.0, +(avgProgress / 20).toFixed(1)));
-
     let targetReviewId = reviewId;
     if (!targetReviewId) {
       const activeCycle = await ensureActiveCycle(req.tenantId, { frequency, periodName, cycleId, year, month, createdById: req.user.id });
@@ -1443,41 +1421,70 @@ export async function syncGoalsToAppraisal(req, res, next) {
       });
       targetReviewId = existingReview.id;
     }
-
     const review = await prisma.performanceReview.findFirst({
       where: { id: targetReviewId, employeeId },
+      include: { cycle: true },
     });
-
     if (!review) {
       return res.status(404).json({ error: 'Appraisal review record not found' });
     }
-
-    let updatedAccomplishments = review.selfAccomplishments || '';
-    if (!updatedAccomplishments.includes('Key Delivered Objectives & Goal Alignments:')) {
-      updatedAccomplishments = updatedAccomplishments
-        ? `${updatedAccomplishments}\n\n${accomplishmentsText}`
-        : accomplishmentsText;
-    } else {
-      updatedAccomplishments = accomplishmentsText;
+    if (SELF_LOCKED_STATUSES.includes(review.status) || review.hrSignoffStatus === 'RELEASED') {
+      return res.status(409).json({ error: 'Your self-assessment is locked because it has already been reviewed.' });
     }
 
-    const updated = await prisma.performanceReview.update({
-      where: { id: targetReviewId },
-      data: {
-        selfAccomplishments: updatedAccomplishments,
-        ...((!review.selfRating || review.selfRating === 0) && { selfRating: suggestedRating }),
+    // Only goals of the review's period: the financial year for an annual
+    // review, goals overlapping the period for a monthly / quarterly one.
+    const periodWhere = String(review.cycle.frequency).toUpperCase() === 'ANNUAL'
+      ? financialYearFilter(review.cycle.name)
+      : { AND: [{ startDate: { lte: review.cycle.endDate } }, { OR: [{ dueDate: null }, { dueDate: { gte: review.cycle.startDate } }] }] };
+    const rawGoals = await prisma.goal.findMany({
+      where: {
+        tenantId: req.tenantId,
+        OR: [{ employeeId }, { assignments: { some: { employeeId } } }],
+        AND: [periodWhere],
       },
       include: {
-        cycle: true,
-        scores: { include: { parameter: true } },
+        assignments: { where: { employeeId } },
+        ownerManager: { select: { name: true } },
       },
+      orderBy: [{ startDate: 'asc' }],
+    });
+    const completed = rawGoals
+      .map((g) => {
+        const a = g.assignments?.[0];
+        return { ...g, progress: a ? a.progress : g.progress, status: a ? a.status : g.status, rating: a?.managerRating ?? g.managerRating };
+      })
+      .filter((g) => String(g.status).toUpperCase() === 'COMPLETED' || g.progress >= 100);
+
+    if (completed.length === 0) {
+      return res.status(400).json({ error: `No completed goals found for ${review.cycle.name} to sync.` });
+    }
+
+    const MARKER = 'Key Delivered Objectives & Goal Alignments:';
+    const lines = completed.map((g) => {
+      const owner = g.ownerManager?.name ? ` · goal owner ${g.ownerManager.name}` : '';
+      const rating = g.rating != null ? ` · rated ${Number(g.rating)}/5` : '';
+      return `• ${g.title} (Completed${owner}${rating})`;
+    });
+    const accomplishmentsText = `${MARKER}\n${lines.join('\n')}`;
+
+    // Replace only the previously synced block; whatever the employee wrote stays.
+    const current = review.selfAccomplishments || '';
+    const markerAt = current.indexOf(MARKER);
+    const ownText = (markerAt >= 0 ? current.slice(0, markerAt) : current).trim();
+    const updatedAccomplishments = ownText ? `${ownText}\n\n${accomplishmentsText}` : accomplishmentsText;
+
+    const updated = await prisma.performanceReview.update({
+      where: { id: review.id },
+      data: { selfAccomplishments: updatedAccomplishments },
+      include: { cycle: true, scores: { include: { parameter: true } } },
     });
 
     res.json({
       success: true,
-      message: 'Goals successfully synchronized into performance appraisal accomplishments!',
+      message: `${completed.length} completed goal${completed.length === 1 ? '' : 's'} synced into your accomplishments.`,
       accomplishmentsText,
-      suggestedRating,
+      syncedGoals: completed.length,
       review: updated,
     });
   } catch (err) {

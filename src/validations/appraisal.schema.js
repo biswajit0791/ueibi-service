@@ -312,6 +312,8 @@ export const myGoalsQuerySchema = z.object({
   search: z.string().max(200).optional(),
   status: z.string().max(50).optional(),
   category: z.string().max(100).optional(),
+  // "FY 2025-26" / "FY 2025-2026" / "2025": only goals of that financial year.
+  financialYear: z.string().max(20).optional(),
 });
 
 // ── Route Parameter ID Schemas ───────────────────────────────────────────────
