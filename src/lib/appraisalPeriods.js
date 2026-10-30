@@ -168,3 +168,17 @@ export function appraisalAvailability(cycle, now = new Date()) {
   const opensAt = new Date(new Date(cycle.endDate).getTime() + 1);
   return { available: now >= opensAt, opensAt };
 }
+
+/**
+ * Each fiscal quarter has two monthly appraisals and one quarterly appraisal:
+ * the quarter's last month has no monthly appraisal of its own — the
+ * quarterly one, covering all three months, takes its place. With a January
+ * start: Jan, Feb, Q1 (in March's slot), Apr, May, Q2 …; with April: Apr,
+ * May, Q1 (June's slot), Jul, Aug, Q2 …
+ *
+ * @param {number} monthNumber 1–12
+ */
+export function isQuarterEndMonth(monthNumber, settings = null) {
+  const startMonth = Math.min(12, Math.max(1, Number(settings?.financialYearStartMonth) || 4));
+  return ((Number(monthNumber) - startMonth + 12) % 12) % 3 === 2;
+}

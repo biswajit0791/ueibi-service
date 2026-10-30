@@ -5,7 +5,7 @@ import { goalService } from '../services/goal.service.js';
 import { buildTeamScopeWhere, buildExplicitReportsWhere } from '../services/teamScope.service.js';
 import { computeCycleRollup } from '../services/reportAggregation.service.js';
 import { getCompanySettings } from '../services/companySettings.service.js';
-import { APPRAISAL_MONTH_NAMES, getFiscalYearPeriods, getPeriodMetadata, appraisalAvailability } from '../lib/appraisalPeriods.js';
+import { APPRAISAL_MONTH_NAMES, getFiscalYearPeriods, getPeriodMetadata, appraisalAvailability, isQuarterEndMonth } from '../lib/appraisalPeriods.js';
 import { getTeamTableMetrics } from '../services/appraisalMetrics.service.js';
 import { getTenantFinancialYear } from '../lib/financialYear.js';
 import { ELEVATED_ROLES, HR_ROLES, MANAGER_OR_ELEVATED_ROLES, SUPER_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
@@ -954,6 +954,19 @@ async function saveSelfAssessment(req, review, cycle, { selfAccomplishments, sel
   }
 
   const periodic = isPeriodic(cycle);
+  if (String(cycle?.frequency).toUpperCase() === 'MONTHLY') {
+    const settings = await getCompanySettings(req.tenantId);
+    const monthNumber = cycle.monthNumber || new Date(cycle.startDate).getUTCMonth() + 1;
+    if (isQuarterEndMonth(monthNumber, settings)) {
+      return {
+        status: 409,
+        body: {
+          error: `${cycle.name} is the last month of its quarter, so it has no monthly appraisal — it is covered by the quarterly appraisal.`,
+          code: 'QUARTER_END_MONTH',
+        },
+      };
+    }
+  }
   if (periodic) {
     const { available, opensAt } = appraisalAvailability(cycle);
     if (!available) {
@@ -1038,8 +1051,9 @@ export async function getMyAppraisalPeriods(req, res, next) {
     const requested = parseInt(req.query.fiscalYear, 10);
     const fiscalYear = Number.isInteger(requested) && requested > 2000 && requested < 2100 ? requested : current.startYear;
 
+    // Two monthly appraisals per quarter; the quarter-end month's slot is the quarterly one.
     const periods = [
-      ...getFiscalYearPeriods('MONTHLY', fiscalYear, settings),
+      ...getFiscalYearPeriods('MONTHLY', fiscalYear, settings).filter((p) => !isQuarterEndMonth(p.monthNumber, settings)),
       ...getFiscalYearPeriods('QUARTERLY', fiscalYear, settings),
     ];
     const cycles = await prisma.appraisalCycle.findMany({
@@ -1085,6 +1099,8 @@ export async function getMyAppraisalPeriods(req, res, next) {
       financialYearStartMonth: current.startMonth,
       monthly: items.filter((i) => i.frequency === 'MONTHLY'),
       quarterly: items.filter((i) => i.frequency === 'QUARTERLY'),
+      // The year in order: M, M, Q, M, M, Q … (a quarter sorts by its end, after its two months).
+      timeline: [...items].sort((a, b) => new Date(a.endDate) - new Date(b.endDate)),
     });
   } catch (err) {
     next(err);
