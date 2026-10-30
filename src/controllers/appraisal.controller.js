@@ -1096,6 +1096,21 @@ async function saveSelfAssessment(req, review, cycle, { selfAccomplishments, sel
   if (submit && periodic) {
     await notifyHrOfSubmission({ tenantId: req.tenantId, review, cycle, employeeName: req.user.name || req.user.email });
   }
+  // Annual: the reporting manager reviews next.
+  const managerId = submit && !periodic
+    ? (await prisma.tenantUser.findUnique({ where: { id: req.user.id }, select: { managerId: true } }))?.managerId
+    : null;
+  if (managerId) {
+    await pushNotification({
+      tenantId: req.tenantId,
+      recipientId: managerId,
+      type: 'appraisal_submitted',
+      title: 'Annual self-appraisal submitted',
+      body: `${req.user.name || req.user.email} submitted the ${cycle.name} self-appraisal. It is ready for your review.`,
+      entityType: 'review',
+      entityId: review.id,
+    });
+  }
 
   return { status: 200, body: updated };
 }
@@ -1847,6 +1862,22 @@ export async function updateManagerReview(req, res, next) {
         employeeId: review.employeeId,
         reviewId: id,
       });
+      // HR audits next.
+      const hrUsers = await prisma.tenantUser.findMany({
+        where: { tenantId: req.tenantId, role: 'HR', isDeleted: false, status: 'ACTIVE', id: { notIn: [req.user.id, review.employeeId] } },
+        select: { id: true },
+      });
+      for (const hr of hrUsers) {
+        await pushNotification({
+          tenantId: req.tenantId,
+          recipientId: hr.id,
+          type: 'review_manager_submitted',
+          title: 'Manager review submitted',
+          body: `${req.user.name} reviewed ${review.employee.name}'s ${review.cycle.name} appraisal. It is ready for the HR audit.`,
+          entityType: 'review',
+          entityId: id,
+        });
+      }
     }
 
     res.json(updated);
@@ -2765,6 +2796,55 @@ export async function getReviewById(req, res, next) {
         managerTaskRatingSummary: taskRatingSummary,
         managerTaskRatingSnapshot: taskRatingSummary || review.managerTaskRatingSnapshot,
       },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /performance-reviews/:id/link
+ * Where a notification about this review should open for the caller: their own
+ * Appraisal Center (SELF), or the Appraisal Suite's manager or HR tab, with the
+ * cadence, financial year (start year), period and employee already selected.
+ */
+export async function getReviewLink(req, res, next) {
+  try {
+    const parsedParams = reviewIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid review ID parameter', details: parsedParams.error.issues });
+    }
+    const review = await prisma.performanceReview.findFirst({
+      where: { id: parsedParams.data.id, cycle: { tenantId: req.tenantId } },
+      include: { cycle: true, employee: true },
+    });
+    if (!review) return res.status(404).json({ error: 'Performance review not found' });
+
+    const isOwner = review.employeeId === req.user.id;
+    if (!isOwner && !(await canManagerReview(req.user, review.employee, req.tenantId))) {
+      return res.status(403).json({ error: 'Access forbidden: You do not have permission to view this appraisal' });
+    }
+
+    const { cycle } = review;
+    const settings = await getCompanySettings(req.tenantId);
+    // The middle of the period sits safely inside its financial year.
+    const mid = new Date((new Date(cycle.startDate).getTime() + new Date(cycle.endDate).getTime()) / 2);
+    const fiscalYear = getTenantFinancialYear(settings, mid).startYear;
+    const frequency = String(cycle.frequency || review.reviewType || 'ANNUAL').toUpperCase();
+    // The reporting manager reviews; other HR / admin roles audit.
+    const view = isOwner ? 'SELF'
+      : review.employee.managerId !== req.user.id && hasRole(req.user.role, HR_ROLES) ? 'HR'
+      : 'MANAGER';
+
+    res.json({
+      reviewId: review.id,
+      employeeId: review.employeeId,
+      view,
+      frequency,
+      fiscalYear,
+      cycleId: cycle.id,
+      cycleName: cycle.name,
+      period: frequency === 'ANNUAL' ? 'Annual' : cycle.month,
     });
   } catch (err) {
     next(err);
