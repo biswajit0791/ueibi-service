@@ -61,3 +61,8 @@ test('quarter-end months follow the company FY (April start: Jun, Sep, Dec, Mar)
   const feb = { financialYearStartMonth: 2 };
   assert.deepEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].filter((m) => isQuarterEndMonth(m, feb)), [1, 4, 7, 10]);
 });
+
+test('a year given as text builds the same period as a number', () => {
+  assert.equal(getPeriodMetadata('ANNUAL', new Date(), null, '2025', null, april).name, 'FY 2025-26');
+  assert.equal(getPeriodMetadata('QUARTERLY', new Date(), null, '2025', 'Q2', april).name, 'Q2 FY 2025-26');
+});

@@ -31,6 +31,8 @@ export function getPeriodMetadata(
 ) {
   const date = targetDate instanceof Date ? targetDate : new Date(targetDate);
   const freq = String(frequency || 'MONTHLY').toUpperCase();
+  // A year passed as text ("2025") would otherwise build labels like "FY 2025-51".
+  explicitYear = explicitYear !== null && explicitYear !== undefined && explicitYear !== '' ? (parseInt(explicitYear, 10) || null) : null;
   const startMonth = Math.min(12, Math.max(1, Number(settings?.financialYearStartMonth) || 4));
   const fy = getTenantFinancialYear(settings, date);
   let year = explicitYear ? parseInt(explicitYear, 10) : date.getFullYear();
