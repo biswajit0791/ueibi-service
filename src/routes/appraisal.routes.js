@@ -26,6 +26,7 @@ import {
   getCycleSummary,
   getAppraisalPeriodTracker,
   getMyAllReviews,
+  getMyAppraisalPeriods,
   submitSelfRating,
   submitManagerRating,
   listAppraisals,
@@ -69,6 +70,7 @@ router.delete('/appraisal-parameters/:id', requireAuth, requireTenant, authorize
 
 // ── Phase 3: Self Assessment (Employee & above) ──────────────────────────────
 router.get('/performance-reviews/mine', requireAuth, requireTenant, getMyReview);
+router.get('/performance-reviews/mine/periods', requireAuth, requireTenant, getMyAppraisalPeriods);
 router.get('/performance-reviews/:id', requireAuth, requireTenant, getReviewById);
 router.patch('/performance-reviews/:id/self', requireAuth, requireTenant, updateSelfAssessment);
 
