@@ -25,6 +25,7 @@
     "seed:tasks-goals:all": "node seeddata/seedTasksAndGoals.js --all",
     "seed:appraisals": "node seeddata/seedAppraisalCycles.js",
     "seed:appraisals:all": "node seeddata/seedAppraisalCycles.js --all",
+    "seed:shivam": "node seeddata/seedShivamHousing.js",
     "check-users": "node check-users.js",
     "test:appraisal": "node test-appraisal.js",
     "test:unit": "node --test tests/unit/"
