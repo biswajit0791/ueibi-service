@@ -36,6 +36,7 @@ export async function updateCompanySettings(tenantId, {
   theme,
   financialYearStartMonth,
   financialYearStartDay,
+  workingHours,
 }) {
   await getCompanySettings(tenantId); // ensure the row exists before updating it
   return prisma.tenantSettings.update({
@@ -53,6 +54,7 @@ export async function updateCompanySettings(tenantId, {
       ...(theme !== undefined && { theme: theme === null ? Prisma.DbNull : theme }),
       ...(financialYearStartMonth !== undefined && { financialYearStartMonth }),
       ...(financialYearStartDay !== undefined && { financialYearStartDay }),
+      ...(workingHours !== undefined && { workingHours: workingHours === null ? Prisma.DbNull : workingHours }),
     },
   });
 }

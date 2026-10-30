@@ -80,7 +80,20 @@ export const themeSchema = z.object({
   }
 });
 
+export const workingHoursSchema = z.object({
+  timezone: z.string().trim().min(1).default('Asia/Kolkata'),
+  workStartTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Invalid time format (HH:MM)').default('09:00'),
+  workEndTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Invalid time format (HH:MM)').default('18:00'),
+  breakStartTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Invalid time format (HH:MM)').default('13:00'),
+  breakEndTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Invalid time format (HH:MM)').default('14:00'),
+  firstHalfEndTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Invalid time format (HH:MM)').default('13:30'),
+  secondHalfEndTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Invalid time format (HH:MM)').default('18:00'),
+  workingDays: z.array(z.number().int().min(0).max(6)).default([1, 2, 3, 4, 5]),
+  holidays: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).default([]),
+}).partial();
+
 export const updateCompanySettingsSchema = z.object({
+  workingHours: workingHoursSchema.nullable().optional(),
   milestoneWatcherDomains: z.array(domainSchema).max(25, 'At most 25 domains').optional(),
   milestoneRequireApproval: z.boolean().optional(),
   milestoneAlertEnabled: z.boolean().optional(),

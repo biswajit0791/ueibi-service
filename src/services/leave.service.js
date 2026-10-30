@@ -1,3 +1,4 @@
+import { validateLeaveRequestTiming, getLeaveTimingPolicy } from './workSchedule.service.js';
 /**
  * Leave & Work-From-Home (WFH) Management Service
  * Provides comprehensive dynamic leave types, dynamic employee balance tracking,
@@ -659,9 +660,12 @@ export class LeaveService {
       monthlyLimit: wfhPolicy.monthlyLimit,
     };
 
+    const timingPolicy = await getLeaveTimingPolicy({ tenantId });
+
     return {
       leaveTypes: balances,
       wfh: wfhPayload,
+      timingPolicy,
       summary: {
         totalLeaveRemaining: balances.reduce((sum, b) => sum + b.remaining, 0),
         totalWfhRemaining: wfhRemaining,
@@ -693,6 +697,14 @@ export class LeaveService {
       attachmentUrl,
       attachmentOriginalName,
     } = data;
+
+    // 0. Dynamic work-schedule, cutoff time & date validation (server-side authority)
+    await validateLeaveRequestTiming({
+      tenantId,
+      startDate,
+      endDate,
+      dayType,
+    });
 
     const totalDays = this.calculateWorkingDays(startDate, endDate, dayType);
     if (totalDays <= 0) {

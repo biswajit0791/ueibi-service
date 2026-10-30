@@ -1,3 +1,4 @@
+import { DEFAULT_WORK_SCHEDULE } from '../services/workSchedule.service.js';
 import { prisma } from '../lib/prisma.js';
 import { getCompanySettings, updateCompanySettings, normaliseDomain } from '../services/companySettings.service.js';
 import { updateCompanySettingsSchema } from '../validations/companySettings.schema.js';
@@ -19,6 +20,7 @@ function presentSettings(settings) {
     milestoneAlertSubject: settings.milestoneAlertSubject,
     milestoneAlertBody: settings.milestoneAlertBody,
     theme: settings.theme ?? null,
+    workingHours: settings.workingHours || DEFAULT_WORK_SCHEDULE,
     financialYearStartMonth: settings.financialYearStartMonth || 4,
     financialYearStartDay: settings.financialYearStartDay || 1,
     currentFinancialYear: {
@@ -77,6 +79,7 @@ export async function patchSettings(req, res, next) {
       theme,
       financialYearStartMonth,
       financialYearStartDay,
+      workingHours,
     } = parsed.data;
 
     if (theme !== undefined && !THEME_EDITOR_ROLES.includes(String(req.user?.role || '').toUpperCase())) {
@@ -94,6 +97,7 @@ export async function patchSettings(req, res, next) {
       milestoneAlertBody,
       financialYearStartMonth,
       financialYearStartDay,
+      workingHours,
       theme: theme === undefined || theme === null
         ? theme
         : { ...theme, updatedBy: { id: req.user.id, name: req.user.name || req.user.email }, updatedAt: new Date().toISOString() },
