@@ -68,8 +68,8 @@ router.post('/upload', requireAuth, uploadRateLimiter, (req, res) => {
       message: 'File uploaded successfully',
       fileName: req.file.filename,
       originalName: req.file.originalname,
-      path: `/uploads/${req.file.filename}`,
-      fileUrl: `/uploads/${req.file.filename}`,
+      path: `/api/uploads/${req.file.filename}`,
+      fileUrl: `/api/uploads/${req.file.filename}`,
       size: req.file.size,
       mimeType: req.file.mimetype,
     });

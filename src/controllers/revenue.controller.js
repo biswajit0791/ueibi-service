@@ -297,3 +297,61 @@ export async function getCouponPerformance(req, res, next) {
     next(err);
   }
 }
+
+
+/** GET /platform/revenue/export — CSV export of invoices, GST split and collections */
+export async function exportRevenueReport(req, res, next) {
+  try {
+    const invoices = await prisma.invoice.findMany({
+      where: { state: { not: 'VOID' } },
+      include: {
+        tenant: { select: { companyName: true, tenantCode: true } },
+      },
+      orderBy: { issuedAt: 'desc' },
+    });
+
+    const headers = [
+      'Invoice Number', 'Company Name', 'Tenant Code', 'Status', 'Issued Date', 'Due Date',
+      'Currency', 'Subtotal (INR)', 'Discount (INR)', 'GST Rate (%)', 'CGST (INR)', 'SGST (INR)',
+      'Total GST (INR)', 'Total Amount (INR)', 'Amount Paid (INR)', 'Outstanding (INR)'
+    ];
+
+    const rows = invoices.map((inv) => {
+      const subtotal = Number(inv.subtotalAmount || 0);
+      const discount = Number(inv.discountAmount || 0);
+      const gstRate = Number(inv.gstRate || 0.18) * 100;
+      const totalGst = Number(inv.gstAmount || 0);
+      const cgst = Math.round((totalGst / 2) * 100) / 100;
+      const sgst = Math.round((totalGst / 2) * 100) / 100;
+      const total = Number(inv.totalAmount || 0);
+      const paid = Number(inv.amountPaid || 0);
+      const outstanding = Math.max(0, total - paid);
+
+      return [
+        inv.invoiceNumber || inv.id,
+        `"${(inv.billToName || inv.tenant?.companyName || '').replace(/"/g, '""')}"`,
+        inv.tenant?.tenantCode || '',
+        inv.state,
+        inv.issuedAt ? new Date(inv.issuedAt).toISOString().split('T')[0] : '',
+        inv.dueAt ? new Date(inv.dueAt).toISOString().split('T')[0] : '',
+        inv.currency || 'INR',
+        subtotal.toFixed(2),
+        discount.toFixed(2),
+        gstRate.toFixed(1),
+        cgst.toFixed(2),
+        sgst.toFixed(2),
+        totalGst.toFixed(2),
+        total.toFixed(2),
+        paid.toFixed(2),
+        outstanding.toFixed(2),
+      ].join(',');
+    });
+
+    const csv = [headers.join(','), ...rows].join('\n');
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="revenue_report.csv"');
+    return res.status(200).send(csv);
+  } catch (err) {
+    next(err);
+  }
+}
