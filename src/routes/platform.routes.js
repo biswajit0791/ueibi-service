@@ -1,3 +1,13 @@
+
+import {
+  listPlatformTickets, getPlatformTicket, replyPlatformTicket, updatePlatformTicketStatus
+} from '../controllers/platformTicket.controller.js';
+import {
+  listSalesLeads, createSalesLead, updateSalesLead
+} from '../controllers/sales.controller.js';
+import {
+  getPlatformHealth, setPlatformAnnouncement
+} from '../controllers/platformHealth.controller.js';
 import { Router } from 'express';
 import {
   getPlatformOverview,
@@ -87,3 +97,18 @@ router.post('/platform/registrations/:id/verify', requireAuth, requirePlatformOw
 router.get('/platform/audit', requireAuth, requirePlatformOwner, getPlatformAudit);
 
 export default router;
+
+// ── Support Tickets (Cross-tenant) ──
+router.get('/platform/tickets', requireAuth, requirePlatformStaff, listPlatformTickets);
+router.get('/platform/tickets/:id', requireAuth, requirePlatformStaff, getPlatformTicket);
+router.post('/platform/tickets/:id/messages', requireAuth, requirePlatformStaff, replyPlatformTicket);
+router.patch('/platform/tickets/:id/status', requireAuth, requirePlatformOwner, updatePlatformTicketStatus);
+
+// ── Sales CRM Pipeline ──
+router.get('/platform/sales/leads', requireAuth, requirePlatformStaff, listSalesLeads);
+router.post('/platform/sales/leads', requireAuth, requirePlatformStaff, createSalesLead);
+router.patch('/platform/sales/leads/:id', requireAuth, requirePlatformStaff, updateSalesLead);
+
+// ── System Health & Maintenance ──
+router.get('/platform/system-health', requireAuth, requirePlatformOwner, getPlatformHealth);
+router.post('/platform/announcements', requireAuth, requirePlatformOwner, setPlatformAnnouncement);

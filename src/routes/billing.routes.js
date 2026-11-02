@@ -23,7 +23,7 @@ import {
   renewSubscription,
   cancelSubscription,
 } from '../controllers/subscription.controller.js';
-import { getRevenue, getCouponPerformance } from '../controllers/revenue.controller.js';
+import { getRevenue, getCouponPerformance, exportRevenueReport } from '../controllers/revenue.controller.js';
 import {
   listTemplates,
   getTemplate,
@@ -83,6 +83,13 @@ router.post('/platform/invoices/:id/refunds', requireAuth, requirePlatformOwner,
 // A renewal creates a NEW term linked to the old one; nothing is overwritten,
 // so the chain IS the history. Starting or renewing sets Tenant.licenseLimit
 // from the seats sold, which license.service.js then enforces.
+router.post('/platform/subscriptions/run-lifecycle-check', requireAuth, requirePlatformOwner, async (req, res, next) => {
+  try {
+    const { runSubscriptionLifecycleCheck } = await import('../services/subscriptionEngine.service.js');
+    const summary = await runSubscriptionLifecycleCheck();
+    res.json({ message: 'Subscription lifecycle check executed successfully', summary });
+  } catch (err) { next(err); }
+});
 router.get('/platform/subscriptions', requireAuth, requirePlatformStaff, listSubscriptions);
 router.get('/platform/subscriptions/:id', requireAuth, requirePlatformStaff, getSubscription);
 router.post('/platform/tenants/:id/subscription', requireAuth, requirePlatformStaff, startSubscription);
@@ -93,6 +100,7 @@ router.post('/platform/subscriptions/:id/cancel', requireAuth, requirePlatformOw
 // Every figure comes from Invoice/Payment/Refund rows. No MRR: nothing recurs
 // by itself, so a monthly recurring figure would be invented.
 router.get('/platform/revenue', requireAuth, requirePlatformOwner, getRevenue);
+router.get('/platform/revenue/export', requireAuth, requirePlatformOwner, exportRevenueReport);
 router.get('/platform/coupons/performance', requireAuth, requirePlatformOwner, getCouponPerformance);
 
 // ── Invoice templates ───────────────────────────────────────────────────────

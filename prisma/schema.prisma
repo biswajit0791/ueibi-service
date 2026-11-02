@@ -130,6 +130,8 @@ model Tenant {
   followers            Follower[]
   reviewConcerns       ReviewConcern[]
   walletTransactions   WalletTransaction[]
+  platformTickets      PlatformTicket[]
+  salesLeads           SalesLead[]
 
   @@index([isPlatform])
   @@index([status])
@@ -333,6 +335,10 @@ model TenantUser {
   licenseRequests     LicenseRequest[]     @relation("UserLicenseRequests")
   paidLicenseRequests LicenseRequest[]     @relation("PaidLicenseRequests")
   createdWalletTransactions WalletTransaction[] @relation("CreatedWalletTransactions")
+  createdPlatformTickets    PlatformTicket[]    @relation("CreatedPlatformTickets")
+  assignedPlatformTickets   PlatformTicket[]    @relation("AssignedPlatformTickets")
+  ticketMessages            PlatformTicketMessage[]
+  assignedSalesLeads        SalesLead[]         @relation("AssignedSalesLeads")
   permissionAuditsActed PermissionAuditLog[] @relation("PermissionAuditActor")
 
   remarks   String?
@@ -2990,4 +2996,104 @@ model DocumentToken {
   @@unique([tenantId, token, documentType])
   @@index([documentType])
   @@map("document_tokens")
+}
+
+
+// ─── PLATFORM OWNER SAAS EXTENSIONS ──────────────────────────────────────────
+
+model WebhookEvent {
+  id          String    @id @default(cuid())
+  provider    String    @default("RAZORPAY")
+  eventId     String    @unique
+  eventType   String
+  payload     Json
+  processed   Boolean   @default(false)
+  processedAt DateTime?
+  error       String?   @db.Text
+  createdAt   DateTime  @default(now())
+
+  @@index([provider, eventType])
+  @@index([processed])
+  @@map("webhook_events")
+}
+
+model PlatformTicket {
+  id           String                  @id @default(cuid())
+  tenantId     String
+  tenant       Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticketNumber String                  @unique
+  subject      String
+  category     String                  @default("GENERAL") // BILLING, ACCESS, TECHNICAL, FEATURE_REQUEST, GENERAL
+  priority     String                  @default("MEDIUM")  // LOW, MEDIUM, HIGH, URGENT
+  status       String                  @default("OPEN")    // OPEN, IN_PROGRESS, RESOLVED, CLOSED
+  createdById  String
+  createdBy    TenantUser              @relation("CreatedPlatformTickets", fields: [createdById], references: [id], onDelete: Cascade)
+  assignedToId String?
+  assignedTo   TenantUser?             @relation("AssignedPlatformTickets", fields: [assignedToId], references: [id], onDelete: SetNull)
+  messages     PlatformTicketMessage[]
+  resolvedAt   DateTime?
+  closedAt     DateTime?
+  createdAt    DateTime                @default(now())
+  updatedAt    DateTime                @updatedAt
+
+  @@index([tenantId, status])
+  @@index([priority, status])
+  @@map("platform_tickets")
+}
+
+model PlatformTicketMessage {
+  id         String         @id @default(cuid())
+  ticketId   String
+  ticket     PlatformTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  senderId   String
+  sender     TenantUser     @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  isStaff    Boolean        @default(false)
+  message    String         @db.Text
+  attachment String?
+  createdAt  DateTime       @default(now())
+
+  @@index([ticketId, createdAt])
+  @@map("platform_ticket_messages")
+}
+
+model SalesLead {
+  id             String      @id @default(cuid())
+  tenantId       String?
+  tenant         Tenant?     @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  companyName    String
+  contactName    String
+  email          String
+  phone          String?
+  source         String      @default("INBOUND") // INBOUND, OUTBOUND, REFERRAL, PARTNER
+  stage          String      @default("NEW")     // NEW, CONTACTED, DEMO_SCHEDULED, PROPOSAL, WON, LOST
+  dealValue      Decimal     @default(0.00) @db.Decimal(10, 2)
+  currency       String      @default("INR")
+  estimatedSeats Int         @default(0)
+  assignedToId   String?
+  assignedTo     TenantUser? @relation("AssignedSalesLeads", fields: [assignedToId], references: [id], onDelete: SetNull)
+  notes          String?     @db.Text
+  lostReason     String?     @db.Text
+  closedAt       DateTime?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  @@index([stage])
+  @@index([assignedToId])
+  @@map("sales_leads")
+}
+
+model PlatformAnnouncement {
+  id          String    @id @default(cuid())
+  title       String
+  message     String    @db.Text
+  type        String    @default("INFO") // INFO, WARNING, MAINTENANCE, CRITICAL
+  isActive    Boolean   @default(true)
+  startsAt    DateTime  @default(now())
+  endsAt      DateTime?
+  createdById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([isActive, startsAt])
+  @@map("platform_announcements")
 }
