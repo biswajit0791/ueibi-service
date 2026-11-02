@@ -762,7 +762,9 @@ export async function onboardEmployee(req, res, next) {
         },
       });
 
-      // 2. Upsert bank details if provided
+      // 2. Upsert bank details if provided. Branch is optional on the forms but
+      // a non-null column, so a first save without one stores '' instead of
+      // failing the whole transaction.
       if (bankDetails) {
         await tx.bankDetails.upsert({
           where: { userId },
@@ -770,14 +772,14 @@ export async function onboardEmployee(req, res, next) {
             bankName: bankDetails.bankName,
             accountNumber: bankDetails.accountNumber,
             ifscCode: bankDetails.ifscCode,
-            branchName: bankDetails.branchName,
+            branchName: bankDetails.branchName ?? undefined,
           },
           create: {
             userId,
             bankName: bankDetails.bankName,
             accountNumber: bankDetails.accountNumber,
             ifscCode: bankDetails.ifscCode,
-            branchName: bankDetails.branchName,
+            branchName: bankDetails.branchName || '',
           },
         });
       }
@@ -792,8 +794,9 @@ export async function onboardEmployee(req, res, next) {
                 userId,
                 qualification: edu.qualification,
                 institutionName: edu.institutionName,
-                boardUniversity: edu.boardUniversity || null,
-                passingYear: edu.passingYear || null,
+                // Non-null columns: blank optional fields are stored as ''.
+                boardUniversity: edu.boardUniversity || '',
+                passingYear: edu.passingYear || '',
                 percentageCgpa: edu.percentageCgpa || null,
               },
             });

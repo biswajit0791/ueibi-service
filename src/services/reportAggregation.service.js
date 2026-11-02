@@ -17,6 +17,11 @@ import { prisma } from '../lib/prisma.js';
  *    (mean-of-means, NOT a flat mean over all scores)
  *  - department buckets with no active headcount are dropped
  *  - every average rounded to 1dp, or null when there is nothing to average
+ *
+ * Two later additions: a review with no per-parameter manager/HR scores falls
+ * back to the task-based averageManagerRating / hrRating the annual flow
+ * writes, and every HR stage after PENDING_RELEASE (SHARED, CONCERN_RAISED,
+ * FINALISED) counts as released.
  */
 
 /** Active, non-deleted employees for a tenant, optionally one department. */
@@ -57,6 +62,8 @@ export async function computeCycleRollup({ tenantId, cycleId, department }) {
         status: true,
         hikePercentage: true,
         hrSignoffStatus: true,
+        averageManagerRating: true,
+        hrRating: true,
         employee: { select: { department: true } },
         scores: { select: { selfScore: true, managerScore: true, hrScore: true } },
       },
@@ -101,9 +108,15 @@ export async function computeCycleRollup({ tenantId, cycleId, department }) {
     if (mgrScores.length) {
       bucket.mgrSum += mgrScores.reduce((a, s) => a + s.managerScore, 0) / mgrScores.length;
       bucket.mgrN += 1;
+    } else if (rev.averageManagerRating != null) {
+      bucket.mgrSum += Number(rev.averageManagerRating);
+      bucket.mgrN += 1;
     }
     if (hrScores.length) {
       bucket.hrSum += hrScores.reduce((a, s) => a + s.hrScore, 0) / hrScores.length;
+      bucket.hrN += 1;
+    } else if (rev.hrRating != null) {
+      bucket.hrSum += Number(rev.hrRating);
       bucket.hrN += 1;
     }
 
@@ -111,7 +124,7 @@ export async function computeCycleRollup({ tenantId, cycleId, department }) {
       hikeSum += Number(rev.hikePercentage);
       hikeN += 1;
     }
-    if (rev.hrSignoffStatus === 'RELEASED') released += 1;
+    if (rev.hrSignoffStatus && rev.hrSignoffStatus !== 'PENDING_RELEASE') released += 1;
     else pendingRelease += 1;
   }
 

@@ -195,13 +195,13 @@ export const onboardEmployeeSchema = z.object({
   profilePhoto: z.string().optional().nullable(),
   // Education History
   educationHistory: z.array(educationEntrySchema).optional().nullable(),
-  // Bank Details
+  // Bank Details — name, account and IFSC are required together; branch is optional.
   bankDetails: z.object({
-    bankName: z.string().min(1, "Bank name is required"),
-    accountNumber: z.string().min(1, "Account number is required"),
-    ifscCode: z.string().min(1, "IFSC code is required"),
-    branchName: z.string().min(1, "Branch name is required"),
-  }).partial().optional().nullable(),
+    bankName: z.string().trim().min(1, "Bank name is required"),
+    accountNumber: z.string().trim().regex(/^\d{9,18}$/, "Account number must be 9 to 18 digits"),
+    ifscCode: z.string().trim().toUpperCase().regex(/^[A-Z]{4}0[A-Z0-9]{6}$/, "IFSC code must look like SBIN0001234"),
+    branchName: z.string().trim().optional().nullable().or(z.literal('')),
+  }).optional().nullable(),
   // Work History
   workHistory: z.array(workHistoryEntrySchema).optional().nullable(),
   docs: z.any().optional(),

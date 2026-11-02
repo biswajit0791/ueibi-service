@@ -119,14 +119,6 @@ export function canManageCapabilities(user) {
   return hasRole(user?.role, CAPABILITY_ADMIN_ROLES);
 }
 
-/** Convenience for the registry gates: role-based access OR an explicit grant. */
-export function canSearchRegistry(user) {
-  return (
-    hasCapability(user, CAPABILITIES.REGISTRY_SEARCH) ||
-    hasRole(user?.role, ['SUPER_ADMIN', 'ADMIN', 'CMD', 'HR', 'FINANCE'])
-  );
-}
-
 /** Capability strings held by one user. */
 export async function loadCapabilities(userId) {
   if (!userId) return [];
