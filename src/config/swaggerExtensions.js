@@ -85,10 +85,6 @@ export const swaggerExtensions = {
       description: 'Corporate social gallery: photos, categories, likes, and employee comments',
     },
     {
-      name: 'Registry',
-      description: 'Tenant-scoped background check and employment verification registry: search your own company\'s ex-employees, non-joiners, and current employees\' completed reference reviews',
-    },
-    {
       name: 'Team',
       description: 'Team Directory and Employee Detail: server-side filtered team listing, per-employee projects, 360 feedback, appraisal audit, training/certifications (with file attachments), and the achievements/incidents journal',
     },
@@ -667,44 +663,6 @@ export const swaggerExtensions = {
             id: { type: 'string' },
             name: { type: 'string', example: 'Arjun Das' },
             designation: { type: 'string', example: 'Frontend Dev' },
-          },
-        },
-      },
-    },
-
-    // ── Registry Search Candidate ──
-    RegistryCandidate: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', example: 'cand_ABCDE1234F' },
-        fname: { type: 'string', example: 'Vikram' },
-        lname: { type: 'string', example: 'Seth' },
-        email: { type: 'string', example: 'vikram@example.com' },
-        pan: { type: 'string', example: 'ABCDE1234F' },
-        phone: { type: 'string', example: '+919876543210' },
-        dob: { type: 'string', example: '1990' },
-        industry: { type: 'string', example: 'Technology' },
-        skills: { type: 'string', example: '', description: 'No skills field exists in the underlying data model — currently always an empty string, not a real filterable attribute.' },
-        linkedin: { type: 'string', nullable: true, example: null, description: 'No LinkedIn field exists in the underlying data model — currently always null.' },
-        reviews: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              id: { type: 'string' },
-              company_name: { type: 'string', example: 'Autoliv Private Ltd' },
-              employee_designation: { type: 'string', example: 'Staff Designer' },
-              service_start: { type: 'string', nullable: true },
-              service_end: { type: 'string', nullable: true },
-              date_of_joining: { type: 'string', nullable: true, description: 'Present only on non-joiner (declined/withdrew offer) reviews' },
-              feedback: { type: 'string' },
-              technical_rating: { type: 'integer', nullable: true, example: 9 },
-              professional_rating: { type: 'integer', nullable: true, example: 9 },
-              conduct_value: { type: 'string', example: 'Excellent' },
-              conduct_level_name: { type: 'string', example: 'Excellent Conduct' },
-              offer_letter: { type: 'boolean', example: false },
-              hrContacts: { type: 'array', items: { type: 'string' } },
-            },
           },
         },
       },
@@ -2964,44 +2922,6 @@ export const swaggerExtensions = {
         },
         responses: {
           200: { description: 'Reminders dispatched successfully' },
-        },
-      },
-    },
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // REGISTRY: CROSS-TENANT CANDIDATE VERIFICATION
-    // ═══════════════════════════════════════════════════════════════════════════
-    '/registry/search': {
-      get: {
-        tags: ['Registry'],
-        summary: 'Tenant-scoped candidate background and verification search',
-        description: 'Searches the caller\'s own tenant only: verified (Published, non-deleted) ex-employees, non-joiners, and current employees\' completed reference reviews, by PAN, email, phone, designation, or rating thresholds. Restricted to SUPER_ADMIN, ADMIN, CMD, HR, and FINANCE — matches the sidebar link visibility.',
-        operationId: 'searchRegistryCandidates',
-        security: [{ userCookie: [] }, { bearerAuth: [] }],
-        parameters: [
-          { name: 'query', in: 'query', schema: { type: 'string', maxLength: 200 }, description: 'Universal search term: PAN or email' },
-          { name: 'name', in: 'query', schema: { type: 'string', maxLength: 200 }, description: 'Candidate first or last name' },
-          { name: 'designation', in: 'query', schema: { type: 'string', maxLength: 200 }, description: 'Role or designation title' },
-          { name: 'birthYear', in: 'query', schema: { type: 'string', pattern: '^\\d{4}$' }, description: 'Birth year YYYY' },
-          { name: 'phone', in: 'query', schema: { type: 'string', maxLength: 50 }, description: 'Phone number' },
-          { name: 'linkedin', in: 'query', schema: { type: 'string', maxLength: 200 }, description: 'Accepted but currently unused — no LinkedIn field exists in the data model to filter against' },
-          { name: 'minTech', in: 'query', schema: { type: 'integer', minimum: 0, maximum: 10 }, description: 'Minimum technical rating filter (0-10)' },
-          { name: 'minAttitude', in: 'query', schema: { type: 'integer', minimum: 0, maximum: 10 }, description: 'Minimum attitude rating filter (0-10)' },
-        ],
-        responses: {
-          200: {
-            description: 'Matching candidates with compiled employment history and ratings',
-            content: {
-              'application/json': {
-                schema: {
-                  type: 'array',
-                  items: { $ref: '#/components/schemas/RegistryCandidate' },
-                },
-              },
-            },
-          },
-          400: { description: 'Validation failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ValidationError' } } } },
-          403: { description: 'Forbidden — SUPER_ADMIN, ADMIN, CMD, HR, or FINANCE only' },
         },
       },
     },

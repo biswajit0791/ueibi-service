@@ -6,7 +6,8 @@ import {
   countReportRows,
   toCsv,
 } from '../services/reportExport.service.js';
-import { toGoalsFinancialYear } from '../lib/financialYear.js';
+import { getTenantFinancialYear } from '../lib/financialYear.js';
+import { getCompanySettings } from '../services/companySettings.service.js';
 import {
   analyticsQuerySchema,
   trendQuerySchema,
@@ -16,32 +17,119 @@ import {
 } from '../validations/reports.schema.js';
 
 /**
- * Resolves the cycle a report should cover: the requested one, or the tenant's
- * most recent cycle by start date. Returns null when the tenant has no cycles
- * at all — callers report honest zeros rather than inventing numbers.
+ * Resolves the cycle a report should cover: the requested one, or the most
+ * recent cycle that has started and has reviews (monthly cycles are created
+ * ahead of time, so "latest by start date" is often an empty future month).
+ * Returns null when the tenant has no cycles at all — callers report honest
+ * zeros rather than inventing numbers.
  */
 async function resolveCycle(tenantId, cycleId) {
   if (cycleId) {
     return prisma.appraisalCycle.findFirst({ where: { id: cycleId, tenantId } });
   }
-  return prisma.appraisalCycle.findFirst({
-    where: { tenantId },
-    orderBy: { startDate: 'desc' },
-  });
+  const now = new Date();
+  return (
+    (await prisma.appraisalCycle.findFirst({
+      where: { tenantId, startDate: { lte: now }, reviews: { some: {} } },
+      orderBy: { startDate: 'desc' },
+    }))
+    || (await prisma.appraisalCycle.findFirst({
+      where: { tenantId, startDate: { lte: now } },
+      orderBy: { startDate: 'desc' },
+    }))
+    || prisma.appraisalCycle.findFirst({ where: { tenantId }, orderBy: { startDate: 'desc' } })
+  );
+}
+
+/** The tenant's financial year window ({ label, startDate, endDate }) that contains `date`. */
+function fyContaining(settings, date) {
+  const { label, startDate, endDate } = getTenantFinancialYear(settings, date);
+  return { label, startDate, endDate };
+}
+
+/** Same window, addressed by its start year (local noon avoids timezone edge days). */
+function fyStartingIn(settings, startYear) {
+  const month = Number(settings?.financialYearStartMonth) || 4;
+  const day = Number(settings?.financialYearStartDay) || 1;
+  return fyContaining(settings, new Date(startYear, month - 1, day, 12));
+}
+
+/**
+ * The financial year FY-scoped reports cover: the one asked for, else the one
+ * the selected cycle falls in, else the current one. Derived from the cycle's
+ * dates, not its name — "January 2027" belongs to FY 2026-27, not FY 2027-28.
+ */
+function resolveFinancialYear(settings, cycle, requested) {
+  const match = requested && requested.match(/(\d{4})/);
+  if (match) return fyStartingIn(settings, Number(match[1]));
+  if (cycle) {
+    const mid = new Date((new Date(cycle.startDate).getTime() + new Date(cycle.endDate).getTime()) / 2);
+    return fyContaining(settings, mid);
+  }
+  return fyContaining(settings, new Date());
+}
+
+/** The current financial year and the four before it, newest first, for the FY filter. */
+function recentFinancialYears(settings) {
+  const current = getTenantFinancialYear(settings, new Date());
+  return Array.from({ length: 5 }, (_, i) => fyStartingIn(settings, current.startYear - i).label);
 }
 
 /**
  * Tenant-wide goal completion stats for a financial year.
  *
- * The maths now lives in computeGoalStats (reportAggregation.service.js) so the
+ * The maths lives in computeGoalStats (reportAggregation.service.js) so the
  * dashboard summary shares it; this wrapper keeps the tenant/FY scope that
- * Reports needs. Behaviour is unchanged.
+ * Reports needs. Scoped by Goal.tenantId (not employee.tenantId) so goals with
+ * no assignee are still counted — they belong to the tenant either way.
  */
-async function getGoalStats(tenantId, financialYear) {
-  const goalsFy = financialYear ? toGoalsFinancialYear(financialYear) : undefined;
-  // Scoped by Goal.tenantId (not employee.tenantId) so goals with no assignee
-  // are still counted — they belong to the tenant either way.
-  return computeGoalStats({ tenantId, ...(goalsFy ? { financialYear: goalsFy } : {}) });
+async function getGoalStats(tenantId, fyLabel) {
+  return computeGoalStats({ tenantId, ...(fyLabel ? { financialYear: fyLabel } : {}) });
+}
+
+/** Task, leave and exit roll-up for the financial year, optionally one department. */
+async function getPeopleStats(tenantId, fy, department) {
+  const byDept = department ? { department } : {};
+  const taskWhere = {
+    tenantId,
+    isPrivate: false,
+    OR: [
+      { financialYear: fy.label },
+      { financialYear: null, dueDate: { gte: fy.startDate, lte: fy.endDate } },
+    ],
+    ...(department ? { employee: byDept } : {}),
+  };
+  const [invited, totalTasks, doneTasks, overdueTasks, leave, exits] = await Promise.all([
+    prisma.tenantUser.count({ where: { tenantId, status: 'INVITED', isDeleted: false, ...byDept } }),
+    prisma.task.count({ where: taskWhere }),
+    prisma.task.count({ where: { ...taskWhere, status: 'done' } }),
+    prisma.task.count({ where: { ...taskWhere, status: { not: 'done' }, dueDate: { lt: new Date() } } }),
+    prisma.leaveRequest.aggregate({
+      where: {
+        status: 'APPROVED',
+        requestType: 'LEAVE',
+        startDate: { gte: fy.startDate, lte: fy.endDate },
+        employee: { tenantId, ...byDept },
+      },
+      _sum: { totalDays: true },
+    }),
+    prisma.exitDetails.count({
+      where: {
+        tenantId,
+        lastWorkingDay: { gte: fy.startDate, lte: fy.endDate },
+        ...(department ? { user: byDept } : {}),
+      },
+    }),
+  ]);
+  return {
+    invitedEmployees: invited,
+    totalTasks,
+    completedTasks: doneTasks,
+    overdueTasks,
+    taskCompletionRate: totalTasks > 0 ? Number(((doneTasks / totalTasks) * 100).toFixed(1)) : 0,
+    approvedLeaveDays: Number(leave._sum.totalDays || 0),
+    exits,
+  };
 }
 
 /**
@@ -57,19 +145,21 @@ export async function getAnalyticsSummary(req, res, next) {
     if (!parsedQuery.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
     }
-    const { cycleId, department } = parsedQuery.data;
+    const { cycleId, department, financialYear } = parsedQuery.data;
     const tenantId = req.tenantId;
 
-    const cycle = await resolveCycle(tenantId, cycleId);
+    const [cycle, settings] = await Promise.all([resolveCycle(tenantId, cycleId), getCompanySettings(tenantId)]);
     if (cycleId && !cycle) {
       return res.status(404).json({ error: 'Appraisal cycle not found' });
     }
+    const fy = resolveFinancialYear(settings, cycle, financialYear);
 
-    const [rollup, goalStats] = await Promise.all([
+    const [rollup, goalStats, peopleStats] = await Promise.all([
       cycle
         ? computeCycleRollup({ tenantId, cycleId: cycle.id, department })
         : Promise.resolve(null),
-      getGoalStats(tenantId, cycle?.name),
+      getGoalStats(tenantId, fy.label),
+      getPeopleStats(tenantId, fy, department),
     ]);
 
     const totalHeadcount = rollup
@@ -96,6 +186,7 @@ export async function getAnalyticsSummary(req, res, next) {
           }))
         : [],
       cycle: cycle ? { id: cycle.id, name: cycle.name, frequency: cycle.frequency, status: cycle.status } : null,
+      financialYear: fy.label,
       reviewSummary: rollup
         ? {
             totalReviews: rollup.totalReviews,
@@ -105,6 +196,7 @@ export async function getAnalyticsSummary(req, res, next) {
           }
         : null,
       goalSummary: goalStats,
+      peopleSummary: peopleStats,
     });
   } catch (err) {
     next(err);
@@ -150,7 +242,9 @@ export async function getPerformanceTrend(req, res, next) {
         label: c.name,
         frequency: c.frequency,
         startDate: c.startDate,
-        avg: avgOf(withMgr, 'avgManagerScore') ?? avgOf(withSelf, 'avgSelfScore') ?? 0,
+        // null (not 0) while a cycle's reviews are unscored, so the chart shows
+        // a gap instead of a false drop.
+        avg: avgOf(withMgr, 'avgManagerScore') ?? avgOf(withSelf, 'avgSelfScore'),
         avgManagerScore: avgOf(withMgr, 'avgManagerScore'),
         avgSelfScore: avgOf(withSelf, 'avgSelfScore'),
         completionRate: rollup.completionRate,
@@ -158,7 +252,7 @@ export async function getPerformanceTrend(req, res, next) {
       });
     }
 
-    res.json({ points, sufficientData: points.length >= 2 });
+    res.json({ points, sufficientData: points.filter((p) => p.avg != null).length >= 2 });
   } catch (err) {
     next(err);
   }
@@ -176,26 +270,38 @@ export async function getReportCatalog(req, res, next) {
     if (!parsedQuery.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
     }
-    const { cycleId, department } = parsedQuery.data;
+    const { cycleId, department, financialYear } = parsedQuery.data;
     const tenantId = req.tenantId;
 
-    const cycle = await resolveCycle(tenantId, cycleId);
+    const [cycle, settings] = await Promise.all([resolveCycle(tenantId, cycleId), getCompanySettings(tenantId)]);
     if (cycleId && !cycle) {
       return res.status(404).json({ error: 'Appraisal cycle not found' });
     }
+    const fy = resolveFinancialYear(settings, cycle, financialYear);
 
-    const args = { tenantId, cycle, department, financialYear: cycle?.name };
+    const scopeLabel = (scope) => {
+      if (scope === 'financialYear') return fy.label;
+      if (scope === 'current') return 'Current workforce';
+      return cycle ? cycle.name : 'No appraisal cycle yet';
+    };
+
+    const args = { tenantId, cycle, department, fy };
     const reports = await Promise.all(
       REPORT_CATALOG.map(async (r) => ({
         ...r,
         format: 'CSV',
         rowCount: await countReportRows(r.key, args),
-        scopeLabel: cycle ? cycle.name : 'No appraisal cycle yet',
+        scopeLabel: scopeLabel(r.scope),
       })),
     );
 
+    const financialYears = recentFinancialYears(settings);
+    if (!financialYears.includes(fy.label)) financialYears.push(fy.label);
+
     res.json({
-      cycle: cycle ? { id: cycle.id, name: cycle.name } : null,
+      cycle: cycle ? { id: cycle.id, name: cycle.name, frequency: cycle.frequency } : null,
+      financialYear: fy.label,
+      financialYears,
       reports,
     });
   } catch (err) {
@@ -223,7 +329,7 @@ export async function exportReport(req, res, next) {
     const { cycleId, department, financialYear } = parsedQuery.data;
     const tenantId = req.tenantId;
 
-    const cycle = await resolveCycle(tenantId, cycleId);
+    const [cycle, settings] = await Promise.all([resolveCycle(tenantId, cycleId), getCompanySettings(tenantId)]);
     if (cycleId && !cycle) {
       return res.status(404).json({ error: 'Appraisal cycle not found' });
     }
@@ -232,7 +338,7 @@ export async function exportReport(req, res, next) {
       tenantId,
       cycle,
       department,
-      financialYear: financialYear || cycle?.name,
+      fy: resolveFinancialYear(settings, cycle, financialYear),
     });
 
     const stamp = new Date().toISOString().split('T')[0];
