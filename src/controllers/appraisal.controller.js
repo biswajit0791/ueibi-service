@@ -984,6 +984,9 @@ export async function updateParameter(req, res, next) {
 // HR on submission (the manager's input is those task-level figures).
 const PERIODIC_FREQUENCIES = new Set(['MONTHLY', 'QUARTERLY']);
 const isPeriodic = (cycle) => PERIODIC_FREQUENCIES.has(String(cycle?.frequency || '').toUpperCase());
+const isAnnualCycle = (cycle) => String(cycle?.frequency || '').toUpperCase() === 'ANNUAL';
+/** Cycles that carry the Team table's Final Weightage / Manager Rating. */
+const hasTeamMetrics = (cycle) => isPeriodic(cycle) || isAnnualCycle(cycle);
 
 const fmtOpensAt = (d) => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 
@@ -1074,8 +1077,8 @@ async function saveSelfAssessment(req, review, cycle, { selfAccomplishments, sel
     return { status: 400, body: { error: 'Please give your self rating (1 to 5) before submitting.' } };
   }
 
-  // Freeze what the employee saw at submission, so HR reviews the same figures.
-  const metrics = submit && periodic ? await getTeamTableMetrics(req.tenantId, review.employeeId, cycle) : null;
+  // Freeze what the employee saw at submission, so the manager and HR review the same figures.
+  const metrics = submit && hasTeamMetrics(cycle) ? await getTeamTableMetrics(req.tenantId, review.employeeId, cycle) : null;
 
   const updated = await prisma.performanceReview.update({
     where: { id: review.id },
@@ -1083,8 +1086,9 @@ async function saveSelfAssessment(req, review, cycle, { selfAccomplishments, sel
       ...(selfAccomplishments !== undefined && { selfAccomplishments }),
       ...(selfWeaknesses !== undefined && { selfWeaknesses }),
       ...(finalRating !== null && { selfRating: finalRating }),
-      ...(metrics && {
-        managerTaskRatingSnapshot: { ...metrics, snapshotAt: new Date().toISOString() },
+      ...(metrics && { managerTaskRatingSnapshot: { ...metrics, snapshotAt: new Date().toISOString() } }),
+      // Annual Work Score / average rating are set by HR when results are shared.
+      ...(metrics && periodic && {
         workScore: metrics.finalWeight,
         averageManagerRating: metrics.managerRating,
       }),
@@ -1247,11 +1251,11 @@ export async function getMyReview(req, res, next) {
       orderBy: { order: 'asc' },
     });
     // Live Team-table figures until submission; the frozen snapshot after.
-    // Annual: the year's Team-table averages, always live (read-only for the employee).
-    const isAnnual = String(activeCycle.frequency).toUpperCase() === 'ANNUAL';
-    const teamMetrics = (isPeriodic(activeCycle) && review.status === 'DRAFT') || isAnnual
-      ? await getTeamTableMetrics(req.tenantId, req.user.id, activeCycle)
-      : (review.managerTaskRatingSnapshot?.source === 'TEAM_TABLE' ? review.managerTaskRatingSnapshot : null);
+    // Annual reviews submitted before snapshots were taken fall back to live.
+    const snapshot = review.managerTaskRatingSnapshot?.source === 'TEAM_TABLE' ? review.managerTaskRatingSnapshot : null;
+    const teamMetrics = hasTeamMetrics(activeCycle)
+      ? ((review.status !== 'DRAFT' && snapshot) || await getTeamTableMetrics(req.tenantId, req.user.id, activeCycle))
+      : null;
 
     res.json({
       review: { ...review, teamMetrics, hrResultsVisible: hrVisible },
@@ -1737,7 +1741,8 @@ export async function getEmployeeReviewForManager(req, res, next) {
     });
 
     const periodic = isPeriodic(activeCycle);
-    const teamMetrics = periodic
+    // Monthly, quarterly and annual: the Team-table figures the employee saw.
+    const teamMetrics = hasTeamMetrics(activeCycle)
       ? (review?.managerTaskRatingSnapshot?.source === 'TEAM_TABLE'
           ? review.managerTaskRatingSnapshot
           : await getTeamTableMetrics(req.tenantId, employeeId, activeCycle))
