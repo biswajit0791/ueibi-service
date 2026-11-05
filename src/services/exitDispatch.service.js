@@ -5,15 +5,17 @@
  */
 import { prisma } from '../lib/prisma.js';
 
-// In-memory locks to prevent concurrent double-click dispatches for the same exit and recipient
-const activeDispatches = new Set();
+// In-memory locks with 20s TTL to prevent concurrent double-click dispatches
+const activeDispatches = new Map();
 
 export function acquireDispatchLock(exitId, recipientEmail) {
   const key = `${exitId}:${(recipientEmail || '').toLowerCase().trim()}`;
-  if (activeDispatches.has(key)) {
-    return false; // lock held
+  const now = Date.now();
+  const existing = activeDispatches.get(key);
+  if (existing && (now - existing < 20000)) {
+    return false; // lock held within 20s TTL
   }
-  activeDispatches.add(key);
+  activeDispatches.set(key, now);
   return true;
 }
 
