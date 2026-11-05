@@ -16,15 +16,23 @@ import { prisma } from '../lib/prisma.js';
 import { ELEVATED_ROLES, hasRole } from '../lib/roles.js';
 import { goalService } from './goal.service.js';
 
-export async function visibleTaskWhere({ user, tenantId, employeeId, fy }) {
+/**
+ * `forAppraisal`: set by the weightage endpoints (the Team table's Final
+ * Weightage / Manager Rating and the per-member ledger). HR is kept off other
+ * people's Task Boards, but appraisal is HR's job, so for these read-only
+ * figures HR gets the same company-wide scope as the other elevated roles.
+ */
+export async function visibleTaskWhere({ user, tenantId, employeeId, fy, forAppraisal = false }) {
   const targetEmployeeId = employeeId || user.id;
   const callerRole = String(user.role || '').toUpperCase();
-  // Only SUPER_ADMIN, ADMIN, CMD have elevated company-wide task access; HR is restricted to personal tasks
-  const isElevated = hasRole(user.role, ELEVATED_ROLES) && callerRole !== 'HR';
+  const hrRestricted = callerRole === 'HR' && !forAppraisal;
+  // Only SUPER_ADMIN, ADMIN, CMD have elevated company-wide task access; HR is
+  // restricted to personal tasks except for appraisal figures (see above).
+  const isElevated = hasRole(user.role, ELEVATED_ROLES) && !hrRestricted;
 
   // A regular employee or HR user only ever sees their own personal tasks.
   // Other employees' Task Boards are hidden from HR users; HR can only access/view their own personal Task Board.
-  if ((callerRole === 'EMPLOYEE' && !isElevated) || callerRole === 'HR') {
+  if ((callerRole === 'EMPLOYEE' && !isElevated) || hrRestricted) {
     if (targetEmployeeId !== 'all' && targetEmployeeId !== user.id) {
       return {
         error: {
