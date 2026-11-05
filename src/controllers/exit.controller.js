@@ -18,6 +18,12 @@
 import { prisma } from '../lib/prisma.js';
 import { emitToTenant } from '../lib/socket.js';
 import { sendMail } from '../lib/mailer.js';
+import {
+  acquireDispatchLock,
+  releaseDispatchLock,
+  getExitDocumentStatuses,
+  recordDocumentDispatch,
+} from '../services/exitDispatch.service.js';
 import { getLicenseStats } from '../services/license.service.js';
 import {
   generateRelievingLetter,
@@ -579,16 +585,19 @@ export async function getExitStatus(req, res, next) {
     const { clearances: _rows, ...exitDetails } = withRows;
     const remarksObj = parseExitRemarks(exitDetails.feedbackRemarks);
 
+    const dispatchTracking = await getExitDocumentStatuses(found.id, found);
     res.json({
       exitDetails,
       clearances,
       documents: {
         relievingLetterUrl: exitDetails.relievingLetterUrl || null,
         serviceCertificateUrl: exitDetails.serviceCertificateUrl || null,
+        refCheckProfileUrl: remarksObj.refCheckProfileUrl || null,
         terminationLetterUrl: remarksObj.terminationLetterUrl || null,
         documentsSentAt: remarksObj.documentsSentAt || null,
         documentsSentTo: remarksObj.documentsSentTo || null,
       },
+      dispatchTracking,
       progress: progressOf(clearances),
       accessBlock: accessBlockStatus(exitDetails, clearances),
       documentsUnlocked: documentsUnlocked(exitDetails, _rows),
@@ -634,7 +643,14 @@ export async function listPendingExits(req, res, next) {
     });
 
     const presented = await presentExits(tenantId, exits, req.user);
-    const enriched = presented.map(({ exit, clearances }) => toListItem(exit, clearances));
+    const enriched = await Promise.all(
+      presented.map(async ({ exit, clearances }) => {
+        const item = toListItem(exit, clearances);
+        const dispatchTracking = await getExitDocumentStatuses(exit.id, exit);
+        item.dispatchTracking = dispatchTracking;
+        return item;
+      })
+    );
 
     res.json({ exits: enriched, total: enriched.length });
   } catch (err) {
@@ -1178,6 +1194,13 @@ export async function generateCertificate(req, res, next) {
         where: { id },
         data: { serviceCertificateUrl: pdfUrl },
       });
+    } else if (type === 'refcheck') {
+      const remarksObj = parseExitRemarks(exitDetails.feedbackRemarks);
+      remarksObj.refCheckProfileUrl = pdfUrl;
+      await prisma.exitDetails.update({
+        where: { id },
+        data: { feedbackRemarks: JSON.stringify(remarksObj) },
+      });
     }
 
     const typeLabels = {
@@ -1204,12 +1227,15 @@ export async function generateCertificate(req, res, next) {
 // directly to the employee's email.
 // ─────────────────────────────────────────────────────────────────────────────
 export async function sendExitDocuments(req, res, next) {
+  let lockAcquired = false;
+  let targetEmail = '';
+  const { id } = req.params;
+
   try {
     const parsedParams = exitIdParamSchema.safeParse(req.params);
     if (!parsedParams.success) {
       return res.status(400).json({ error: 'Invalid exit ID', details: parsedParams.error.issues });
     }
-    const { id } = parsedParams.data;
 
     const parsed = sendExitDocumentsSchema.safeParse(req.body || {});
     if (!parsed.success) {
@@ -1222,6 +1248,8 @@ export async function sendExitDocuments(req, res, next) {
       includeRefCheck,
       includeTermination,
       customMessage,
+      idempotencyKey,
+      confirmedResendDocs = [],
     } = parsed.data;
 
     const exitDetails = await prisma.exitDetails.findFirst({
@@ -1256,10 +1284,68 @@ export async function sendExitDocuments(req, res, next) {
 
     const employee = exitDetails.user;
     const companyName = employee?.tenant?.companyName || 'UEIBI Organization';
-    const targetEmail = recipientEmail || employee.personalEmail || employee.email;
+    targetEmail = (recipientEmail || employee.personalEmail || employee.email || '').trim().toLowerCase();
 
     if (!targetEmail) {
       return res.status(400).json({ error: 'No valid recipient email address found for this employee.' });
+    }
+
+    // ── Duplicate Email Prevention: In-flight Lock ──
+    lockAcquired = acquireDispatchLock(id, targetEmail);
+    if (!lockAcquired) {
+      return res.status(429).json({
+        error: 'A document dispatch is currently in progress for this employee and email. Please wait a moment.',
+        code: 'DISPATCH_IN_PROGRESS',
+      });
+    }
+
+    // ── Idempotency Check: Don't repeat if already successfully sent under same idempotency key ──
+    if (idempotencyKey) {
+      const existingSuccess = await prisma.exitDocumentDispatch.findFirst({
+        where: {
+          exitDetailsId: id,
+          idempotencyKey,
+          status: 'SENT',
+        },
+      });
+      if (existingSuccess) {
+        releaseDispatchLock(id, targetEmail);
+        return res.status(200).json({
+          message: 'Documents were already dispatched under this request key.',
+          status: 'ALREADY_DISPATCHED',
+          recipientEmail: targetEmail,
+        });
+      }
+    }
+
+    // ── Resend Confirmation Check ──
+    // If a document was already successfully sent, it requires explicit confirmation in confirmedResendDocs
+    const priorSuccessfulDispatches = await prisma.exitDocumentDispatch.findMany({
+      where: {
+        exitDetailsId: id,
+        status: { in: ['SENT', 'DELIVERED'] },
+      },
+      select: { documentType: true, documentName: true },
+    });
+
+    const alreadySentTypes = new Set(priorSuccessfulDispatches.map((d) => d.documentType));
+    const requestedTypes = [];
+    if (includeRelieving) requestedTypes.push({ type: 'relieving', name: 'Relieving Letter' });
+    if (includeService) requestedTypes.push({ type: 'service', name: 'Service Certificate' });
+    if (includeRefCheck) requestedTypes.push({ type: 'refcheck', name: 'Ref-Check Profile' });
+    if (includeTermination || exitDetails.exitReason === 'Terminated') requestedTypes.push({ type: 'termination', name: 'Termination Letter' });
+
+    const unconfirmedResends = requestedTypes.filter(
+      (r) => alreadySentTypes.has(r.type) && !confirmedResendDocs.includes(r.type)
+    );
+
+    if (unconfirmedResends.length > 0) {
+      releaseDispatchLock(id, targetEmail);
+      return res.status(409).json({
+        error: 'Confirmation required: One or more selected documents have already been sent to this employee.',
+        code: 'RESEND_CONFIRMATION_REQUIRED',
+        unconfirmedDocuments: unconfirmedResends,
+      });
     }
 
     const pdfData = {
@@ -1335,11 +1421,11 @@ export async function sendExitDocuments(req, res, next) {
       pdfData.feedback = exRecord?.feedback || remarksObj.generalRemarks || '';
       pdfData.workHistory = userWithWorkHistory?.workHistory || [];
       const refCheckUrl = await generateReferenceCheckProfile(pdfData);
+      remarksObj.refCheckProfileUrl = refCheckUrl;
       generatedDocs.push({ label: 'Reference Check & Verified Profile Dossier', url: refCheckUrl, type: 'refcheck' });
     }
 
-    // Clearance settlement files (e.g. Finance F&F slip), from the clearance
-    // rows so every clearance an exit has is covered.
+    // Clearance settlement files
     const [withRows] = await ensureClearanceRows([exitDetails]);
     const clearanceRows = [...withRows.clearances].sort((a, b) => a.sortOrder - b.sortOrder);
     const clearanceFiles = [];
@@ -1366,7 +1452,6 @@ export async function sendExitDocuments(req, res, next) {
     });
     const pendingClearances = clearanceRows.filter((c) => c.status !== 'CLEARED').map((c) => c.label);
 
-    // Absolute links: an email has no app to resolve "/uploads/..." against.
     const linkFor = (url, filename) => publicUploadUrl(url, { download: true, filename }) || url;
     const docFileName = (d) => `${d.label.replace(/[^A-Za-z0-9]+/g, '_')}_${(employee.name || 'Employee').replace(/[^A-Za-z0-9]+/g, '_')}.pdf`;
 
@@ -1438,7 +1523,6 @@ export async function sendExitDocuments(req, res, next) {
 
     const text = `Dear ${employee.name},\n\nYour separation process with ${companyName} has been completed effective ${formattedLastDay}.\n\nYour official documents (also attached):\n${generatedDocs.map(d => `- ${d.label}: ${linkFor(d.url, docFileName(d))}`).join('\n')}\n\nSincerely,\nHR Operations Team\n${companyName}`;
 
-    // Attach the documents themselves so they do not depend on the links.
     const attachments = buildAttachments([
       ...generatedDocs.map((d) => ({ url: d.url, filename: docFileName(d) })),
       ...clearanceFiles.map((f) => ({ url: f.url, filename: `${f.dept.replace(/[^A-Za-z0-9]+/g, '_')}_${f.fileName}` })),
@@ -1453,12 +1537,44 @@ export async function sendExitDocuments(req, res, next) {
       attachments,
     });
 
-    // sendMail never throws; report a failed send instead of claiming success.
-    if (mail?.status === 'FAILED') {
-      return res.status(502).json({ error: `The email to ${targetEmail} could not be sent: ${mail.error || 'mail server error'}. Please try again.` });
+    const actorName = req.user.name || req.user.email || 'HR Operations';
+    const isSuccess = mail?.status !== 'FAILED';
+    const failureReason = isSuccess ? null : (mail?.error || 'Email server delivery failure');
+
+    // ── Audit History: Record each sent document individually in database ──
+    for (const doc of generatedDocs) {
+      await recordDocumentDispatch({
+        tenantId: req.tenantId,
+        exitDetailsId: id,
+        employeeId: employee.id,
+        documentType: doc.type,
+        documentName: doc.label,
+        fileUrl: doc.url,
+        recipientEmail: targetEmail,
+        status: isSuccess ? 'SENT' : 'FAILED',
+        idempotencyKey,
+        sentById: req.user.id,
+        sentByName: actorName,
+        failureReason,
+        emailMessageId: mail?.messageId || null,
+        customMessage,
+        metadata: {
+          exitReason: exitDetails.exitReason,
+          attachmentsCount: attachments.length,
+          batchSize: generatedDocs.length,
+        },
+      });
     }
 
-    // Save timestamp of email sent
+    if (!isSuccess) {
+      return res.status(502).json({
+        error: `The email to ${targetEmail} could not be sent: ${failureReason}. Please try again.`,
+        status: 'FAILED',
+        failureReason,
+      });
+    }
+
+    // Save timestamp of email sent in remarks JSON
     remarksObj.documentsSentAt = new Date().toISOString();
     remarksObj.documentsSentTo = targetEmail;
     await prisma.exitDetails.update({
@@ -1466,11 +1582,14 @@ export async function sendExitDocuments(req, res, next) {
       data: { feedbackRemarks: JSON.stringify(remarksObj) },
     });
 
+    const updatedTracking = await getExitDocumentStatuses(id, exitDetails);
+
     emitToTenant(req.tenantId, 'exit_documents_sent', {
       exitDetailsId: id,
       employeeId: employee.id,
       recipientEmail: targetEmail,
       documentsCount: generatedDocs.length,
+      tracking: updatedTracking,
     });
 
     res.json({
@@ -1479,7 +1598,39 @@ export async function sendExitDocuments(req, res, next) {
       documents: generatedDocs,
       clearanceFiles,
       attachedCount: attachments.length,
+      dispatchTracking: updatedTracking,
     });
+  } catch (err) {
+    next(err);
+  } finally {
+    if (lockAcquired) {
+      releaseDispatchLock(id, targetEmail);
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/exit/:id/dispatch-history
+// Fetch complete document sending count, status breakdown and audit history.
+// ─────────────────────────────────────────────────────────────────────────────
+export async function getExitDispatchHistory(req, res, next) {
+  try {
+    const parsedParams = exitIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid exit ID', details: parsedParams.error.issues });
+    }
+    const { id } = parsedParams.data;
+
+    const exitDetails = await prisma.exitDetails.findFirst({
+      where: { id, tenantId: req.tenantId },
+    });
+
+    if (!exitDetails) {
+      return res.status(404).json({ error: 'Exit record not found' });
+    }
+
+    const tracking = await getExitDocumentStatuses(id, exitDetails);
+    res.json(tracking);
   } catch (err) {
     next(err);
   }

@@ -132,6 +132,7 @@ model Tenant {
   walletTransactions   WalletTransaction[]
   platformTickets      PlatformTicket[]
   salesLeads           SalesLead[]
+  exitDocDispatches    ExitDocumentDispatch[]
 
   @@index([isPlatform])
   @@index([status])
@@ -339,6 +340,7 @@ model TenantUser {
   assignedPlatformTickets   PlatformTicket[]    @relation("AssignedPlatformTickets")
   ticketMessages            PlatformTicketMessage[]
   assignedSalesLeads        SalesLead[]         @relation("AssignedSalesLeads")
+  dispatchedExitDocuments   ExitDocumentDispatch[] @relation("DispatchedExitDocuments")
   permissionAuditsActed PermissionAuditLog[] @relation("PermissionAuditActor")
 
   remarks   String?
@@ -455,6 +457,7 @@ model ExitDetails {
   // One row per required clearance. The boolean columns above are still
   // written for the four original departments so older readers keep working.
   clearances ExitClearance[]
+  documentDispatches ExitDocumentDispatch[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -3096,4 +3099,37 @@ model PlatformAnnouncement {
 
   @@index([isActive, startsAt])
   @@map("platform_announcements")
+}
+
+model ExitDocumentDispatch {
+  id              String      @id @default(cuid())
+  tenantId        String
+  tenant          Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  exitDetailsId   String
+  exitDetails     ExitDetails @relation(fields: [exitDetailsId], references: [id], onDelete: Cascade)
+  employeeId      String
+  documentType    String      // "relieving" | "service" | "refcheck" | "termination"
+  documentName    String      // e.g. "Relieving Letter"
+  fileUrl         String?
+  recipientEmail  String
+  status          String      // "SENT" | "FAILED" | "DELIVERED" | "BOUNCED"
+  attemptNumber   Int         @default(1)
+  idempotencyKey  String?
+  sentById        String?
+  sentBy          TenantUser? @relation("DispatchedExitDocuments", fields: [sentById], references: [id], onDelete: SetNull)
+  sentByName      String?
+  sentAt          DateTime    @default(now())
+  deliveredAt     DateTime?
+  failureReason   String?     @db.Text
+  emailMessageId  String?
+  customMessage   String?     @db.Text
+  metadata        Json?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@index([tenantId, exitDetailsId])
+  @@index([tenantId, employeeId])
+  @@index([exitDetailsId, documentType])
+  @@index([idempotencyKey])
+  @@map("exit_document_dispatches")
 }
