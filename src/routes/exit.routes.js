@@ -11,6 +11,7 @@ import {
   blockExitAccess,
   generateCertificate,
   sendExitDocuments,
+  getExitDispatchHistory,
 } from '../controllers/exit.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
@@ -55,5 +56,8 @@ router.post('/exit/:id/certificate/:type', requireAuth, requireTenant, authorize
 
 // Send separation & clearance documents to employee via email
 router.post('/exit/:id/send-documents', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'FINANCE'), sendExitDocuments);
+
+// Get exit document dispatch status and email history audit trail
+router.get('/exit/:id/dispatch-history', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'FINANCE'), getExitDispatchHistory);
 
 export default router;

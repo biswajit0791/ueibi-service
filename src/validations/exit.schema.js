@@ -67,6 +67,8 @@ export const sendExitDocumentsSchema = z.object({
   includeRefCheck: z.boolean().default(true),
   includeTermination: z.boolean().default(false),
   customMessage: z.string().optional(),
+  idempotencyKey: z.string().optional(),
+  confirmedResendDocs: z.array(z.string()).optional().default([]), // array of documentTypes confirmed for resend
 });
 
 // ── Param schemas ────────────────────────────────────────────────────────────
