@@ -417,6 +417,21 @@ export class LeaveService {
       },
     });
 
+    if (data.defaultDays !== undefined && Number(data.defaultDays) !== existing.defaultDays) {
+      const newDays = Number(data.defaultDays);
+      const currentYear = new Date().getFullYear();
+      await prisma.leaveBalance.updateMany({
+        where: {
+          tenantId,
+          leaveTypeId: id,
+          year: { gte: currentYear },
+        },
+        data: {
+          allocated: newDays,
+        },
+      });
+    }
+
     await this.logAudit({
       tenantId,
       leaveTypeId: id,
@@ -584,7 +599,18 @@ export class LeaveService {
       const computedUsed = matching.filter(r => r.status === 'APPROVED').reduce((sum, r) => sum + (r.totalDays || 1), 0);
       const computedPending = matching.filter(r => r.status === 'PENDING').reduce((sum, r) => sum + (r.totalDays || 1), 0);
 
-      const allocated = balanceRow ? balanceRow.allocated : lt.defaultDays;
+      let allocated = lt.defaultDays;
+      if (balanceRow) {
+        if (balanceRow.allocated !== lt.defaultDays) {
+          await prisma.leaveBalance.update({
+            where: { id: balanceRow.id },
+            data: { allocated: lt.defaultDays },
+          }).catch(() => {});
+          allocated = lt.defaultDays;
+        } else {
+          allocated = balanceRow.allocated;
+        }
+      }
       const carriedForward = balanceRow ? balanceRow.carriedForward : 0;
       const adjusted = balanceRow ? balanceRow.adjusted : 0;
       const totalAvailable = allocated + carriedForward + adjusted;
@@ -642,6 +668,15 @@ export class LeaveService {
     const wfhMatching = yearRequests.filter(r => r.requestType === 'WFH' || (r.type && r.type.toLowerCase().includes('wfh')));
     const wfhUsed = wfhMatching.filter(r => r.status === 'APPROVED').reduce((sum, r) => sum + (r.totalDays || 1), 0);
     const wfhPending = wfhMatching.filter(r => r.status === 'PENDING').reduce((sum, r) => sum + (r.totalDays || 1), 0);
+
+    if (wfhRow && wfhRow.allocated !== wfhPolicy.annualDays) {
+      await prisma.wfhBalance.update({
+        where: { id: wfhRow.id },
+        data: { allocated: wfhPolicy.annualDays },
+      }).catch(() => {});
+      wfhRow.allocated = wfhPolicy.annualDays;
+    }
+
     const wfhAllocated = wfhRow ? wfhRow.allocated : wfhPolicy.annualDays;
     const wfhAdjusted = wfhRow ? wfhRow.adjusted : 0;
     const wfhRemaining = Math.max(0, wfhAllocated + wfhAdjusted - wfhUsed - wfhPending);
@@ -1664,6 +1699,19 @@ export class LeaveService {
         isActive: data.isActive !== undefined ? data.isActive : true,
       },
     });
+
+    if (data.annualDays !== undefined) {
+      const currentYear = new Date().getFullYear();
+      await prisma.wfhBalance.updateMany({
+        where: {
+          tenantId,
+          year: { gte: currentYear },
+        },
+        data: {
+          allocated: Number(data.annualDays),
+        },
+      });
+    }
 
     await this.logAudit({
       tenantId,
