@@ -1,7 +1,8 @@
 /**
  * @file seedShivamQhseTeam.js
  * @description Adds one more team to Shivam Housing Corporation (shovamltd.com)
- * under the HR Head, Neha Sharma: a manager who reports to Neha, plus 4 employees.
+ * (HR: Neha Sharma): a manager who reports to the CMD like every other team
+ * manager, plus 4 employees.
  *
  * Per employee (goal owner = the new manager):
  *   FY 2025-26  Q1, Q2, Q3 goals closed and rated, 6 rated tasks each (2 a month).
@@ -86,7 +87,7 @@ async function main() {
   console.log(`${tenant.companyName}  mode: ${CLEANUP ? 'CLEANUP ' : ''}${APPLY ? 'APPLY' : 'DRY RUN'}\n`);
   if (CLEANUP) return cleanup(tenant);
 
-  console.log(`Team "${TEAM.name}" under ${hr.name} (HR)`);
+  console.log(`Team "${TEAM.name}" (HR: ${hr.name}, manager reports to the CMD)`);
   PEOPLE.forEach((p) => console.log(`  ${p.role.padEnd(9)} ${p.employeeId} ${p.name} <${p.email}>${p.profile ? `  ${p.profile}` : ''}`));
   console.log('\nGoals per employee: FY 2025-26 Q1–Q3 closed + Oct–Dec 2026 active (demo).');
   console.log(`Appraisals: locked ${LOCKED.join(', ')}; awaiting HR ${AWAITING_HR.join(', ')}; ${Q3_PERIODS.join(', ')} by ${MEMBERS.filter((m) => m.submitsQ3).map((m) => m.name).join(' & ')}.`);
@@ -128,7 +129,9 @@ async function upsertUsers(tenant, hr) {
     });
     ids[p.local] = created.id;
   }
-  await prisma.tenantUser.update({ where: { id: ids[MANAGER.local] }, data: { managerId: hr.id } });
+  // Team managers report to the CMD, same as the other teams.
+  const cmd = await prisma.tenantUser.findFirstOrThrow({ where: { tenantId: tenant.id, role: 'CMD', isDeleted: false } });
+  await prisma.tenantUser.update({ where: { id: ids[MANAGER.local] }, data: { managerId: cmd.id } });
   for (const m of MEMBERS) await prisma.tenantUser.update({ where: { id: ids[m.local] }, data: { managerId: ids[MANAGER.local] } });
   console.log(`Users ready: ${PEOPLE.length}`);
   return ids;
