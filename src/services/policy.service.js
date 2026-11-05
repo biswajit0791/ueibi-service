@@ -91,6 +91,7 @@ export class PolicyService {
         pdfOriginalName: pdfOriginalName || null,
         contentHash,
         effectiveDate: effectiveDate ? new Date(effectiveDate) : null,
+        expiryDate: data.expiryDate ? new Date(data.expiryDate) : null,
         dueDate: dueDate ? new Date(dueDate) : null,
         publishedAt: isPublished ? now : null,
         createdById: user.id,
@@ -100,6 +101,32 @@ export class PolicyService {
         createdBy: { select: { id: true, name: true, email: true, role: true } },
       },
     });
+
+    // Create initial immutable PolicyVersion record
+    await prisma.policyVersion.create({
+      data: {
+        tenantId,
+        policyId: policy.id,
+        versionNumber: version,
+        versionString: '1.0',
+        title: policy.title,
+        description: policy.description,
+        changeNotes: data.changeNotes?.trim() || 'Initial published policy version',
+        content: policy.content,
+        category: policy.category,
+        status: policy.status,
+        isCurrent: isPublished,
+        pdfUrl: policy.pdfUrl,
+        pdfOriginalName: policy.pdfOriginalName,
+        contentHash: policy.contentHash,
+        effectiveDate: policy.effectiveDate || now,
+        expiryDate: policy.expiryDate,
+        dueDate: policy.dueDate,
+        uploadedById: user.id,
+        publishedById: isPublished ? user.id : null,
+        publishedAt: policy.publishedAt,
+      },
+    }).catch(err => console.error('Failed to create initial policy version:', err));
 
     // Auto-assign if requested and policy is published
     let assignedCount = 0;
@@ -324,6 +351,13 @@ export class PolicyService {
       include: {
         createdBy: { select: { id: true, name: true, email: true, role: true } },
         publishedBy: { select: { id: true, name: true, email: true, role: true } },
+        versions: {
+          include: {
+            uploadedBy: { select: { id: true, name: true, email: true, role: true } },
+            publishedBy: { select: { id: true, name: true, email: true, role: true } },
+          },
+          orderBy: { versionNumber: 'desc' },
+        },
       },
     });
 
@@ -491,6 +525,545 @@ export class PolicyService {
     emitToTenant(tenantId, 'policy_deleted', { policyId: id, title: existing.title });
 
     return { success: true, message: `Policy "${existing.title}" deleted successfully` };
+  }
+
+  /**
+   * List all versions and archives for a specific policy.
+   */
+  async getPolicyVersions({ tenantId, policyId }) {
+    const policy = await prisma.policy.findFirst({
+      where: { id: policyId, tenantId },
+      select: { id: true, title: true, version: true, status: true },
+    });
+
+    if (!policy) {
+      const err = new Error('Policy not found');
+      err.status = 404;
+      throw err;
+    }
+
+    const versions = await prisma.policyVersion.findMany({
+      where: { policyId, tenantId },
+      include: {
+        uploadedBy: { select: { id: true, name: true, email: true, role: true } },
+        publishedBy: { select: { id: true, name: true, email: true, role: true } },
+      },
+      orderBy: { versionNumber: 'desc' },
+    });
+
+    // Backfill if empty (legacy policy safety)
+    if (versions.length === 0) {
+      const fullPolicy = await prisma.policy.findUnique({ where: { id: policyId } });
+      if (fullPolicy) {
+        const v = await prisma.policyVersion.create({
+          data: {
+            tenantId,
+            policyId: fullPolicy.id,
+            versionNumber: fullPolicy.version || 1,
+            versionString: (fullPolicy.version || 1).toFixed(1),
+            title: fullPolicy.title,
+            description: fullPolicy.description,
+            changeNotes: 'Initial policy document',
+            content: fullPolicy.content,
+            category: fullPolicy.category,
+            status: fullPolicy.status,
+            isCurrent: fullPolicy.status === 'PUBLISHED',
+            pdfUrl: fullPolicy.pdfUrl,
+            pdfOriginalName: fullPolicy.pdfOriginalName,
+            contentHash: fullPolicy.contentHash,
+            effectiveDate: fullPolicy.effectiveDate || fullPolicy.createdAt,
+            expiryDate: fullPolicy.expiryDate || null,
+            dueDate: fullPolicy.dueDate,
+            uploadedById: fullPolicy.createdById,
+            publishedById: fullPolicy.publishedById,
+            publishedAt: fullPolicy.publishedAt,
+            createdAt: fullPolicy.createdAt,
+          },
+          include: {
+            uploadedBy: { select: { id: true, name: true, email: true, role: true } },
+            publishedBy: { select: { id: true, name: true, email: true, role: true } },
+          },
+        });
+        versions.push(v);
+      }
+    }
+
+    // Attach stats (signed / assigned count per version)
+    const versionNumbers = versions.map(v => v.versionNumber);
+    const [assignments, acceptances] = await Promise.all([
+      prisma.policyAssignment.groupBy({
+        by: ['policyVersion'],
+        where: { policyId, tenantId, policyVersion: { in: versionNumbers } },
+        _count: { id: true },
+      }),
+      prisma.policyAcceptance.groupBy({
+        by: ['policyVersion'],
+        where: { policyId, tenantId, policyVersion: { in: versionNumbers } },
+        _count: { id: true },
+      }),
+    ]);
+
+    const assignMap = new Map(assignments.map(a => [a.policyVersion, a._count.id]));
+    const acceptMap = new Map(acceptances.map(a => [a.policyVersion, a._count.id]));
+
+    const enrichedVersions = versions.map(v => {
+      const totalAssigned = assignMap.get(v.versionNumber) || 0;
+      const signedCount = acceptMap.get(v.versionNumber) || 0;
+      const compliancePercentage = totalAssigned > 0 ? Math.round((signedCount / totalAssigned) * 100) : 0;
+      return {
+        ...v,
+        totalAssigned,
+        signedCount,
+        compliancePercentage,
+      };
+    });
+
+    const currentVersion = enrichedVersions.find(v => v.isCurrent) || enrichedVersions[0] || null;
+    const archives = enrichedVersions.filter(v => v.id !== currentVersion?.id);
+
+    return {
+      policy: {
+        id: policy.id,
+        title: policy.title,
+        currentVersionNumber: policy.version,
+        status: policy.status,
+      },
+      currentVersion,
+      archives,
+      allVersions: enrichedVersions,
+    };
+  }
+
+  /**
+   * Get single policy version.
+   */
+  async getPolicyVersionById({ tenantId, policyId, versionId }) {
+    const version = await prisma.policyVersion.findFirst({
+      where: { id: versionId, policyId, tenantId },
+      include: {
+        uploadedBy: { select: { id: true, name: true, email: true, role: true } },
+        publishedBy: { select: { id: true, name: true, email: true, role: true } },
+      },
+    });
+
+    if (!version) {
+      const err = new Error('Policy version not found');
+      err.status = 404;
+      throw err;
+    }
+
+    const [totalAssigned, signedCount] = await Promise.all([
+      prisma.policyAssignment.count({
+        where: { policyId, tenantId, policyVersion: version.versionNumber },
+      }),
+      prisma.policyAcceptance.count({
+        where: { policyId, tenantId, policyVersion: version.versionNumber },
+      }),
+    ]);
+
+    return {
+      ...version,
+      totalAssigned,
+      signedCount,
+      compliancePercentage: totalAssigned > 0 ? Math.round((signedCount / totalAssigned) * 100) : 0,
+    };
+  }
+
+  /**
+   * Upload a new policy PDF and create a new sequential version.
+   * Requirement 1: Never overwrite or delete the existing policy document.
+   * Requirement 2: Automatically archive the previous active version.
+   * Requirement 3: Set newly uploaded policy as current active only after successful validation and publishing.
+   * Requirement 4: Maintain sequential version numbers (1.0, 2.0, 3.0).
+   * Requirement 5: Store policy name, version, PDF URL, upload date, uploaded by, effective date, expiry date, change notes, status.
+   */
+  async createPolicyVersion({ tenantId, policyId, user, data, req }) {
+    const policy = await prisma.policy.findFirst({
+      where: { id: policyId, tenantId },
+    });
+
+    if (!policy) {
+      const err = new Error('Policy not found');
+      err.status = 404;
+      throw err;
+    }
+
+    const latestVersion = await prisma.policyVersion.findFirst({
+      where: { policyId, tenantId },
+      orderBy: { versionNumber: 'desc' },
+    });
+
+    const nextVersionNumber = latestVersion ? latestVersion.versionNumber + 1 : (policy.version ? policy.version + 1 : 2);
+    const versionString = nextVersionNumber.toFixed(1);
+
+    const isPublished = data.status === 'PUBLISHED';
+    const now = new Date();
+    const effectiveDate = data.effectiveDate ? new Date(data.effectiveDate) : now;
+    const expiryDate = data.expiryDate ? new Date(data.expiryDate) : null;
+    const dueDate = data.dueDate ? new Date(data.dueDate) : (policy.dueDate || null);
+    const content = data.content !== undefined ? data.content.trim() : policy.content;
+    const contentHash = this.computeContentHash(content, nextVersionNumber);
+
+    const result = await prisma.$transaction(async (tx) => {
+      if (isPublished) {
+        // Automatically archive any currently active versions
+        await tx.policyVersion.updateMany({
+          where: { policyId, tenantId, isCurrent: true },
+          data: { isCurrent: false, status: 'ARCHIVED', archivedAt: now },
+        });
+      }
+
+      // Create new immutable PolicyVersion
+      const newVersion = await tx.policyVersion.create({
+        data: {
+          tenantId,
+          policyId,
+          versionNumber: nextVersionNumber,
+          versionString,
+          title: data.title ? data.title.trim() : policy.title,
+          description: data.description !== undefined ? (data.description ? data.description.trim() : null) : policy.description,
+          changeNotes: data.changeNotes ? data.changeNotes.trim() : `Version ${versionString} uploaded`,
+          content,
+          category: policy.category,
+          status: isPublished ? 'PUBLISHED' : 'DRAFT',
+          isCurrent: isPublished,
+          pdfUrl: data.pdfUrl,
+          pdfOriginalName: data.pdfOriginalName || `${data.title || policy.title}_v${versionString}.pdf`,
+          contentHash,
+          effectiveDate,
+          expiryDate,
+          dueDate,
+          uploadedById: user.id,
+          publishedById: isPublished ? user.id : null,
+          publishedAt: isPublished ? now : null,
+        },
+        include: {
+          uploadedBy: { select: { id: true, name: true, email: true, role: true } },
+          publishedBy: { select: { id: true, name: true, email: true, role: true } },
+        },
+      });
+
+      if (isPublished) {
+        // Update parent policy to reflect this active version
+        await tx.policy.update({
+          where: { id: policyId },
+          data: {
+            version: nextVersionNumber,
+            pdfUrl: newVersion.pdfUrl,
+            pdfOriginalName: newVersion.pdfOriginalName,
+            contentHash: newVersion.contentHash,
+            effectiveDate: newVersion.effectiveDate,
+            expiryDate: newVersion.expiryDate,
+            dueDate: newVersion.dueDate,
+            content: newVersion.content,
+            status: 'PUBLISHED',
+            publishedAt: now,
+            publishedById: user.id,
+          },
+        });
+      }
+
+      return newVersion;
+    });
+
+    let assignedCount = 0;
+    if (isPublished) {
+      let targetUserIds = [];
+      if (data.assignees === 'ALL') {
+        const allMembers = await prisma.tenantUser.findMany({
+          where: { tenantId, isDeleted: false, status: { in: ['ACTIVE', 'INVITED'] } },
+          select: { id: true },
+        });
+        targetUserIds = allMembers.map(u => u.id);
+      } else if (Array.isArray(data.assignees) && data.assignees.length > 0) {
+        targetUserIds = data.assignees;
+      } else {
+        const prevAssignments = await prisma.policyAssignment.findMany({
+          where: { tenantId, policyId },
+          select: { userId: true },
+          distinct: ['userId'],
+        });
+        targetUserIds = prevAssignments.map(a => a.userId);
+      }
+
+      if (targetUserIds.length > 0) {
+        assignedCount = await this.assignPolicyInternal({
+          tenantId,
+          policyId,
+          policyVersion: nextVersionNumber,
+          assignerId: user.id,
+          assignees: targetUserIds,
+          dueAt: result.dueDate,
+        });
+      }
+    }
+
+    await this.logAudit({
+      tenantId,
+      policyId,
+      actorUserId: user.id,
+      action: isPublished ? 'POLICY_VERSION_PUBLISHED' : 'POLICY_VERSION_UPLOADED',
+      details: `${user.name} uploaded new version ${versionString} for policy "${policy.title}" (${result.pdfOriginalName})${isPublished ? ` and published as active (previous version archived, ${assignedCount} assigned)` : ' as draft'}.`,
+      ipAddress: this.getClientIp(req),
+      userAgent: req.headers['user-agent'],
+      metadata: {
+        versionNumber: nextVersionNumber,
+        versionString,
+        pdfUrl: result.pdfUrl,
+        pdfOriginalName: result.pdfOriginalName,
+        changeNotes: result.changeNotes,
+        effectiveDate: result.effectiveDate,
+        expiryDate: result.expiryDate,
+        assignedCount,
+      },
+    });
+
+    emitToTenant(tenantId, 'policy_version_updated', {
+      policyId,
+      versionId: result.id,
+      versionString,
+      isPublished,
+    });
+
+    return result;
+  }
+
+  /**
+   * Publish a draft policy version.
+   */
+  async publishPolicyVersion({ tenantId, policyId, versionId, user, assignees, req }) {
+    const version = await prisma.policyVersion.findFirst({
+      where: { id: versionId, policyId, tenantId },
+      include: { policy: true },
+    });
+
+    if (!version) {
+      const err = new Error('Policy version not found');
+      err.status = 404;
+      throw err;
+    }
+
+    const now = new Date();
+
+    const updatedVersion = await prisma.$transaction(async (tx) => {
+      // Archive other active versions
+      await tx.policyVersion.updateMany({
+        where: { policyId, tenantId, isCurrent: true, id: { not: versionId } },
+        data: { isCurrent: false, status: 'ARCHIVED', archivedAt: now },
+      });
+
+      // Mark this version active & published
+      const published = await tx.policyVersion.update({
+        where: { id: versionId },
+        data: {
+          status: 'PUBLISHED',
+          isCurrent: true,
+          publishedAt: now,
+          publishedById: user.id,
+        },
+        include: {
+          uploadedBy: { select: { id: true, name: true, email: true, role: true } },
+          publishedBy: { select: { id: true, name: true, email: true, role: true } },
+        },
+      });
+
+      // Update parent policy
+      await tx.policy.update({
+        where: { id: policyId },
+        data: {
+          version: published.versionNumber,
+          pdfUrl: published.pdfUrl,
+          pdfOriginalName: published.pdfOriginalName,
+          contentHash: published.contentHash,
+          effectiveDate: published.effectiveDate,
+          expiryDate: published.expiryDate,
+          dueDate: published.dueDate,
+          content: published.content,
+          status: 'PUBLISHED',
+          publishedAt: now,
+          publishedById: user.id,
+        },
+      });
+
+      return published;
+    });
+
+    let assignedCount = 0;
+    if (assignees) {
+      assignedCount = await this.assignPolicyInternal({
+        tenantId,
+        policyId,
+        policyVersion: updatedVersion.versionNumber,
+        assignerId: user.id,
+        assignees,
+        dueAt: updatedVersion.dueDate,
+      });
+    }
+
+    await this.logAudit({
+      tenantId,
+      policyId,
+      actorUserId: user.id,
+      action: 'POLICY_VERSION_PUBLISHED',
+      details: `${user.name} published policy version ${updatedVersion.versionString} as current active mandate (${assignedCount} assigned).`,
+      ipAddress: this.getClientIp(req),
+      userAgent: req.headers['user-agent'],
+    });
+
+    emitToTenant(tenantId, 'policy_version_updated', {
+      policyId,
+      versionId: updatedVersion.id,
+      versionString: updatedVersion.versionString,
+      isPublished: true,
+    });
+
+    return updatedVersion;
+  }
+
+  /**
+   * Restore an archived version by creating a new incremented version.
+   * Requirement 9: Support restoring a previous version without deleting existing versions.
+   * Restoring must create a new version rather than overwrite history.
+   */
+  async restorePolicyVersion({ tenantId, policyId, versionId, user, data, req }) {
+    const policy = await prisma.policy.findFirst({
+      where: { id: policyId, tenantId },
+    });
+
+    if (!policy) {
+      const err = new Error('Policy not found');
+      err.status = 404;
+      throw err;
+    }
+
+    const targetVersion = await prisma.policyVersion.findFirst({
+      where: { id: versionId, policyId, tenantId },
+    });
+
+    if (!targetVersion) {
+      const err = new Error('Policy version to restore not found');
+      err.status = 404;
+      throw err;
+    }
+
+    const latestVersion = await prisma.policyVersion.findFirst({
+      where: { policyId, tenantId },
+      orderBy: { versionNumber: 'desc' },
+    });
+
+    const nextVersionNumber = latestVersion ? latestVersion.versionNumber + 1 : (policy.version + 1);
+    const versionString = nextVersionNumber.toFixed(1);
+    const now = new Date();
+
+    const changeNotes = data?.changeNotes?.trim() || `Restored from Version ${targetVersion.versionString} (${targetVersion.pdfOriginalName || 'previous document'})`;
+    const effectiveDate = data?.effectiveDate ? new Date(data.effectiveDate) : now;
+    const expiryDate = data?.expiryDate ? new Date(data.expiryDate) : targetVersion.expiryDate;
+    const dueDate = data?.dueDate ? new Date(data.dueDate) : (policy.dueDate || null);
+
+    const newVersion = await prisma.$transaction(async (tx) => {
+      // Archive current active versions
+      await tx.policyVersion.updateMany({
+        where: { policyId, tenantId, isCurrent: true },
+        data: { isCurrent: false, status: 'ARCHIVED', archivedAt: now },
+      });
+
+      // Create brand-new sequential version preserving history
+      const restored = await tx.policyVersion.create({
+        data: {
+          tenantId,
+          policyId,
+          versionNumber: nextVersionNumber,
+          versionString,
+          title: targetVersion.title,
+          description: targetVersion.description,
+          changeNotes,
+          content: targetVersion.content,
+          category: targetVersion.category,
+          status: 'PUBLISHED',
+          isCurrent: true,
+          pdfUrl: targetVersion.pdfUrl,
+          pdfOriginalName: targetVersion.pdfOriginalName,
+          contentHash: targetVersion.contentHash,
+          effectiveDate,
+          expiryDate,
+          dueDate,
+          uploadedById: user.id,
+          publishedById: user.id,
+          publishedAt: now,
+        },
+        include: {
+          uploadedBy: { select: { id: true, name: true, email: true, role: true } },
+          publishedBy: { select: { id: true, name: true, email: true, role: true } },
+        },
+      });
+
+      // Update parent policy
+      await tx.policy.update({
+        where: { id: policyId },
+        data: {
+          version: nextVersionNumber,
+          pdfUrl: restored.pdfUrl,
+          pdfOriginalName: restored.pdfOriginalName,
+          contentHash: restored.contentHash,
+          effectiveDate: restored.effectiveDate,
+          expiryDate: restored.expiryDate,
+          dueDate: restored.dueDate,
+          content: restored.content,
+          status: 'PUBLISHED',
+          publishedAt: now,
+          publishedById: user.id,
+        },
+      });
+
+      return restored;
+    });
+
+    let assignedCount = 0;
+    const prevAssignments = await prisma.policyAssignment.findMany({
+      where: { tenantId, policyId },
+      select: { userId: true },
+      distinct: ['userId'],
+    });
+    const targetUserIds = prevAssignments.map(a => a.userId);
+
+    if (targetUserIds.length > 0) {
+      assignedCount = await this.assignPolicyInternal({
+        tenantId,
+        policyId,
+        policyVersion: nextVersionNumber,
+        assignerId: user.id,
+        assignees: targetUserIds,
+        dueAt: newVersion.dueDate,
+      });
+    }
+
+    await this.logAudit({
+      tenantId,
+      policyId,
+      actorUserId: user.id,
+      action: 'POLICY_VERSION_RESTORED',
+      details: `${user.name} restored policy "${policy.title}" from Version ${targetVersion.versionString} as new active Version ${versionString} (${assignedCount} assigned for sign-off).`,
+      ipAddress: this.getClientIp(req),
+      userAgent: req.headers['user-agent'],
+      metadata: {
+        restoredFromVersionId: targetVersion.id,
+        restoredFromVersionString: targetVersion.versionString,
+        newVersionNumber: nextVersionNumber,
+        newVersionString: versionString,
+        changeNotes,
+        assignedCount,
+      },
+    });
+
+    emitToTenant(tenantId, 'policy_version_updated', {
+      policyId,
+      versionId: newVersion.id,
+      versionString,
+      isPublished: true,
+      restoredFrom: targetVersion.versionString,
+    });
+
+    return newVersion;
   }
 
   /**
@@ -837,6 +1410,13 @@ export class PolicyService {
       include: {
         createdBy: { select: { id: true, name: true, email: true, role: true } },
         publishedBy: { select: { id: true, name: true, email: true, role: true } },
+        versions: {
+          include: {
+            uploadedBy: { select: { id: true, name: true, email: true, role: true } },
+            publishedBy: { select: { id: true, name: true, email: true, role: true } },
+          },
+          orderBy: { versionNumber: 'desc' },
+        },
         assignments: {
           include: {
             user: {
@@ -881,8 +1461,14 @@ export class PolicyService {
     const pendingCount = policy.assignments.filter(a => a.status === 'PENDING').length;
     const compliancePercentage = totalAssigned > 0 ? Math.round((signedCount / totalAssigned) * 100) : 0;
 
+    const versions = policy.versions || [];
+    const currentVersion = versions.find(v => v.isCurrent) || versions.find(v => v.versionNumber === policy.version) || versions[0] || null;
+    const archives = versions.filter(v => v.id !== currentVersion?.id);
+
     return {
       ...policy,
+      currentVersion,
+      archives,
       totalAssigned,
       signedCount,
       pendingCount,

@@ -30,6 +30,8 @@ export const createPolicySchema = z.object({
   pdfUrl: z.string().optional().nullable(),
   pdfOriginalName: z.string().optional().nullable(),
   effectiveDate: z.string().optional().nullable(),
+  expiryDate: z.string().optional().nullable(),
+  changeNotes: z.string().optional().nullable(),
   dueDate: z
     .string()
     .optional()
@@ -49,6 +51,8 @@ export const updatePolicySchema = z.object({
   pdfUrl: z.string().optional().nullable(),
   pdfOriginalName: z.string().optional().nullable(),
   effectiveDate: z.string().optional().nullable(),
+  expiryDate: z.string().optional().nullable(),
+  changeNotes: z.string().optional().nullable(),
   dueDate: z.string().optional().nullable(),
   incrementVersion: z.boolean().optional(),
   assignees: z.union([z.array(z.string()), z.literal('ALL')]).optional(),
@@ -103,4 +107,39 @@ export const complianceRegistryQuerySchema = z.object({
 export const policyIdQuerySchema = z.object({
   policyId: z.string().max(100).optional(),
 });
+
+export const createPolicyVersionSchema = z.object({
+  title: z.string().min(1).max(200).optional(),
+  content: z.string().optional(),
+  description: z.string().optional().nullable(),
+  changeNotes: z.string().optional().nullable(),
+  pdfUrl: z.string().min(1, 'PDF document is required for a new policy version'),
+  pdfOriginalName: z.string().optional().nullable(),
+  effectiveDate: z.string().optional().nullable(),
+  expiryDate: z.string().optional().nullable(),
+  dueDate: z
+    .string()
+    .optional()
+    .nullable()
+    .refine((val) => !val || !isDateInPast(val), {
+      message: 'Sign-off due date cannot be in the past',
+    }),
+  status: z.enum(['DRAFT', 'PUBLISHED']).default('PUBLISHED'),
+  assignees: z.union([z.array(z.string()), z.literal('ALL')]).optional(),
+});
+
+export const restorePolicyVersionSchema = z.object({
+  changeNotes: z.string().optional().nullable(),
+  effectiveDate: z.string().optional().nullable(),
+  expiryDate: z.string().optional().nullable(),
+  dueDate: z
+    .string()
+    .optional()
+    .nullable()
+    .refine((val) => !val || !isDateInPast(val), {
+      message: 'Sign-off due date cannot be in the past',
+    }),
+  assignees: z.union([z.array(z.string()), z.literal('ALL')]).optional(),
+});
+
 

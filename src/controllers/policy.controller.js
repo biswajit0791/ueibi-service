@@ -10,6 +10,8 @@ import {
   listPoliciesQuerySchema,
   complianceRegistryQuerySchema,
   policyIdQuerySchema,
+  createPolicyVersionSchema,
+  restorePolicyVersionSchema,
 } from '../validations/policy.schema.js';
 
 export async function getMyPolicies(req, res, next) {
@@ -349,6 +351,113 @@ export async function exportComplianceCSV(req, res, next) {
     res.setHeader('Content-Disposition', `attachment; filename="compliance_registry_${Date.now()}.csv"`);
     res.status(200).send(csvContent);
   } catch (err) {
+    next(err);
+  }
+}
+
+export async function getPolicyVersions(req, res, next) {
+  try {
+    const { id } = req.params;
+    const versions = await policyService.getPolicyVersions({
+      tenantId: req.tenantId,
+      policyId: id,
+    });
+    res.json(versions);
+  } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    next(err);
+  }
+}
+
+export async function getPolicyVersionById(req, res, next) {
+  try {
+    const { id, versionId } = req.params;
+    const version = await policyService.getPolicyVersionById({
+      tenantId: req.tenantId,
+      policyId: id,
+      versionId,
+    });
+    res.json(version);
+  } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    next(err);
+  }
+}
+
+export async function createPolicyVersion(req, res, next) {
+  try {
+    const { id } = req.params;
+    const parsed = createPolicyVersionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    }
+
+    const version = await policyService.createPolicyVersion({
+      tenantId: req.tenantId,
+      policyId: id,
+      user: req.user,
+      data: parsed.data,
+      req,
+    });
+
+    res.status(201).json(version);
+  } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    next(err);
+  }
+}
+
+export async function publishPolicyVersion(req, res, next) {
+  try {
+    const { id, versionId } = req.params;
+    const { assignees } = req.body || {};
+
+    const published = await policyService.publishPolicyVersion({
+      tenantId: req.tenantId,
+      policyId: id,
+      versionId,
+      user: req.user,
+      assignees,
+      req,
+    });
+
+    res.json(published);
+  } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    next(err);
+  }
+}
+
+export async function restorePolicyVersion(req, res, next) {
+  try {
+    const { id, versionId } = req.params;
+    const parsed = restorePolicyVersionSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    }
+
+    const restored = await policyService.restorePolicyVersion({
+      tenantId: req.tenantId,
+      policyId: id,
+      versionId,
+      user: req.user,
+      data: parsed.data,
+      req,
+    });
+
+    res.status(201).json(restored);
+  } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message });
+    }
     next(err);
   }
 }
