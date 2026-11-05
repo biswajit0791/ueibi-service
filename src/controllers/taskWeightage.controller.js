@@ -51,6 +51,7 @@ export async function getTeamWeightage(req, res, next) {
       user: req.user,
       tenantId: req.tenantId,
       employeeId,
+      forAppraisal: true,
     });
     if (error) return res.status(error.status).json({ error: error.message });
 
@@ -189,7 +190,9 @@ export async function setTaskFinalWeight(req, res, next) {
  *
  * Scope is `visibleTaskWhere` with employeeId 'all' — the same rule the task
  * board uses — so this can only ever aggregate work the caller may already
- * see, and there is no second access rule to drift from it.
+ * see, and there is no second access rule to drift from it. The one difference
+ * is `forAppraisal`: HR, kept off other people's boards, still gets the whole
+ * company's figures here because appraisal is HR's job.
  */
 export async function getTeamWeightageSummary(req, res, next) {
   try {
@@ -202,6 +205,7 @@ export async function getTeamWeightageSummary(req, res, next) {
       user: req.user,
       tenantId: req.tenantId,
       employeeId: 'all',
+      forAppraisal: true,
     });
     if (error) return res.status(error.status).json({ error: error.message });
 
