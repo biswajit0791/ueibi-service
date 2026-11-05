@@ -88,6 +88,7 @@ model Tenant {
   tasks                Task[]
   taskMilestones       TaskMilestone[]
   policies             Policy[]
+  policyVersions       PolicyVersion[]
   policyAssignments    PolicyAssignment[]
   policyAcceptances    PolicyAcceptance[]
   policyAuditLogs      PolicyAuditLog[]
@@ -311,6 +312,8 @@ model TenantUser {
   // Policies & Compliance Relations
   createdPolicies            Policy[]                 @relation("PolicyAuthor")
   publishedPolicies          Policy[]                 @relation("PolicyPublisher")
+  policyVersionsCreated      PolicyVersion[]          @relation("PolicyVersionAuthor")
+  policyVersionsPublished    PolicyVersion[]          @relation("PolicyVersionPublisher")
   assignedPolicies           PolicyAssignment[]       @relation("PolicyAssigner")
   policyAssignments          PolicyAssignment[]       @relation("UserPolicyAssignments")
   policyAcceptances          PolicyAcceptance[]       @relation("UserPolicyAcceptances")
@@ -2026,6 +2029,7 @@ model Policy {
   contentHash     String?
   effectiveDate   DateTime?
   dueDate         DateTime?
+  expiryDate      DateTime?
   publishedAt     DateTime?
   createdById     String
   createdBy       TenantUser         @relation("PolicyAuthor", fields: [createdById], references: [id])
@@ -2034,12 +2038,50 @@ model Policy {
   assignments     PolicyAssignment[]
   acceptances     PolicyAcceptance[]
   auditLogs       PolicyAuditLog[]
+  versions        PolicyVersion[]
   createdAt       DateTime           @default(now())
   updatedAt       DateTime           @updatedAt
 
   @@index([tenantId])
   @@index([tenantId, status])
   @@map("policies")
+}
+
+model PolicyVersion {
+  id              String       @id @default(cuid())
+  tenantId        String
+  tenant          Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  policyId        String
+  policy          Policy       @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  versionNumber   Int          @default(1)
+  versionString   String       @default("1.0")
+  title           String
+  description     String?      @db.Text
+  changeNotes     String?      @db.Text
+  content         String       @db.Text
+  category        String       @default("Compliance")
+  status          PolicyStatus @default(PUBLISHED)
+  isCurrent       Boolean      @default(false)
+  pdfUrl          String?
+  pdfOriginalName String?
+  contentHash     String?
+  effectiveDate   DateTime?
+  expiryDate      DateTime?
+  dueDate         DateTime?
+  uploadedById    String
+  uploadedBy      TenantUser   @relation("PolicyVersionAuthor", fields: [uploadedById], references: [id])
+  publishedById   String?
+  publishedBy     TenantUser?  @relation("PolicyVersionPublisher", fields: [publishedById], references: [id])
+  publishedAt     DateTime?
+  archivedAt      DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@unique([policyId, versionNumber])
+  @@index([tenantId])
+  @@index([policyId])
+  @@index([policyId, status])
+  @@map("policy_versions")
 }
 
 model PolicyAssignment {

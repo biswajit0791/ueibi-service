@@ -15,6 +15,11 @@ import {
   getPendingCompliance,
   sendReminders,
   exportComplianceCSV,
+  getPolicyVersions,
+  getPolicyVersionById,
+  createPolicyVersion,
+  publishPolicyVersion,
+  restorePolicyVersion,
 } from '../controllers/policy.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
@@ -45,5 +50,12 @@ router.post('/policies/:id/archive', requireAuth, requireTenant, authorize(...hr
 router.post('/policies/:id/assign', requireAuth, requireTenant, authorize(...hrRoles), assignPolicy);
 router.post('/policies/:id/reminders', requireAuth, requireTenant, authorize(...hrRoles), sendReminders);
 router.post('/policies/:id/remind', requireAuth, requireTenant, authorize(...hrRoles), sendReminders);
+
+// ── Policy Versions & Archives Endpoints ────────────────────────────────────
+router.get('/policies/:id/versions', requireAuth, requireTenant, getPolicyVersions);
+router.get('/policies/:id/versions/:versionId', requireAuth, requireTenant, getPolicyVersionById);
+router.post('/policies/:id/versions', requireAuth, requireTenant, authorize(...hrRoles), createPolicyVersion);
+router.post('/policies/:id/versions/:versionId/publish', requireAuth, requireTenant, authorize(...hrRoles), publishPolicyVersion);
+router.post('/policies/:id/versions/:versionId/restore', requireAuth, requireTenant, authorize(...hrRoles), restorePolicyVersion);
 
 export default router;
