@@ -331,3 +331,128 @@ export async function createPlatformStaff(req, res, next) {
     next(err);
   }
 }
+
+
+const updateStaffSchema = z.object({
+  name: z.string().trim().min(2, 'Name is required').max(120).optional(),
+  email: z.string().trim().toLowerCase().email('A valid email address is required').optional(),
+  status: z.enum(['ACTIVE', 'INACTIVE', 'SUSPENDED']).optional(),
+  password: z.string().min(6, 'Password must be at least 6 characters').max(100).optional(),
+  mustChangePassword: z.boolean().optional(),
+});
+
+/** PATCH /platform/staff/:id — Dynamically update Sales Team member name, Login ID (email), status, or password */
+export async function updatePlatformStaff(req, res, next) {
+  try {
+    const { id } = req.params;
+    const staff = await prisma.tenantUser.findFirst({
+      where: { id, role: 'PLATFORM_SALES' },
+    });
+    if (!staff) {
+      return res.status(404).json({ error: 'Sales team member not found' });
+    }
+
+    const parsed = updateStaffSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    }
+
+    const { name, email, status, password, mustChangePassword } = parsed.data;
+    const updateData = {};
+
+    if (name) updateData.name = name;
+    if (status) updateData.status = status;
+    if (typeof mustChangePassword === 'boolean') updateData.mustChangePassword = mustChangePassword;
+
+    if (email && email.toLowerCase() !== staff.email.toLowerCase()) {
+      const emailConflict = await prisma.tenantUser.findFirst({
+        where: {
+          id: { not: id },
+          email: { equals: email, mode: 'insensitive' },
+        },
+        select: { id: true },
+      });
+      if (emailConflict) {
+        return res.status(409).json({ error: 'This Login ID / email is already used by another user.', code: 'EMAIL_EXISTS' });
+      }
+      updateData.email = email;
+    }
+
+    if (password) {
+      updateData.passwordHash = await bcrypt.hash(password, 10);
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const user = await tx.tenantUser.update({
+        where: { id },
+        data: updateData,
+        select: STAFF_SELECT,
+      });
+
+      await recordPlatformAction({
+        tx,
+        req,
+        action: PLATFORM_ACTIONS.STAFF_UPDATED || 'STAFF_UPDATED',
+        targetType: 'USER',
+        targetId: user.id,
+        beforeValue: { name: staff.name, email: staff.email, status: staff.status },
+        afterValue: { name: user.name, email: user.email, status: user.status, passwordChanged: !!password },
+      });
+
+      return user;
+    });
+
+    res.json({
+      message: 'Sales team member credentials and profile updated successfully.',
+      staff: updated,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** POST /platform/staff/:id/direct-reset — Generate an immediate one-click temporary password for Sales Team */
+export async function directResetStaffPassword(req, res, next) {
+  try {
+    const { id } = req.params;
+    const staff = await prisma.tenantUser.findFirst({
+      where: { id, role: 'PLATFORM_SALES' },
+      select: STAFF_SELECT,
+    });
+    if (!staff) {
+      return res.status(404).json({ error: 'Sales team member not found' });
+    }
+
+    const tempPassword = req.body?.customPassword?.trim() || ('Sales#' + crypto.randomBytes(4).toString('hex').toUpperCase());
+    const passwordHash = await bcrypt.hash(tempPassword, 10);
+
+    await prisma.$transaction(async (tx) => {
+      await tx.tenantUser.update({
+        where: { id },
+        data: {
+          passwordHash,
+          mustChangePassword: true,
+          status: 'ACTIVE',
+        },
+      });
+
+      await recordPlatformAction({
+        tx,
+        req,
+        action: PLATFORM_ACTIONS.STAFF_PASSWORD_RESET || 'STAFF_PASSWORD_RESET',
+        targetType: 'USER',
+        targetId: id,
+        afterValue: { email: staff.email, resetType: 'DIRECT_TEMP_PASSWORD' },
+      });
+    });
+
+    res.json({
+      message: 'Temporary password set successfully. Share these credentials with the team member.',
+      email: staff.email,
+      temporaryPassword: tempPassword,
+      mustChangePassword: true,
+    });
+  } catch (err) {
+    next(err);
+  }
+}

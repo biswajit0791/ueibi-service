@@ -21,85 +21,218 @@ import { num, round2 } from '../services/billing.service.js';
 const monthStart = (d) => new Date(d.getFullYear(), d.getMonth(), 1);
 const monthKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 
-/** GET /platform/revenue */
+/** GET /platform/revenue — Synchronized with Sales Team & Advanced Multi-attribute Filters */
 export async function getRevenue(req, res, next) {
   try {
     const parsed = revenueQuerySchema.safeParse(req.query);
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
-    const { months } = parsed.data;
+    const { months, salesRepId, category, method } = parsed.data;
 
     const now = new Date();
     // Inclusive of the current month, so `months: 12` means this month and the
     // eleven before it.
     const seriesFrom = monthStart(new Date(now.getFullYear(), now.getMonth() - (months - 1), 1));
 
+    // 1. Fetch Sales Team (PLATFORM_SALES)
+    const salesTeamMembers = await prisma.tenantUser.findMany({
+      where: { role: 'PLATFORM_SALES' },
+      select: { id: true, name: true, email: true, status: true },
+      orderBy: { name: 'asc' },
+    });
+
     const [
-      invoiceAgg,
-      paymentAgg,
-      refundAgg,
-      payments,
-      refunds,
-      invoices,
-      outstandingRows,
-      subscriptions,
+      allInvoices,
+      allPayments,
+      allRefunds,
+      allSubscriptions,
       legacyAgg,
     ] = await Promise.all([
-      // VOID invoices are excluded everywhere: they represent nothing owed.
-      prisma.invoice.aggregate({
+      prisma.invoice.findMany({
         where: { state: { not: 'VOID' } },
-        _sum: { totalAmount: true, amountPaid: true, amountRefunded: true },
-        _count: { _all: true },
+        include: {
+          subscription: {
+            select: {
+              id: true,
+              salesRepId: true,
+              renewedFromId: true,
+              packageName: true,
+              salesRep: { select: { id: true, name: true, email: true } },
+            },
+          },
+        },
+        orderBy: { issuedAt: 'desc' },
       }),
-      prisma.payment.aggregate({ _sum: { amount: true }, _count: { _all: true } }),
-      prisma.refund.aggregate({ where: { state: 'RECORDED' }, _sum: { amount: true }, _count: { _all: true } }),
-
-      // The series is built from rows rather than a SQL date_trunc so the month
-      // boundaries match the server's timezone, which is what the operator sees.
       prisma.payment.findMany({
-        where: { receivedAt: { gte: seriesFrom } },
-        select: { amount: true, receivedAt: true, method: true },
+        include: {
+          invoice: {
+            select: {
+              id: true,
+              subscriptionId: true,
+              subscription: {
+                select: { id: true, salesRepId: true, renewedFromId: true },
+              },
+            },
+          },
+        },
+        orderBy: { receivedAt: 'desc' },
       }),
       prisma.refund.findMany({
-        where: { refundedAt: { gte: seriesFrom }, state: 'RECORDED' },
-        select: { amount: true, refundedAt: true },
-      }),
-      prisma.invoice.findMany({
-        where: { state: { not: 'VOID' }, issuedAt: { gte: seriesFrom } },
-        select: { totalAmount: true, issuedAt: true },
-      }),
-
-      // Money invoiced and not yet received, oldest first — this is a chase list.
-      prisma.invoice.findMany({
-        where: { state: { in: ['ISSUED', 'PARTIALLY_PAID'] } },
-        select: {
-          id: true, invoiceNumber: true, billToName: true, tenantId: true,
-          totalAmount: true, amountPaid: true, issuedAt: true, dueAt: true,
+        where: { state: 'RECORDED' },
+        include: {
+          payment: {
+            select: {
+              invoice: {
+                select: {
+                  subscription: {
+                    select: { salesRepId: true, renewedFromId: true },
+                  },
+                },
+              },
+            },
+          },
         },
-        orderBy: { issuedAt: 'asc' },
       }),
-
       prisma.subscription.findMany({
         where: { state: { in: ['ACTIVE', 'PENDING'] } },
-        select: {
-          id: true, tenantId: true, packageName: true, seatCount: true,
-          endsAt: true, startsAt: true,
+        include: {
           tenant: { select: { companyName: true } },
+          salesRep: { select: { id: true, name: true, email: true } },
         },
       }),
-
-      // Carried forward from the pre-billing flow and never reconciled. Counted,
-      // but separated out so the headline figure can be read honestly.
       prisma.payment.aggregate({ where: { method: 'LEGACY' }, _sum: { amount: true }, _count: { _all: true } }),
     ]);
 
-    const invoiced = round2(num(invoiceAgg._sum.totalAmount));
-    const collected = round2(num(paymentAgg._sum.amount));
-    const refunded = round2(num(refundAgg._sum.amount));
-    const legacy = round2(num(legacyAgg._sum.amount));
+    // ── Build Sales Team Performance & Synchronization Breakdown ──────────────
+    const salesStatsMap = new Map();
+    for (const member of salesTeamMembers) {
+      salesStatsMap.set(member.id, {
+        id: member.id,
+        name: member.name,
+        email: member.email,
+        status: member.status,
+        invoiced: 0,
+        collected: 0,
+        outstanding: 0,
+        renewalsCount: 0,
+        newSalesCount: 0,
+        totalSeats: 0,
+      });
+    }
 
-    // ── Monthly series ──────────────────────────────────────────────────────
+    const unassignedStats = {
+      id: 'UNASSIGNED',
+      name: 'Direct / Unassigned',
+      email: 'direct@platform.internal',
+      status: 'ACTIVE',
+      invoiced: 0,
+      collected: 0,
+      outstanding: 0,
+      renewalsCount: 0,
+      newSalesCount: 0,
+      totalSeats: 0,
+    };
+
+    // Subscriptions attribution
+    for (const sub of allSubscriptions) {
+      const target = sub.salesRepId ? salesStatsMap.get(sub.salesRepId) : unassignedStats;
+      if (target) {
+        if (sub.renewedFromId) {
+          target.renewalsCount += 1;
+        } else {
+          target.newSalesCount += 1;
+        }
+        target.totalSeats += (sub.seatCount || 0);
+      }
+    }
+
+    // Invoices attribution
+    for (const inv of allInvoices) {
+      const repId = inv.subscription?.salesRepId;
+      const target = repId ? salesStatsMap.get(repId) : unassignedStats;
+      const owed = round2(num(inv.totalAmount) - num(inv.amountPaid));
+      if (target) {
+        target.invoiced = round2(target.invoiced + num(inv.totalAmount));
+        target.collected = round2(target.collected + num(inv.amountPaid));
+        if (owed > 0) {
+          target.outstanding = round2(target.outstanding + owed);
+        }
+      }
+    }
+
+    const bySalesRep = [...salesStatsMap.values()];
+    if (unassignedStats.invoiced > 0 || unassignedStats.renewalsCount > 0 || unassignedStats.newSalesCount > 0) {
+      bySalesRep.push(unassignedStats);
+    }
+    bySalesRep.sort((a, b) => (b.renewalsCount + b.newSalesCount) - (a.renewalsCount + a.newSalesCount) || b.collected - a.collected);
+
+    // ── Category Breakdown (Renewal vs New Subscriptions) ────────────────────
+    const byCategory = {
+      renewals: { count: 0, invoiced: 0, collected: 0, outstanding: 0 },
+      newSales: { count: 0, invoiced: 0, collected: 0, outstanding: 0 },
+    };
+
+    for (const inv of allInvoices) {
+      const isRenewal = Boolean(inv.subscription?.renewedFromId);
+      const target = isRenewal ? byCategory.renewals : byCategory.newSales;
+      target.count += 1;
+      target.invoiced = round2(target.invoiced + num(inv.totalAmount));
+      target.collected = round2(target.collected + num(inv.amountPaid));
+      const owed = round2(num(inv.totalAmount) - num(inv.amountPaid));
+      if (owed > 0) target.outstanding = round2(target.outstanding + owed);
+    }
+
+    // ── Filter Data based on query parameters ─────────────────────────────────
+    const isMatchingSalesRep = (subSalesRepId) => {
+      if (!salesRepId || salesRepId === 'ALL') return true;
+      if (salesRepId === 'UNASSIGNED') return !subSalesRepId;
+      return subSalesRepId === salesRepId;
+    };
+
+    const isMatchingCategory = (renewedFromId) => {
+      if (!category || category === 'ALL') return true;
+      if (category === 'RENEWAL') return Boolean(renewedFromId);
+      if (category === 'NEW') return !renewedFromId;
+      return true;
+    };
+
+    const isMatchingMethod = (pMethod) => {
+      if (!method || method === 'ALL') return true;
+      return pMethod === method;
+    };
+
+    const filteredInvoices = allInvoices.filter((i) => {
+      const repId = i.subscription?.salesRepId;
+      const renewedFromId = i.subscription?.renewedFromId;
+      return isMatchingSalesRep(repId) && isMatchingCategory(renewedFromId);
+    });
+
+    const filteredPayments = allPayments.filter((p) => {
+      const repId = p.invoice?.subscription?.salesRepId;
+      const renewedFromId = p.invoice?.subscription?.renewedFromId;
+      return isMatchingSalesRep(repId) && isMatchingCategory(renewedFromId) && isMatchingMethod(p.method);
+    });
+
+    const filteredRefunds = allRefunds.filter((r) => {
+      const repId = r.payment?.invoice?.subscription?.salesRepId;
+      const renewedFromId = r.payment?.invoice?.subscription?.renewedFromId;
+      return isMatchingSalesRep(repId) && isMatchingCategory(renewedFromId);
+    });
+
+    const filteredSubscriptions = allSubscriptions.filter((s) => {
+      return isMatchingSalesRep(s.salesRepId) && isMatchingCategory(s.renewedFromId);
+    });
+
+    // ── Headline Calculations ────────────────────────────────────────────────
+    const invoiced = round2(filteredInvoices.reduce((sum, i) => sum + num(i.totalAmount), 0));
+    const collected = round2(filteredPayments.reduce((sum, p) => sum + num(p.amount), 0));
+    const refunded = round2(filteredRefunds.reduce((sum, r) => sum + num(r.amount), 0));
+    const legacy = (!method || method === 'ALL' || method === 'LEGACY')
+      ? round2(num(legacyAgg._sum.amount))
+      : 0;
+
+    // ── Monthly Series ───────────────────────────────────────────────────────
     const buckets = new Map();
     for (let i = 0; i < months; i += 1) {
       const d = new Date(now.getFullYear(), now.getMonth() - (months - 1) + i, 1);
@@ -111,24 +244,33 @@ export async function getRevenue(req, res, next) {
         refunded: 0,
       });
     }
-    for (const p of payments) {
-      const b = buckets.get(monthKey(new Date(p.receivedAt)));
-      if (b) b.collected = round2(b.collected + num(p.amount));
+
+    for (const p of filteredPayments) {
+      if (new Date(p.receivedAt) >= seriesFrom) {
+        const b = buckets.get(monthKey(new Date(p.receivedAt)));
+        if (b) b.collected = round2(b.collected + num(p.amount));
+      }
     }
-    for (const r of refunds) {
-      const b = buckets.get(monthKey(new Date(r.refundedAt)));
-      if (b) b.refunded = round2(b.refunded + num(r.amount));
+
+    for (const r of filteredRefunds) {
+      if (new Date(r.refundedAt) >= seriesFrom) {
+        const b = buckets.get(monthKey(new Date(r.refundedAt)));
+        if (b) b.refunded = round2(b.refunded + num(r.amount));
+      }
     }
-    for (const i of invoices) {
-      if (!i.issuedAt) continue;
-      const b = buckets.get(monthKey(new Date(i.issuedAt)));
-      if (b) b.invoiced = round2(b.invoiced + num(i.totalAmount));
+
+    for (const i of filteredInvoices) {
+      if (i.issuedAt && new Date(i.issuedAt) >= seriesFrom) {
+        const b = buckets.get(monthKey(new Date(i.issuedAt)));
+        if (b) b.invoiced = round2(b.invoiced + num(i.totalAmount));
+      }
     }
+
     const series = [...buckets.values()].map((b) => ({ ...b, net: round2(b.collected - b.refunded) }));
 
-    // ── How money arrives ───────────────────────────────────────────────────
+    // ── Payment Methods Breakdown ───────────────────────────────────────────
     const byMethodMap = new Map();
-    for (const p of payments) {
+    for (const p of filteredPayments) {
       const cur = byMethodMap.get(p.method) || { method: p.method, amount: 0, count: 0 };
       cur.amount = round2(cur.amount + num(p.amount));
       cur.count += 1;
@@ -136,7 +278,8 @@ export async function getRevenue(req, res, next) {
     }
     const byMethod = [...byMethodMap.values()].sort((a, b) => b.amount - a.amount);
 
-    // ── Outstanding ─────────────────────────────────────────────────────────
+    // ── Outstanding Invoices ────────────────────────────────────────────────
+    const outstandingRows = filteredInvoices.filter((i) => ['ISSUED', 'PARTIALLY_PAID'].includes(i.state));
     const outstanding = outstandingRows.map((i) => {
       const owed = round2(num(i.totalAmount) - num(i.amountPaid));
       const overdueDays = i.dueAt
@@ -153,14 +296,14 @@ export async function getRevenue(req, res, next) {
         issuedAt: i.issuedAt,
         dueAt: i.dueAt,
         overdueDays: overdueDays != null && overdueDays > 0 ? overdueDays : null,
+        salesRep: i.subscription?.salesRep ? { id: i.subscription.salesRep.id, name: i.subscription.salesRep.name } : null,
+        isRenewal: Boolean(i.subscription?.renewedFromId),
       };
     });
     const outstandingTotal = round2(outstanding.reduce((a, o) => a + o.outstanding, 0));
 
-    // ── Renewals ────────────────────────────────────────────────────────────
-    // Perpetual terms have no end date and can never come up for renewal, so
-    // they are excluded rather than counted as "never due".
-    const dated = subscriptions.filter((s) => s.endsAt != null);
+    // ── Renewals Pipeline ───────────────────────────────────────────────────
+    const dated = filteredSubscriptions.filter((s) => s.endsAt != null);
     const inDays = (n) => dated.filter((s) => {
       const days = Math.ceil((new Date(s.endsAt) - now) / 86400000);
       return days >= 0 && days <= n;
@@ -173,11 +316,10 @@ export async function getRevenue(req, res, next) {
       seatCount: s.seatCount,
       endsAt: s.endsAt,
       daysRemaining: Math.ceil((new Date(s.endsAt) - now) / 86400000),
+      salesRep: s.salesRep ? { id: s.salesRep.id, name: s.salesRep.name } : null,
     });
 
-    // ── Contracted value ────────────────────────────────────────────────────
-    // What live terms are worth per year, computed from what each was actually
-    // invoiced rather than from a package price that may since have moved.
+    // ── Annualised Contract Value ───────────────────────────────────────────
     const termInvoices = dated.length
       ? await prisma.invoice.groupBy({
           by: ['subscriptionId'],
@@ -199,13 +341,11 @@ export async function getRevenue(req, res, next) {
         refunded,
         net: round2(collected - refunded),
         outstanding: outstandingTotal,
-        invoiceCount: invoiceAgg._count._all,
-        paymentCount: paymentAgg._count._all,
-        refundCount: refundAgg._count._all,
+        invoiceCount: filteredInvoices.length,
+        paymentCount: filteredPayments.length,
+        refundCount: filteredRefunds.length,
         currency: 'INR',
       },
-      // Flagged rather than hidden: these were carried forward from the old
-      // signup flow and have never been reconciled against a bank statement.
       unverified: {
         amount: legacy,
         count: legacyAgg._count._all,
@@ -213,19 +353,26 @@ export async function getRevenue(req, res, next) {
       },
       series,
       byMethod,
+      bySalesRep,
+      byCategory,
       outstanding: { total: outstandingTotal, items: outstanding },
       renewals: {
         next30: inDays(30).map(renewalRow),
         next60: inDays(60).map(renewalRow),
         next90: inDays(90).map(renewalRow),
-        perpetualCount: subscriptions.length - dated.length,
+        perpetualCount: filteredSubscriptions.length - dated.length,
       },
       contracts: {
-        // Not MRR. Nothing here recurs by itself; this is what the live fixed
-        // terms are worth over a year, and it is labelled that way in the UI.
         annualisedContractValue,
-        liveTerms: subscriptions.length,
+        liveTerms: filteredSubscriptions.length,
         datedTerms: dated.length,
+      },
+      salesTeamList: salesTeamMembers.map((m) => ({ id: m.id, name: m.name, email: m.email })),
+      activeFilters: {
+        salesRepId: salesRepId || 'ALL',
+        category: category || 'ALL',
+        method: method || 'ALL',
+        months,
       },
       months,
     });
@@ -256,101 +403,115 @@ export async function getCouponPerformance(req, res, next) {
         _sum: { discountAmount: true },
         _count: { _all: true },
       }),
-      // What the discounted invoices were actually worth, so a coupon can be
-      // judged on revenue influenced rather than discount given alone.
       prisma.invoice.groupBy({
         by: ['couponId'],
         where: { couponId: { not: null }, state: { not: 'VOID' } },
-        _sum: { totalAmount: true, amountPaid: true },
+        _sum: { totalAmount: true },
       }),
     ]);
 
-    const redemptionBy = Object.fromEntries(redemptionRows.map((r) => [r.couponId, r]));
-    const invoiceBy = Object.fromEntries(invoiceRows.map((r) => [r.couponId, r]));
+    const discountMap = Object.fromEntries(
+      redemptionRows.map((r) => [r.couponId, { discount: num(r._sum.discountAmount), redemptions: r._count._all }])
+    );
+    const invoiceMap = Object.fromEntries(
+      invoiceRows.map((i) => [i.couponId, num(i._sum.totalAmount)])
+    );
 
     const items = coupons.map((c) => {
-      const red = redemptionBy[c.id];
-      const inv = invoiceBy[c.id];
+      const red = discountMap[c.id] || { discount: 0, redemptions: 0 };
+      const invoiced = invoiceMap[c.id] || 0;
       return {
-        ...c,
+        id: c.id,
+        code: c.code,
+        bdmName: c.bdmName,
+        discountType: c.discountType,
         discountValue: num(c.discountValue),
-        redemptions: red?._count?._all ?? 0,
-        discountGiven: round2(num(red?._sum?.discountAmount)),
-        revenueInfluenced: round2(num(inv?._sum?.totalAmount)),
-        revenueCollected: round2(num(inv?._sum?.amountPaid)),
-        // timesUsed predates redemption rows, so the two can legitimately
-        // disagree on coupons used before this existed. Surfaced, not hidden.
-        counterDrift: (red?._count?._all ?? 0) !== c.timesUsed,
+        active: c.active,
+        expiresAt: c.expiresAt,
+        timesUsed: c.timesUsed,
+        redemptionsRecorded: red.redemptions,
+        totalDiscountGiven: round2(red.discount),
+        revenueInfluenced: round2(invoiced),
       };
     });
 
-    res.json({
-      items,
-      summary: {
-        totalDiscountGiven: round2(items.reduce((a, i) => a + i.discountGiven, 0)),
-        totalRevenueInfluenced: round2(items.reduce((a, i) => a + i.revenueInfluenced, 0)),
-        activeCoupons: items.filter((i) => i.active).length,
-        currency: 'INR',
-      },
-    });
+    const totals = {
+      couponsCount: items.length,
+      activeCoupons: items.filter((i) => i.active).length,
+      totalDiscountGiven: round2(items.reduce((s, i) => s + i.totalDiscountGiven, 0)),
+      totalRevenueInfluenced: round2(items.reduce((s, i) => s + i.revenueInfluenced, 0)),
+    };
+
+    res.json({ totals, coupons: items });
   } catch (err) {
     next(err);
   }
 }
 
-
-/** GET /platform/revenue/export — CSV export of invoices, GST split and collections */
+/**
+ * GET /platform/revenue/export — CSV export of all finalized invoices and payment ledger.
+ */
 export async function exportRevenueReport(req, res, next) {
   try {
     const invoices = await prisma.invoice.findMany({
       where: { state: { not: 'VOID' } },
       include: {
         tenant: { select: { companyName: true, tenantCode: true } },
+        subscription: {
+          select: {
+            packageName: true,
+            seatCount: true,
+            renewedFromId: true,
+            salesRep: { select: { name: true, email: true } },
+          },
+        },
+        payments: {
+          select: { amount: true, method: true, reference: true, receivedAt: true },
+        },
       },
       orderBy: { issuedAt: 'desc' },
     });
 
-    const headers = [
-      'Invoice Number', 'Company Name', 'Tenant Code', 'Status', 'Issued Date', 'Due Date',
-      'Currency', 'Subtotal (INR)', 'Discount (INR)', 'GST Rate (%)', 'CGST (INR)', 'SGST (INR)',
-      'Total GST (INR)', 'Total Amount (INR)', 'Amount Paid (INR)', 'Outstanding (INR)'
-    ];
+    const header = [
+      'Invoice Number',
+      'Company Name',
+      'Package',
+      'Category',
+      'Sales Representative',
+      'State',
+      'Total Amount (INR)',
+      'Amount Paid (INR)',
+      'Outstanding (INR)',
+      'Issued Date',
+      'Due Date',
+    ].join(',');
 
     const rows = invoices.map((inv) => {
-      const subtotal = Number(inv.subtotalAmount || 0);
-      const discount = Number(inv.discountAmount || 0);
-      const gstRate = Number(inv.gstRate || 0.18) * 100;
-      const totalGst = Number(inv.gstAmount || 0);
-      const cgst = Math.round((totalGst / 2) * 100) / 100;
-      const sgst = Math.round((totalGst / 2) * 100) / 100;
-      const total = Number(inv.totalAmount || 0);
-      const paid = Number(inv.amountPaid || 0);
-      const outstanding = Math.max(0, total - paid);
+      const category = inv.subscription?.renewedFromId ? 'RENEWAL' : 'NEW';
+      const salesRep = inv.subscription?.salesRep ? inv.subscription.salesRep.name : 'Unassigned';
+      const total = num(inv.totalAmount);
+      const paid = num(inv.amountPaid);
+      const outstanding = round2(total - paid);
 
       return [
-        inv.invoiceNumber || inv.id,
-        `"${(inv.billToName || inv.tenant?.companyName || '').replace(/"/g, '""')}"`,
-        inv.tenant?.tenantCode || '',
+        `"${inv.invoiceNumber}"`,
+        `"${(inv.tenant?.companyName || inv.billToName || '').replace(/"/g, '""')}"`,
+        `"${inv.subscription?.packageName || 'Custom'}"`,
+        category,
+        `"${salesRep}"`,
         inv.state,
+        total,
+        paid,
+        outstanding,
         inv.issuedAt ? new Date(inv.issuedAt).toISOString().split('T')[0] : '',
         inv.dueAt ? new Date(inv.dueAt).toISOString().split('T')[0] : '',
-        inv.currency || 'INR',
-        subtotal.toFixed(2),
-        discount.toFixed(2),
-        gstRate.toFixed(1),
-        cgst.toFixed(2),
-        sgst.toFixed(2),
-        totalGst.toFixed(2),
-        total.toFixed(2),
-        paid.toFixed(2),
-        outstanding.toFixed(2),
       ].join(',');
     });
 
-    const csv = [headers.join(','), ...rows].join('\n');
+    const csv = [header, ...rows].join('\r\n');
     res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', 'attachment; filename="revenue_report.csv"');
-    return res.status(200).send(csv);
+    res.setHeader('Content-Disposition', 'attachment; filename="revenue_sales_audit_report.csv"');
+    res.send(csv);
   } catch (err) {
     next(err);
   }

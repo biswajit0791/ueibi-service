@@ -162,4 +162,7 @@ export const revenueQuerySchema = z.object({
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
   months: z.coerce.number().int().min(1).max(36).default(12),
+  salesRepId: z.string().trim().optional(),
+  category: z.enum(['ALL', 'NEW', 'RENEWAL']).optional().default('ALL'),
+  method: z.string().trim().optional(),
 });

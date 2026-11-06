@@ -37,7 +37,21 @@ import {
 } from '../controllers/platformBranding.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requirePlatformOwner, requirePlatformStaff } from '../middleware/rbac.js';
-import { listPlatformStaff, createPlatformStaff, getSalesPerformanceSummary, getStaffRenewalHistory } from '../controllers/platformStaff.controller.js';
+import {
+  listPlatformStaff,
+  createPlatformStaff,
+  updatePlatformStaff,
+  directResetStaffPassword,
+  getSalesPerformanceSummary,
+  getStaffRenewalHistory
+} from '../controllers/platformStaff.controller.js';
+import {
+  getPublicReviews,
+  listAdminReviews,
+  createCustomerReview,
+  updateCustomerReview,
+  deleteCustomerReview
+} from '../controllers/customerReview.controller.js';
 
 const router = Router();
 
@@ -68,8 +82,19 @@ router.post('/platform/tenants/:id/restore', requireAuth, requirePlatformOwner, 
 // Platform Sales/BD staff — owner only; only PLATFORM_SALES can be created.
 router.get('/platform/staff', requireAuth, requirePlatformOwner, listPlatformStaff);
 router.post('/platform/staff', requireAuth, requirePlatformOwner, createPlatformStaff);
+router.patch('/platform/staff/:id', requireAuth, requirePlatformOwner, updatePlatformStaff);
+router.post('/platform/staff/:id/direct-reset', requireAuth, requirePlatformOwner, directResetStaffPassword);
 router.get('/platform/staff/performance', requireAuth, requirePlatformOwner, getSalesPerformanceSummary);
 router.get('/platform/staff/:id/renewals', requireAuth, requirePlatformOwner, getStaffRenewalHistory);
+
+// Public Customer Reviews (for unauthenticated landing & marketing pages)
+router.get('/public/reviews', getPublicReviews);
+
+// Customer Reviews Management — Platform Owner only
+router.get('/platform/reviews', requireAuth, requirePlatformOwner, listAdminReviews);
+router.post('/platform/reviews', requireAuth, requirePlatformOwner, createCustomerReview);
+router.patch('/platform/reviews/:id', requireAuth, requirePlatformOwner, updateCustomerReview);
+router.delete('/platform/reviews/:id', requireAuth, requirePlatformOwner, deleteCustomerReview);
 router.get('/platform/users', requireAuth, requirePlatformOwner, listPlatformUsers);
 router.get('/platform/users/:id', requireAuth, requirePlatformOwner, getPlatformUser);
 router.post('/platform/users/:id/deactivate', requireAuth, requirePlatformOwner, deactivatePlatformUser);

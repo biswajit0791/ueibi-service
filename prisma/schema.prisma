@@ -3179,3 +3179,23 @@ model ExitDocumentDispatch {
   @@index([idempotencyKey])
   @@map("exit_document_dispatches")
 }
+
+
+model CustomerReview {
+  id          String    @id @default(cuid())
+  companyName String
+  clientName  String
+  designation String?
+  avatarUrl   String?
+  rating      Int       @default(5)
+  headline    String?
+  reviewText  String    @db.Text
+  isFeatured  Boolean   @default(false)
+  isPublished Boolean   @default(true)
+  orderIndex  Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([isPublished, isFeatured])
+  @@map("customer_reviews")
+}
