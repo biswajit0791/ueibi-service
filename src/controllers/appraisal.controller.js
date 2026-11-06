@@ -10,6 +10,7 @@ import { getTeamTableMetrics } from '../services/appraisalMetrics.service.js';
 import { financialYearFilter } from '../services/taskWeightage.service.js';
 import { getTenantFinancialYear } from '../lib/financialYear.js';
 import { ELEVATED_ROLES, HR_ROLES, MANAGER_OR_ELEVATED_ROLES, SUPER_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
+import { anonymizeFeedbackForRecipient, anonymizeNominationsForRecipient, ANONYMITY_THRESHOLD } from '../lib/privacy.js';
 
 async function pushNotification({ tenantId, recipientId, type, title, body, entityType, entityId }) {
   if (!recipientId || recipientId === 'system' || !tenantId) return null;
@@ -2005,19 +2006,15 @@ export async function createPeerNomination(req, res, next) {
       // 3. If already COMPLETED
       if (existing.status === 'COMPLETED') {
         return res.status(409).json({
-          error: `${reviewer.name || 'This colleague'} has already completed peer feedback for this appraisal cycle.`,
+          error: 'This colleague has already completed peer feedback for this appraisal cycle.',
           status: 'COMPLETED',
-          existingNominationId: existing.id,
-          reviewer: { id: reviewer.id, name: reviewer.name, email: reviewer.email },
         });
       }
 
       // 4. Default: existing pending nomination
       return res.status(409).json({
-        error: `A nomination for ${reviewer.name || 'this peer'} already exists for this cycle`,
+        error: `A nomination for this colleague already exists for this cycle`,
         status: existing.status,
-        existingNominationId: existing.id,
-        reviewer: { id: reviewer.id, name: reviewer.name, email: reviewer.email },
       });
     }
 
@@ -2046,6 +2043,18 @@ export async function createPeerNomination(req, res, next) {
       nominationId: nomination.id,
     });
 
+    // Anonymize nomination response if returned to the reviewee
+    if (actualRevieweeId === req.user.id) {
+      return res.status(201).json({
+        id: nomination.id,
+        cycleId: nomination.cycleId,
+        status: nomination.status,
+        reviewerName: 'Anonymous Reviewer',
+        createdAt: nomination.createdAt,
+        message: 'Feedback request sent successfully.',
+      });
+    }
+
     res.status(201).json(nomination);
   } catch (err) {
     if (err.code === 'P2002') {
@@ -2073,6 +2082,9 @@ export async function getMyNominatedPeers(req, res, next) {
       ? (employeeId || revieweeId)
       : req.user.id;
 
+    // Recipient themselves should never see reviewer identities, even if elevated.
+    const isPrivilegedAudit = isElevated && targetRevieweeId !== req.user.id && (userRole === 'CMD' || userRole === 'SUPER_ADMIN');
+
     const nominations = await prisma.peerNomination.findMany({
       where: {
         tenantId: req.tenantId,
@@ -2080,6 +2092,7 @@ export async function getMyNominatedPeers(req, res, next) {
         cycleId: activeCycle.id,
       },
       include: {
+        feedback: true,
         reviewer: {
           select: {
             id: true,
@@ -2093,19 +2106,12 @@ export async function getMyNominatedPeers(req, res, next) {
       orderBy: { createdAt: 'desc' },
     });
 
+    const sanitizedNominations = anonymizeNominationsForRecipient(nominations, { isPrivileged: isPrivilegedAudit });
+
     res.json({
       revieweeId: targetRevieweeId,
       cycleId: activeCycle.id,
-      nominations: nominations.map((n) => ({
-        id: n.id,
-        reviewerId: n.reviewerId,
-        name: n.reviewer?.name || 'Colleague',
-        email: n.reviewer?.email,
-        designation: n.reviewer?.designation,
-        department: n.reviewer?.department,
-        status: n.status,
-        createdAt: n.createdAt,
-      })),
+      nominations: sanitizedNominations,
     });
   } catch (err) {
     next(err);
@@ -2278,12 +2284,6 @@ export async function getReceivedPeerFeedback(req, res, next) {
     if (!parsedQuery.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
     }
-    // Nominations can be created under whichever cycle happens to be selected
-    // wherever the nomination was made (self-assessment cadence on the main
-    // appraisal page vs. the default "current month" on the 360 hub), and this
-    // page has no cycle picker of its own — so unless a cycleId is explicitly
-    // requested, show feedback across every cycle rather than silently
-    // defaulting to just today's real calendar month.
     const cycleId = parsedQuery.data.cycleId || null;
 
     const nominations = await prisma.peerNomination.findMany({
@@ -2302,15 +2302,12 @@ export async function getReceivedPeerFeedback(req, res, next) {
       orderBy: { createdAt: 'desc' },
     });
 
-    // Reviewer identity is shown to the recipient by design (not anonymized) —
-    // see the "Nominate a Peer" flow, which no longer promises anonymity.
-    const { items, count, averageRating } = mapNominationsToFeedbackItems(nominations);
+    const { items } = mapNominationsToFeedbackItems(nominations);
 
-    res.json({
-      count,
-      averageRating,
-      items,
-    });
+    // Strictly enforce reviewer anonymity and minimum response threshold for recipient
+    const anonymized = anonymizeFeedbackForRecipient(items, { isPrivileged: false });
+
+    res.json(anonymized);
   } catch (err) {
     next(err);
   }
@@ -2328,8 +2325,6 @@ export async function getCmdPeerFeedbackForEmployee(req, res, next) {
     if (!parsedQuery.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsedQuery.error.issues });
     }
-    // Same reasoning as getReceivedPeerFeedback: don't silently scope to
-    // today's real calendar-month cycle when no cycleId was requested.
     const cycleId = parsedQuery.data.cycleId || null;
 
     const nominations = await prisma.peerNomination.findMany({
@@ -2342,17 +2337,62 @@ export async function getCmdPeerFeedbackForEmployee(req, res, next) {
       include: {
         feedback: true,
         reviewer: {
-          select: { id: true, name: true, email: true, designation: true },
+          select: { id: true, name: true, email: true, designation: true, role: true },
         },
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    const { items, count, averageRating } = mapNominationsToFeedbackItems(nominations);
+    const { items } = mapNominationsToFeedbackItems(nominations);
+
+    // When the CMD/admin is inspecting feedback for themselves, they are the recipient: enforce anonymity!
+    const isSelf = employeeId === req.user.id;
+    const result = anonymizeFeedbackForRecipient(items, { isPrivileged: !isSelf });
+
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Endpoint allowing reviewers to view the feedback they have submitted for their peers.
+ */
+export async function getSubmittedPeerFeedback(req, res, next) {
+  try {
+    const nominations = await prisma.peerNomination.findMany({
+      where: {
+        tenantId: req.tenantId,
+        reviewerId: req.user.id,
+        status: 'COMPLETED',
+      },
+      include: {
+        feedback: true,
+        reviewee: {
+          select: { id: true, name: true, designation: true, department: true },
+        },
+        cycle: {
+          select: { id: true, name: true },
+        },
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+
+    const items = nominations
+      .filter((n) => n.feedback)
+      .map((n) => ({
+        id: n.feedback.id,
+        nominationId: n.id,
+        rating: Number(n.feedback.rating),
+        strengths: n.feedback.strengths,
+        growthAreas: n.feedback.growthAreas,
+        createdAt: n.feedback.createdAt,
+        reviewee: n.reviewee,
+        cycle: n.cycle,
+      }));
 
     res.json({
-      count,
-      averageRating,
+      count: items.length,
       items,
     });
   } catch (err) {
