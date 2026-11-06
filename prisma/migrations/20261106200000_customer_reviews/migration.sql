@@ -19,3 +19,4 @@ CREATE TABLE IF NOT EXISTS "customer_reviews" (
 
 -- CreateIndex
 CREATE INDEX IF NOT EXISTS "customer_reviews_isPublished_isFeatured_idx" ON "customer_reviews"("isPublished", "isFeatured");
+
