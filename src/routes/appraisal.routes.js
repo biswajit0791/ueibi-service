@@ -18,6 +18,7 @@ import {
   getPendingNominationsForMe,
   submitPeerFeedback,
   getReceivedPeerFeedback,
+  getSubmittedPeerFeedback,
   getCmdPeerFeedbackForEmployee,
   getMyNominatedPeers,
   deletePeerNomination,
@@ -96,6 +97,7 @@ router.delete('/peer-nominations/:id', requireAuth, requireTenant, deletePeerNom
 router.get('/peer-nominations/pending-for-me', requireAuth, requireTenant, getPendingNominationsForMe);
 router.post('/peer-nominations/:id/feedback', requireAuth, requireTenant, submitPeerFeedback);
 router.get('/peer-feedback/received-by-me', requireAuth, requireTenant, getReceivedPeerFeedback);
+router.get('/peer-feedback/submitted-by-me', requireAuth, requireTenant, getSubmittedPeerFeedback);
 router.get('/cmd/peer-feedback/:employeeId', requireAuth, requireTenant, authorize('CMD', 'SUPER_ADMIN'), getCmdPeerFeedbackForEmployee);
 
 // ── Phase 7: HR Audit & Hike ─────────────────────────────────────────────────

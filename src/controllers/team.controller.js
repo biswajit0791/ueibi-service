@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma.js';
 import { buildTeamScopeWhere } from '../services/teamScope.service.js';
 import { canManagerReview, mapNominationsToFeedbackItems, getPeriodMetadata } from './appraisal.controller.js';
+import { anonymizeFeedbackForRecipient } from '../lib/privacy.js';
 import { entityAttachmentService } from '../services/entityAttachment.service.js';
 import { storageService } from '../services/storage/storage.service.js';
 import { hasRole, HR_ROLES, isElevated } from '../lib/roles.js';
@@ -302,7 +303,12 @@ export async function getTeamMemberDetail(req, res, next) {
       })),
     ].sort((a, b) => new Date(b.date) - new Date(a.date));
 
-    const feedback = mapNominationsToFeedbackItems(nominations);
+    const isSelf = employeeId === req.user.id;
+    const userRole = (req.user.role || '').toUpperCase();
+    const isPrivilegedAudit = (userRole === 'CMD' || userRole === 'SUPER_ADMIN') && !isSelf;
+
+    const rawFeedback = mapNominationsToFeedbackItems(nominations);
+    const feedback = anonymizeFeedbackForRecipient(rawFeedback.items, { isPrivileged: isPrivilegedAudit });
 
     const avgOf = (key) => {
       const vals = review.scores.map((s) => s[key]).filter((v) => v !== null && v !== undefined);
