@@ -47,10 +47,11 @@ function salesTermRestriction(user, { unitPrice, createInvoice }) {
 
 const SUBSCRIPTION_SELECT = {
   id: true, tenantId: true, packageId: true, packageName: true, seatCount: true,
-  state: true, startsAt: true, endsAt: true, renewedFromId: true,
+  state: true, startsAt: true, endsAt: true, renewedFromId: true, salesRepId: true,
   registrationId: true, cancelledAt: true, cancelReason: true, createdAt: true,
   tenant: { select: { id: true, companyName: true, tenantCode: true, status: true, creditBalance: true } },
   package: { select: { id: true, name: true, interval: true, termMonths: true } },
+  salesRep: { select: { id: true, name: true, email: true } },
 };
 
 /** Days until a term ends; null for a perpetual licence. */
@@ -354,6 +355,8 @@ export async function startSubscription(req, res, next) {
     const endsAt = pkg.termMonths ? addMonths(startsAt, pkg.termMonths) : null;
     const state = subscriptionStateOf({ startsAt, endsAt, cancelledAt: null });
 
+    const effectiveSalesRepId = data.salesRepId || (req.user?.role === 'PLATFORM_SALES' ? req.user.id : null);
+
     const result = await withInvoiceNumber((invoiceNumber) => prisma.$transaction(async (tx) => {
       const subscription = await tx.subscription.create({
         data: {
@@ -517,6 +520,7 @@ export async function renewSubscription(req, res, next) {
           startsAt,
           endsAt,
           renewedFromId: current.id,
+          salesRepId: effectiveSalesRepId,
         },
         select: SUBSCRIPTION_SELECT,
       });
@@ -549,7 +553,7 @@ export async function renewSubscription(req, res, next) {
           previousId: current.id, seatCount: current.seatCount, endsAt: current.endsAt,
         },
         afterValue: {
-          packageName: renewed.packageName, seatCount: seats, startsAt, endsAt, state,
+          packageName: renewed.packageName, seatCount: seats, startsAt, endsAt, state, salesRepId: effectiveSalesRepId,
         },
       });
 

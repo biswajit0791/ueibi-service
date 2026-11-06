@@ -29,10 +29,6 @@ import {
   resendOnboardingLink,
   verifyRegistration,
   getRegistrationVerification,
-  listPlatformEmployeeVerifications,
-  getPlatformEmployeeVerification,
-  updatePlatformEmployeeVerification,
-  submitPlatformEmployeeVerificationToHr,
 } from '../controllers/platform.controller.js';
 import {
   getBranding,
@@ -41,7 +37,7 @@ import {
 } from '../controllers/platformBranding.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requirePlatformOwner, requirePlatformStaff } from '../middleware/rbac.js';
-import { listPlatformStaff, createPlatformStaff } from '../controllers/platformStaff.controller.js';
+import { listPlatformStaff, createPlatformStaff, getSalesPerformanceSummary, getStaffRenewalHistory } from '../controllers/platformStaff.controller.js';
 
 const router = Router();
 
@@ -72,17 +68,14 @@ router.post('/platform/tenants/:id/restore', requireAuth, requirePlatformOwner, 
 // Platform Sales/BD staff — owner only; only PLATFORM_SALES can be created.
 router.get('/platform/staff', requireAuth, requirePlatformOwner, listPlatformStaff);
 router.post('/platform/staff', requireAuth, requirePlatformOwner, createPlatformStaff);
+router.get('/platform/staff/performance', requireAuth, requirePlatformOwner, getSalesPerformanceSummary);
+router.get('/platform/staff/:id/renewals', requireAuth, requirePlatformOwner, getStaffRenewalHistory);
 router.get('/platform/users', requireAuth, requirePlatformOwner, listPlatformUsers);
 router.get('/platform/users/:id', requireAuth, requirePlatformOwner, getPlatformUser);
 router.post('/platform/users/:id/deactivate', requireAuth, requirePlatformOwner, deactivatePlatformUser);
 router.post('/platform/users/:id/reactivate', requireAuth, requirePlatformOwner, reactivatePlatformUser);
 router.post('/platform/users/:id/force-reset', requireAuth, requirePlatformOwner, forceResetPlatformUser);
 
-// Employee onboarding completion & verification queue (UEIBI Team / Admin Portal)
-router.get('/platform/employee-verifications', requireAuth, requirePlatformOwner, listPlatformEmployeeVerifications);
-router.get('/platform/employee-verifications/:id', requireAuth, requirePlatformOwner, getPlatformEmployeeVerification);
-router.patch('/platform/employee-verifications/:id', requireAuth, requirePlatformOwner, updatePlatformEmployeeVerification);
-router.post('/platform/employee-verifications/:id/submit-to-hr', requireAuth, requirePlatformOwner, submitPlatformEmployeeVerificationToHr);
 
 // Onboarding queue and verification review — both read CompanyRegistration.
 // Neither can advance a registration: approval stays with the emailed action
