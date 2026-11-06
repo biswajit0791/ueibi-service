@@ -22,6 +22,8 @@ import {
   startSubscription,
   renewSubscription,
   cancelSubscription,
+  getRenewalExperience,
+  calculateRenewal,
 } from '../controllers/subscription.controller.js';
 import { getRevenue, getCouponPerformance, exportRevenueReport } from '../controllers/revenue.controller.js';
 import {
@@ -90,9 +92,11 @@ router.post('/platform/subscriptions/run-lifecycle-check', requireAuth, requireP
     res.json({ message: 'Subscription lifecycle check executed successfully', summary });
   } catch (err) { next(err); }
 });
+router.get('/platform/subscriptions/renewal-experience', requireAuth, requirePlatformStaff, getRenewalExperience);
 router.get('/platform/subscriptions', requireAuth, requirePlatformStaff, listSubscriptions);
 router.get('/platform/subscriptions/:id', requireAuth, requirePlatformStaff, getSubscription);
 router.post('/platform/tenants/:id/subscription', requireAuth, requirePlatformStaff, startSubscription);
+router.post('/platform/subscriptions/:id/calculate-renewal', requireAuth, requirePlatformStaff, calculateRenewal);
 router.post('/platform/subscriptions/:id/renew', requireAuth, requirePlatformStaff, renewSubscription);
 router.post('/platform/subscriptions/:id/cancel', requireAuth, requirePlatformOwner, cancelSubscription);
 
