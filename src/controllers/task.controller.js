@@ -17,6 +17,7 @@ import { assertWatcherEmailsAllowed, assertMilestoneAssigneesValid, milestoneWor
 import { withDefaultMilestoneWatcher } from '../services/milestoneWatcher.service.js';
 import { REVIEW_STATUS, reviewFieldsForTransition, completeGoalIfAllApproved } from '../services/taskReview.service.js';
 import { assertTaskDependenciesResolved } from '../services/taskDependency.service.js';
+import { diffTaskChanges, humanizeStatus } from '../services/auditDiff.service.js';
 
 function formatZodIssues(issues, fallback = 'Validation failed') {
   if (!Array.isArray(issues) || issues.length === 0) return fallback;
@@ -204,13 +205,21 @@ export async function resolveTargetEmployee(requestingUser, tenantId, employeeId
 
   // Peer dependency: you may spin off a companion task on a colleague ONLY when
   // it hangs off a real parent task that YOU own (or manage).
+  // Alternatively, the manager assigned to the dependency may delegate it to their downline.
   if (parentTask) {
     const ownsParent = parentTask.employeeId === requestingUser.id
       || await goalService.isSubordinate(requestingUser.id, parentTask.employeeId, tenantId);
     if (ownsParent) {
       return targetUser;
     }
-    throw { status: 403, message: 'Access forbidden: you can only raise a dependency from a task you own' };
+    if (hasRole(requestingUser.role, MANAGER_OR_ELEVATED_ROLES)) {
+      const isDownline = await goalService.isSubordinate(requestingUser.id, targetUser.id, tenantId)
+        || (targetUser.department && requestingUser.department && targetUser.department.toLowerCase() === requestingUser.department.toLowerCase());
+      if (isDownline) {
+        return targetUser;
+      }
+    }
+    throw { status: 403, message: 'Access forbidden: you can only raise a dependency from a task you own, or delegate to your downline' };
   }
 
   const callerRole = String(requestingUser.role || '').toUpperCase();
@@ -698,7 +707,7 @@ export async function createTask(req, res, next) {
         return res.status(e.status || 500).json({ success: false, message: e.message });
       }
 
-      if (resolvedGoalId) {
+      if (resolvedGoalId && !parentTask) {
         const isGoalAssignee = await isUserGoalAssignee(resolvedGoalId, target.id, tenantId);
         if (!isGoalAssignee) {
           return res.status(400).json({
@@ -819,19 +828,15 @@ export async function createTask(req, res, next) {
       performedById: req.user.id,
       action: 'created',
       details: `Task "${createdTask.title}" created (assigned to: ${targets.map(t => t.name || t.id).join(', ')}).`,
+      previousValue: {
+        changes: [
+          { field: 'title', label: 'Task Title', oldValue: 'New Task', newValue: createdTask.title },
+          { field: 'assignee', label: 'Assignee', oldValue: 'Unassigned', newValue: targets.map(t => t.name || t.id).join(', ') },
+          { field: 'status', label: 'Task Status', oldValue: 'None', newValue: humanizeStatus(createdTask.status) },
+          { field: 'weight', label: 'Impact Weight', oldValue: '0%', newValue: `${createdTask.weight || 0}%` },
+        ],
+      },
     });
-
-    if (actualDates.manuallySet) {
-      const parts = [];
-      if (createdTask.actualStartDate) parts.push(`actual start ${createdTask.actualStartDate.toISOString().slice(0, 10)}`);
-      if (createdTask.actualCompletionDate) parts.push(`actual completion ${createdTask.actualCompletionDate.toISOString().slice(0, 10)}`);
-      await logTaskAudit({
-        taskId: createdTask.id,
-        performedById: req.user.id,
-        action: 'edited',
-        details: `Actual dates entered manually at creation: ${parts.join(', ') || 'cleared'}.`,
-      }).catch(() => {});
-    }
 
     emitToTenant(tenantId, 'task_updated', {
       action: 'create',
@@ -1098,11 +1103,23 @@ export async function updateTaskStatus(req, res, next) {
       }
     }
 
+    const oldStatusLabel = humanizeStatus(existing.status);
+    const newStatusLabel = humanizeStatus(status);
     await logTaskAudit({
       taskId: id,
       performedById: req.user.id,
       action: 'status_changed',
-      details: `Status updated to ${status.toUpperCase().replace('_', ' ')}.`,
+      details: `Status updated from "${oldStatusLabel}" to "${newStatusLabel}".`,
+      previousValue: {
+        changes: [
+          {
+            field: 'status',
+            label: 'Task Status',
+            oldValue: oldStatusLabel,
+            newValue: newStatusLabel,
+          },
+        ],
+      },
     });
 
     emitToTenant(tenantId, 'task_updated', {
@@ -1205,11 +1222,17 @@ export async function updateTask(req, res, next) {
     const isDirectManager = !isElevated && existing.employeeId && existing.employeeId !== req.user.id
       ? await goalService.isSubordinate(req.user.id, existing.employeeId, tenantId)
       : false;
+    const isManagerActor = hasRole(req.user.role, MANAGER_OR_ELEVATED_ROLES);
+    const isAssigneeManager = isManagerActor && existing.employeeId === req.user.id;
+    const isCompanionTask = Boolean(existing.isDependencyOf || isDependencyOf);
+    const isAssignedDepManager = existing.dependency?.concernedPersonId === req.user.id
+      || existing.dependency?.assigneeId === req.user.id
+      || existing.dependency?.concernedManagerId === req.user.id;
 
     // ── Field-level authorization checks ─────────────────────────────────
-    // 1. Reassignment guard: employees cannot reassign tasks
+    // 1. Reassignment guard: managers can reassign their own tasks or delegate dependency companion tasks
     if (employeeId !== undefined && employeeId !== existing.employeeId) {
-      if (!isElevated && !isDirectManager) {
+      if (!isElevated && !isDirectManager && !isAssigneeManager && !isCompanionTask) {
         return res.status(403).json({ success: false, error: 'Forbidden: Employees cannot reassign tasks' });
       }
       try {
@@ -1217,7 +1240,7 @@ export async function updateTask(req, res, next) {
         if (existing.isDependencyOf) {
           existingParent = await prisma.task.findFirst({ where: { id: existing.isDependencyOf, tenantId } });
         }
-        const effectiveGoalForReassign = isStandalone ? null : (goalId !== undefined ? goalId : existing.goalId);
+        const effectiveGoalForReassign = (isStandalone || isCompanionTask) ? null : (goalId !== undefined ? goalId : existing.goalId);
         await resolveTargetEmployee(req.user, tenantId, employeeId, existingParent, effectiveGoalForReassign);
       } catch (e) {
         return res.status(e.status || 500).json({ success: false, message: e.message });
@@ -1226,14 +1249,14 @@ export async function updateTask(req, res, next) {
 
     // 2. Goal assignment guard: employees cannot move task between goals
     if (goalId !== undefined && goalId !== existing.goalId) {
-      if (!isElevated && !isDirectManager) {
+      if (!isElevated && !isDirectManager && !isCompanionTask) {
         return res.status(403).json({ success: false, error: 'Forbidden: Employees cannot reassign task goal' });
       }
     }
 
     // 3. Weight guard: employees cannot alter task weight
     if (weight !== undefined && weight !== existing.weight) {
-      if (!isElevated && !isDirectManager) {
+      if (!isElevated && !isDirectManager && !isCompanionTask) {
         return res.status(403).json({ success: false, error: 'Forbidden: Employees cannot modify task weight' });
       }
     }
@@ -1247,8 +1270,8 @@ export async function updateTask(req, res, next) {
 
     // 5. Dependency approval guard & Dependency manager role check (Req 11)
     if (dependency !== undefined && dependency !== null) {
-      if (dependency.status === 'approved' && existing.dependency?.status !== 'approved' && !isElevated && !isDirectManager) {
-        return res.status(403).json({ success: false, error: 'Forbidden: Employees cannot approve dependencies' });
+      if (dependency.status === 'approved' && existing.dependency?.status !== 'approved' && !isElevated && !isDirectManager && !isAssignedDepManager) {
+        return res.status(403).json({ success: false, error: 'Forbidden: You are not authorized to approve this dependency' });
       }
 
       const depAssigneeId = dependency.concernedPersonId || dependency.assigneeId;
@@ -1319,7 +1342,7 @@ export async function updateTask(req, res, next) {
       && Boolean(effectiveIsPrivate || effectiveIsStandalone || (!targetGoalId && !existing.isMilestoneTracked));
 
     // ── Task Assignment Restriction: A task can only be assigned to an employee who is already assigned to the parent Goal ──
-    const effectiveParentGoalId = effectiveIsStandalone ? null : targetGoalId;
+    const effectiveParentGoalId = (effectiveIsStandalone || isCompanionTask) ? null : targetGoalId;
     if (effectiveParentGoalId) {
       const effectiveAssigneeIds = resolvedAssigneeIds !== undefined
         ? resolvedAssigneeIds
@@ -1464,10 +1487,10 @@ export async function updateTask(req, res, next) {
         ...(isStandalone !== undefined && (isElevated || isDirectManager) && { isStandalone }),
         ...(finalWeight !== undefined ? { weight: finalWeight } : (weight !== undefined && (isElevated || isDirectManager) && { weight })),
         ...(description !== undefined && { description }),
-        ...(dependency !== undefined && (isElevated || isDirectManager || existing.employeeId === req.user.id) && { dependency: dependency || null }),
+        ...(dependency !== undefined && (isElevated || isDirectManager || existing.employeeId === req.user.id || isAssignedDepManager) && { dependency: dependency || null }),
         ...(isDependencyOf !== undefined && (isElevated || isDirectManager || existing.employeeId === req.user.id) && { isDependencyOf: isDependencyOf || null }),
-        ...(employeeId !== undefined && (isElevated || isDirectManager) && { employeeId }),
-        ...(resolvedAssigneeIds !== undefined && (isElevated || isDirectManager) && { assigneeIds: resolvedAssigneeIds }),
+        ...(employeeId !== undefined && (isElevated || isDirectManager || isAssigneeManager || isCompanionTask) && { employeeId }),
+        ...(resolvedAssigneeIds !== undefined && (isElevated || isDirectManager || isAssigneeManager || isCompanionTask) && { assigneeIds: resolvedAssigneeIds }),
         ...(req.body.createdOnBehalfOf !== undefined && { createdOnBehalfOf: Boolean(req.body.createdOnBehalfOf) }),
         ...(req.body.requiresApproval !== undefined && { requiresApproval: Boolean(req.body.requiresApproval) }),
         ...(req.body.onHoldReason !== undefined && { onHoldReason: req.body.onHoldReason }),
@@ -1591,42 +1614,31 @@ export async function updateTask(req, res, next) {
       }
     }
 
-    // Determine details of edit
-    let details = 'Task edited.';
-    let action = 'edited';
-    if (dependency !== undefined && dependency !== null && existing.dependency === null) {
-      action = 'dependency_created';
-      details = `Created dependency: "${dependency.title || 'Untitled'}".`;
-    } else if (status !== undefined && status !== existing.status) {
-      action = 'status_changed';
-      details = `Status updated to ${status.toUpperCase().replace('_', ' ')}.`;
-    }
+    // Compute field-level differences for audit log (groups all changes in one event)
+    const diffResult = await diffTaskChanges(
+      existing,
+      {
+        ...req.body,
+        status: finalStatus,
+        progress: finalProgress,
+        weight: finalWeight !== undefined ? finalWeight : weight,
+        employeeId: employeeId !== undefined ? employeeId : existing.employeeId,
+        actualStartDate: actualStartDate !== undefined ? (actualStartDate ? new Date(actualStartDate) : null) : undefined,
+        actualCompletionDate: actualCompletionDate !== undefined ? (actualCompletionDate ? new Date(actualCompletionDate) : null) : undefined,
+      },
+      req.user,
+      tenantId
+    );
 
     await logTaskAudit({
       taskId: id,
       performedById: req.user.id,
-      action,
-      details,
+      action: diffResult.action,
+      details: diffResult.details,
+      previousValue: {
+        changes: diffResult.changes,
+      },
     });
-
-    // A hand-entered actual date leaves a trail of its own, naming what it was
-    // before. Delay figures are only worth anything if a correction is visible.
-    if (actualDates.manuallySet) {
-      const show = (d) => (d ? new Date(d).toISOString().slice(0, 10) : 'not recorded');
-      const changes = [];
-      if (actualStartDate !== undefined) {
-        changes.push(`actual start ${show(existing.actualStartDate)} → ${show(updated.actualStartDate)}`);
-      }
-      if (actualCompletionDate !== undefined) {
-        changes.push(`actual completion ${show(existing.actualCompletionDate)} → ${show(updated.actualCompletionDate)}`);
-      }
-      await logTaskAudit({
-        taskId: id,
-        performedById: req.user.id,
-        action: 'edited',
-        details: `Actual dates changed by hand: ${changes.join('; ')}.`,
-      }).catch(() => {});
-    }
 
     emitToTenant(tenantId, 'task_updated', {
       action: 'update',

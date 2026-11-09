@@ -22,6 +22,7 @@ import { getCurrentFinancialYear, getCurrentQuarter, getTenantFinancialYear, val
 import { GOAL_EDITABLE_STATUSES } from '../lib/workflowStatus.js';
 import { sanitizeGoalHtml } from '../lib/sanitizeHtml.js';
 import { emitGoalEvent } from '../lib/socket.js';
+import { diffGoalChanges, humanizeStatus } from '../services/auditDiff.service.js';
 
 /**
  * Traverses up the reporting chain from targetId to see if managerId is encountered.
@@ -1498,11 +1499,15 @@ export async function updateGoal(req, res, next) {
       }
     }
 
+    const goalDiff = await diffGoalChanges(existing, req.body, req.user, req.tenantId);
     await goalService.logAudit({
       goalId: id,
       performedById: req.user.id,
-      action: 'GOAL_UPDATED',
-      details: `${req.user.name} updated goal details.`,
+      action: goalDiff.action,
+      details: goalDiff.details,
+      previousValue: {
+        changes: goalDiff.changes,
+      },
     });
 
     // Re-fetch to return the fully up-to-date goal (including any new assignments)
