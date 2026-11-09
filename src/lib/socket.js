@@ -176,4 +176,47 @@ export function emitGoalEvent(tenantId, eventName, payload, authorizedUserIds = 
   });
 }
 
+/**
+ * Broadcast Task Dependency event to tenant and specific recipient user rooms.
+ *
+ * Supported events:
+ * - dependency:created
+ * - dependency:approval-requested
+ * - dependency:approved
+ * - dependency:rejected
+ * - dependency:assigned
+ * - dependency:unlocked
+ * - dependency:verification-requested
+ * - dependency:verified
+ * - dependency:blocked
+ * - dependency:rework-requested
+ *
+ * Also emits legacy 'task_updated' for backward compatibility.
+ */
+export function emitDependencyEvent(tenantId, eventName, payload, recipientUserIds = []) {
+  if (!io || !tenantId) return;
+
+  let broadcaster = io.to(`tenant_${tenantId}`);
+
+  if (Array.isArray(recipientUserIds)) {
+    for (const userId of recipientUserIds) {
+      if (userId) {
+        broadcaster = broadcaster.to(`tenant:${tenantId}:user:${userId}`);
+      }
+    }
+  }
+
+  // 1. Emit typed dependency event
+  broadcaster.emit(eventName, payload);
+
+  // 2. Also emit legacy task_updated for components still listening to it
+  broadcaster.emit('task_updated', {
+    action: eventName,
+    taskId: payload.sourceTaskId || payload.taskId,
+    dependencyId: payload.id || payload.dependencyId,
+    status: payload.status,
+  });
+}
+
+
 

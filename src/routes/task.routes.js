@@ -7,6 +7,17 @@ import {
   listMilestones, createMilestone, updateMilestone, deleteMilestone, listOverdueMilestones, listMyAssignedMilestones,
   getMilestoneLiveStatusSvg, listMilestoneContributions,
 } from '../controllers/taskMilestone.controller.js';
+import {
+  createDependencyHandler,
+  getTaskDependenciesHandler,
+  approveDependencyHandler,
+  rejectDependencyHandler,
+  submitDeliverableHandler,
+  verifyDependencyHandler,
+  requestReworkHandler,
+  getPendingApprovalsHandler,
+  getManagerDownlinesHandler,
+} from '../controllers/taskDependency.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
 
@@ -27,6 +38,19 @@ router.delete('/tasks/:id', requireAuth, requireTenant, deleteTask);
 router.post('/tasks/:id/review/submit', requireAuth, requireTenant, submitTaskForReview);
 router.post('/tasks/:id/review/approve', requireAuth, requireTenant, approveTaskReview);
 router.post('/tasks/:id/review/reject', requireAuth, requireTenant, rejectTaskReview);
+
+// ── Task Dependencies API (Enterprise Lifecycle) ──────────────────────────
+router.post('/tasks/:taskId/dependency', requireAuth, requireTenant, createDependencyHandler);
+router.get('/tasks/:taskId/dependencies', requireAuth, requireTenant, getTaskDependenciesHandler);
+router.get('/dependencies/pending-approvals', requireAuth, requireTenant, getPendingApprovalsHandler);
+router.post('/dependencies/:id/approve', requireAuth, requireTenant, approveDependencyHandler);
+router.post('/dependencies/:id/reject', requireAuth, requireTenant, rejectDependencyHandler);
+router.post('/dependencies/:id/submit', requireAuth, requireTenant, submitDeliverableHandler);
+router.post('/dependencies/:id/verify', requireAuth, requireTenant, verifyDependencyHandler);
+router.post('/dependencies/:id/rework', requireAuth, requireTenant, requestReworkHandler);
+router.get('/team/managers/:managerId/downlines', requireAuth, requireTenant, getManagerDownlinesHandler);
+router.get('/team/my-downlines', requireAuth, requireTenant, getManagerDownlinesHandler);
+
 
 // ── Weightage ledger ───────────────────────────────────────────────────────
 // What each task was planned to be worth, what completing it earned, whether

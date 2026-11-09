@@ -86,6 +86,8 @@ model Tenant {
   goals                Goal[]
   goalAssignments      GoalAssignment[]
   tasks                Task[]
+  taskDependencies     TaskDependency[]
+  dependencyAuditLogs  DependencyAuditLog[]
   taskMilestones       TaskMilestone[]
   policies             Policy[]
   policyVersions       PolicyVersion[]
@@ -331,6 +333,15 @@ model TenantUser {
   goalComments        GoalComment[]        @relation("GoalCommentAuthor")
   goalAuditLogs       GoalAuditLog[]       @relation("GoalAuditPerformer")
   notifications       Notification[]       @relation("UserNotifications")
+  // Task Dependency relations
+  dependencyRequests    TaskDependency[] @relation("DepRequester")
+  dependencyAssignments TaskDependency[] @relation("DepTargetManager")
+  dependenciesApproved  TaskDependency[] @relation("DepApprovedBy")
+  dependenciesRejected  TaskDependency[] @relation("DepRejectedBy")
+  dependenciesDeptApproved TaskDependency[] @relation("DepDeptHeadApprover")
+  dependenciesVerified  TaskDependency[] @relation("DepVerifiedBy")
+  dependencyReworks     TaskDependency[] @relation("DepReworkRequester")
+  dependencyAuditLogs   DependencyAuditLog[] @relation("DepAuditPerformer")
   createdEvents       HubEvent[]           @relation("EventCreator")
   passwordResetTokens PasswordResetToken[]
   galleryPosts        GalleryPost[]        @relation("GalleryPostUploader")
@@ -1009,8 +1020,13 @@ model Task {
   employee       TenantUser     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   assigneeIds    String[]       @default([])
   description    String?        @db.Text
-  dependency     Json? // serialised dep object: { assigneeId, depTitle, status, escalated, depTaskId }
+  /// Legacy JSON blob preserved for backward compatibility. New logic uses TaskDependency.
+  dependency     Json?
   isDependencyOf String? // parent task ID this task is a companion dep of
+  /// TaskDependency rows where this task is the source (blocked) task.
+  sourceDependencies  TaskDependency[] @relation("SourceTask")
+  /// TaskDependency row where this task is the companion (work) task.
+  companionDependency TaskDependency?  @relation("CompanionTask")
   // ── On-Hold / Pause Tracking ─────────────────────────────────────────────
   holdStartedAt      DateTime?
   holdReleasedAt     DateTime?
@@ -1046,6 +1062,7 @@ model Task {
   @@index([tenantId])
   @@index([employeeId])
   @@index([goalId])
+  @@index([isDependencyOf])
   @@map("tasks")
 }
 
@@ -3198,4 +3215,145 @@ model CustomerReview {
 
   @@index([isPublished, isFeatured])
   @@map("customer_reviews")
+}
+
+
+// ── Task Dependency System ─────────────────────────────────────────────────
+// First-class relational model replacing the legacy Task.dependency JSON blob.
+// Supports cross-department approval, pre/post workflow, verification lifecycle,
+// downline assignment, and full immutable audit history.
+
+model TaskDependency {
+  id          String @id @default(cuid())
+  tenantId    String
+  tenant      Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // ── Task relationships ────────────────────────────────────────────────────
+  /// The task that is blocked / waiting (the source / parent task).
+  sourceTaskId String
+  sourceTask   Task   @relation("SourceTask", fields: [sourceTaskId], references: [id], onDelete: Cascade)
+
+  /// The companion task that performs the dependency work. Null until created.
+  companionTaskId String? @unique
+  companionTask   Task?   @relation("CompanionTask", fields: [companionTaskId], references: [id], onDelete: SetNull)
+
+  /// pre = must be VERIFIED before source task can start.
+  /// post = unlocked only after source task is COMPLETED.
+  dependencyType String @default("pre") // pre | post
+
+  // ── People ────────────────────────────────────────────────────────────────
+  /// Employee who owns the blocked source task (created the dependency request).
+  requesterId String
+  requester   TenantUser @relation("DepRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+
+  /// Manager assigned to perform the dependency work.
+  targetManagerId String
+  targetManager   TenantUser @relation("DepTargetManager", fields: [targetManagerId], references: [id], onDelete: Cascade)
+
+  // ── Department context ────────────────────────────────────────────────────
+  requesterDepartment  String?
+  targetDepartment     String?
+  /// True when requester and target are in different departments.
+  isCrossDepartment    Boolean @default(false)
+  /// Department head who must approve cross-department requests.
+  deptHeadId           String?
+  deptHeadApprovalReqd Boolean @default(false)
+
+  // ── Title & description ───────────────────────────────────────────────────
+  title       String
+  description String?  @db.Text
+  dueDate     DateTime?
+  weight      Int      @default(10)
+
+  // ── Status lifecycle ──────────────────────────────────────────────────────
+  /// PENDING_APPROVAL   → waiting for target manager (or dept head) to approve
+  /// DEPT_HEAD_REVIEWING → cross-dept: waiting for department head approval
+  /// APPROVED           → manager accepted; companion task active
+  /// REJECTED           → declined with reason; parent task stays blocked
+  /// IN_PROGRESS        → companion task underway
+  /// PENDING_VERIFICATION → companion done; requester must verify deliverable
+  /// REWORK_REQUESTED   → requester rejected deliverable; companion back to work
+  /// VERIFIED           → deliverable accepted; parent task unblocked
+  /// CANCELLED          → dependency withdrawn
+  status String @default("PENDING_APPROVAL")
+  // PENDING_APPROVAL | DEPT_HEAD_REVIEWING | APPROVED | REJECTED
+  // IN_PROGRESS | PENDING_VERIFICATION | REWORK_REQUESTED | VERIFIED | CANCELLED
+
+  // ── Approval ──────────────────────────────────────────────────────────────
+  approvedById   String?
+  approvedBy     TenantUser? @relation("DepApprovedBy",  fields: [approvedById],  references: [id], onDelete: SetNull)
+  approvedAt     DateTime?
+  approvalNotes  String?     @db.Text
+
+  // ── Rejection ─────────────────────────────────────────────────────────────
+  rejectedById    String?
+  rejectedBy      TenantUser? @relation("DepRejectedBy", fields: [rejectedById], references: [id], onDelete: SetNull)
+  rejectedAt      DateTime?
+  rejectionReason String?     @db.Text
+
+  // ── Department head approval ──────────────────────────────────────────────
+  deptHeadApprovedById String?
+  deptHeadApprovedBy   TenantUser? @relation("DepDeptHeadApprover", fields: [deptHeadApprovedById], references: [id], onDelete: SetNull)
+  deptHeadApprovedAt   DateTime?
+
+  // ── Verification ──────────────────────────────────────────────────────────
+  verifiedById      String?
+  verifiedBy        TenantUser? @relation("DepVerifiedBy", fields: [verifiedById], references: [id], onDelete: SetNull)
+  verifiedAt        DateTime?
+  verificationNotes String?     @db.Text
+
+  // ── Rework ────────────────────────────────────────────────────────────────
+  reworkRequestedById String?
+  reworkRequestedBy   TenantUser? @relation("DepReworkRequester", fields: [reworkRequestedById], references: [id], onDelete: SetNull)
+  reworkRequestedAt   DateTime?
+  reworkReason        String?     @db.Text
+  reworkCount         Int         @default(0)
+
+  // ── Deliverable ───────────────────────────────────────────────────────────
+  deliverableNotes String? @db.Text
+
+  auditLogs DependencyAuditLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([sourceTaskId])
+  @@index([requesterId])
+  @@index([targetManagerId])
+  @@index([status])
+  @@index([tenantId, status])
+  @@map("task_dependencies")
+}
+
+/// Immutable audit trail for every dependency lifecycle event.
+/// Never updated or deleted — append-only.
+model DependencyAuditLog {
+  id           String         @id @default(cuid())
+  tenantId     String
+  tenant       Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  dependencyId String
+  dependency   TaskDependency @relation(fields: [dependencyId], references: [id], onDelete: Cascade)
+  taskId       String  // source task
+  goalId       String? // source task's goal (denormalised for fast queries)
+
+  performedById String
+  performedBy   TenantUser @relation("DepAuditPerformer", fields: [performedById], references: [id])
+
+  /// Action vocabulary:
+  /// CREATED | DEPT_HEAD_NOTIFIED | DEPT_HEAD_APPROVED | APPROVED | REJECTED
+  /// COMPANION_CREATED | DOWNLINE_ASSIGNED | IN_PROGRESS | COMPANION_COMPLETED
+  /// VERIFICATION_REQUESTED | VERIFIED | REWORK_REQUESTED | CANCELLED | EDITED
+  action         String
+  previousStatus String?
+  newStatus      String?
+  details        String? @db.Text
+  meta           Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([dependencyId])
+  @@index([taskId])
+  @@index([tenantId, createdAt])
+  @@map("dependency_audit_logs")
 }
