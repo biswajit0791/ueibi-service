@@ -16,6 +16,7 @@ import { validateMilestoneDrafts, validateMilestonesComplete } from '../lib/crit
 import { assertWatcherEmailsAllowed, assertMilestoneAssigneesValid, milestoneWorkBlock } from './taskMilestone.controller.js';
 import { withDefaultMilestoneWatcher } from '../services/milestoneWatcher.service.js';
 import { REVIEW_STATUS, reviewFieldsForTransition, completeGoalIfAllApproved } from '../services/taskReview.service.js';
+import { assertTaskDependenciesResolved } from '../services/taskDependency.service.js';
 
 function formatZodIssues(issues, fallback = 'Validation failed') {
   if (!Array.isArray(issues) || issues.length === 0) return fallback;
@@ -970,6 +971,22 @@ export async function updateTaskStatus(req, res, next) {
       }
     }
 
+    // ── Task Dependency Guard (Phase 3 Pre-Dependency Workflow) ───────────
+    // Work CANNOT begin (in_progress) or complete (done) if this task has an
+    // active pre-requisite dependency that has not yet been VERIFIED.
+    if (status === 'in_progress' || status === 'done' || (progressUpdate !== undefined && progressUpdate > 0)) {
+      try {
+        await assertTaskDependenciesResolved(id, tenantId);
+      } catch (depErr) {
+        return res.status(409).json({
+          success: false,
+          code: 'TASK_DEPENDENCY_BLOCKED',
+          error: depErr.message,
+          message: depErr.message,
+        });
+      }
+    }
+
     // ── The weight gate ──────────────────────────────────────────────────
     // Work may not begin on a goal whose tasks do not total exactly 100%.
     // Moving a task BACK to 'todo' is always allowed: that reduces work in
@@ -1034,10 +1051,16 @@ export async function updateTaskStatus(req, res, next) {
     }
 
     if (updated.status === 'done' && updated.isDependencyOf) {
-      const parentTask = await prisma.task.findUnique({
-        where: { id: updated.isDependencyOf }
+      const parentTask = await prisma.task.findFirst({
+        where: { id: updated.isDependencyOf, tenantId }
       });
       if (parentTask) {
+        // Also update any relational TaskDependency record to PENDING_VERIFICATION
+        await prisma.taskDependency.updateMany({
+          where: { tenantId, companionTaskId: updated.id, status: { in: ['APPROVED', 'IN_PROGRESS'] } },
+          data: { status: 'PENDING_VERIFICATION' },
+        }).catch(() => null);
+
         const updatedDependency = parentTask.dependency ? {
           ...parentTask.dependency,
           status: 'completed'
@@ -1521,10 +1544,16 @@ export async function updateTask(req, res, next) {
     }
 
     if (updated.status === 'done' && updated.isDependencyOf) {
-      const parentTask = await prisma.task.findUnique({
-        where: { id: updated.isDependencyOf }
+      const parentTask = await prisma.task.findFirst({
+        where: { id: updated.isDependencyOf, tenantId }
       });
       if (parentTask) {
+        // Also update any relational TaskDependency record to PENDING_VERIFICATION
+        await prisma.taskDependency.updateMany({
+          where: { tenantId, companionTaskId: updated.id, status: { in: ['APPROVED', 'IN_PROGRESS'] } },
+          data: { status: 'PENDING_VERIFICATION' },
+        }).catch(() => null);
+
         const updatedDependency = parentTask.dependency ? {
           ...parentTask.dependency,
           status: 'completed'
@@ -1627,6 +1656,15 @@ export async function deleteTask(req, res, next) {
       return null;
     });
     if (!existing) return;
+
+    // Cancel any relational TaskDependency records attached to this task
+    await prisma.taskDependency.updateMany({
+      where: {
+        tenantId,
+        OR: [{ sourceTaskId: id }, { companionTaskId: id }],
+      },
+      data: { status: 'CANCELLED' },
+    }).catch(() => {});
 
     // If this task IS a dependency companion — clear the parent's dependency field
     if (existing.isDependencyOf) {

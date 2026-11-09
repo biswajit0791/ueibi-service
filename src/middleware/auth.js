@@ -38,6 +38,9 @@ export async function requireAuth(req, res, next) {
       select: {
         id: true, email: true, role: true, name: true, tenantId: true,
         status: true, isDeleted: true,
+        // Employment context — needed for department-scoped and cross-dept
+        // authorization checks throughout task, goal and dependency controllers.
+        department: true, managerId: true, officeLocation: true, designation: true,
         // Read alongside the user for the same reason the user is re-read: a
         // suspension must take effect on the next request, not whenever the
         // JWT happens to expire.
@@ -67,6 +70,12 @@ export async function requireAuth(req, res, next) {
       role: user.role,
       name: user.name,
       tenantId: user.tenantId,
+      // Employment context now populated so controllers can use req.user.department,
+      // req.user.managerId, req.user.officeLocation without extra DB round-trips.
+      department: user.department || null,
+      managerId: user.managerId || null,
+      officeLocation: user.officeLocation || null,
+      designation: user.designation || null,
       capabilities,
     };
     req.tenantId = user.tenantId;
