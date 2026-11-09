@@ -20,6 +20,7 @@ import goalOptionService from '../services/goalOption.service.js';
 import { ELEVATED_ROLES, SUPER_ELEVATED_ROLES, MANAGER_OR_ELEVATED_ROLES, hasRole, canViewDashboard } from '../lib/roles.js';
 import { getCurrentFinancialYear, getCurrentQuarter, getTenantFinancialYear, validateGoalDates } from '../lib/financialYear.js';
 import { GOAL_EDITABLE_STATUSES } from '../lib/workflowStatus.js';
+import { sanitizeGoalHtml } from '../lib/sanitizeHtml.js';
 
 /**
  * Traverses up the reporting chain from targetId to see if managerId is encountered.
@@ -1315,7 +1316,7 @@ export async function updateGoal(req, res, next) {
       where: { id },
       data: {
         ...(safeData.title ? { title: safeData.title.trim() } : {}),
-        ...(safeData.description !== undefined ? { description: safeData.description } : {}),
+        ...(safeData.description !== undefined ? { description: safeData.description ? sanitizeGoalHtml(safeData.description) : null } : {}),
         ...(safeData.category ? { category: safeData.category } : {}),
         ...(safeData.priority ? { priority: safeData.priority } : {}),
         ...(safeData.financialYear ? { financialYear: safeData.financialYear } : {}),

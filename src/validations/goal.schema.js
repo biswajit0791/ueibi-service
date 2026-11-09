@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 export const createGoalSchema = z.object({
   title: z.string({ error: "Goal title is required" }).trim().min(1, "Goal title cannot be empty").max(255, "Goal title cannot exceed 255 characters"),
-  description: z.string().max(3000, "Description cannot exceed 3000 characters").nullable().optional(),
+  description: z.string().max(50000, "Description cannot exceed 50000 characters").nullable().optional(),
   category: z.string().max(100).nullable().optional(),
   // Priority is a tenant-managed master list, so this can no longer be a fixed
   // z.enum — an admin adding "Urgent" would otherwise get a 400 on every save.
@@ -64,7 +64,7 @@ export const createGoalSchema = z.object({
 // GoalAssignment rows. Existing assignments are never removed or replaced.
 export const updateGoalSchema = z.object({
   title: z.string().trim().min(1, "Goal title cannot be empty").max(255, "Goal title cannot exceed 255 characters").optional(),
-  description: z.string().max(3000, "Description cannot exceed 3000 characters").nullable().optional(),
+  description: z.string().max(50000, "Description cannot exceed 50000 characters").nullable().optional(),
   category: z.string().max(100).nullable().optional(),
   priority: z.preprocess(
     (val) => (typeof val === 'string' ? val.toLowerCase().trim() : val),
