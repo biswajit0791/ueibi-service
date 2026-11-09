@@ -1,5 +1,5 @@
 import { prisma } from '../lib/prisma.js';
-import { emitToTenant, emitToUser } from '../lib/socket.js';
+import { emitToTenant, emitToUser, emitGoalEvent } from '../lib/socket.js';
 import { ELEVATED_ROLES, HR_ROLES, MANAGER_OR_ELEVATED_ROLES, hasRole } from '../lib/roles.js';
 import { sendGoalSubmissionEmail, sendGoalReviewResultEmail } from './goalEscalation.service.js';
 import { goalRatingGate } from '../lib/goalRating.js';
@@ -163,6 +163,25 @@ export class GoalService {
       console.warn('[GoalService] Failed to create audit log:', err.message);
       return null;
     }
+  }
+
+  /**
+   * Helper: Resolve authorized user IDs for real-time Socket.IO broadcasts.
+   */
+  getGoalAuthorizedUsers(goal) {
+    const ids = new Set();
+    if (goal.employeeId) ids.add(goal.employeeId);
+    if (goal.createdById) ids.add(goal.createdById);
+    if (goal.ownerManagerId) ids.add(goal.ownerManagerId);
+    if (goal.employee?.managerId) ids.add(goal.employee.managerId);
+    if (Array.isArray(goal.assignments)) {
+      goal.assignments.forEach((a) => {
+        if (a.employeeId) ids.add(a.employeeId);
+        if (a.assignedById) ids.add(a.assignedById);
+        if (a.employee?.managerId) ids.add(a.employee.managerId);
+      });
+    }
+    return Array.from(ids).filter(Boolean);
   }
 
   /**
@@ -531,7 +550,27 @@ export class GoalService {
       });
     }
 
-    emitToTenant(tenantId, 'goal_updated', { action: 'update', goalId: goal.id, goal: updated });
+    const authorizedUsers = this.getGoalAuthorizedUsers(updated);
+    emitGoalEvent(
+      tenantId,
+      'goal:approved',
+      {
+        goalId: goal.id,
+        id: goal.id,
+        status: updated.status,
+        progress: updated.progress,
+        approvalMode: updated.approvalMode,
+        title: updated.title,
+        employeeId: updated.employeeId,
+        action: 'approved',
+        comment: comment || null,
+        updatedAt: updated.updatedAt,
+        assignments: updated.assignments,
+        goal: updated,
+      },
+      authorizedUsers,
+      goal.id
+    );
 
     return updated;
   }
@@ -755,7 +794,26 @@ export class GoalService {
       }
     }
 
-    emitToTenant(tenantId, 'goal_updated', { action: 'update', goalId: goal.id, goal: updated });
+    const authorizedUsers = this.getGoalAuthorizedUsers(updated);
+    emitGoalEvent(
+      tenantId,
+      'goal:updated',
+      {
+        goalId: goal.id,
+        id: goal.id,
+        status: updated.status,
+        progress: updated.progress,
+        approvalMode: updated.approvalMode,
+        title: updated.title,
+        employeeId: updated.employeeId,
+        action: 'submitted',
+        updatedAt: updated.updatedAt,
+        assignments: updated.assignments,
+        goal: updated,
+      },
+      authorizedUsers,
+      goal.id
+    );
 
     return updated;
   }
@@ -989,7 +1047,36 @@ export class GoalService {
       }
     }
 
-    emitToTenant(tenantId, 'goal_updated', { action: 'update', goalId: goal.id, goal: updated });
+    const authorizedUsers = this.getGoalAuthorizedUsers(updated);
+    const eventName = isApprove ? 'goal:approved' : 'goal:rejected';
+    emitGoalEvent(
+      tenantId,
+      eventName,
+      {
+        goalId: goal.id,
+        id: goal.id,
+        status: updated.status,
+        progress: updated.progress,
+        approvalMode: updated.approvalMode,
+        title: updated.title,
+        employeeId: updated.employeeId,
+        targetEmployeeId: targetEmployeeId || null,
+        reviewedEmpIds: reviewedEmpIds || [],
+        action: isApprove ? 'approved' : 'rejected',
+        comment: comment || null,
+        rating: rating !== undefined && rating !== null ? Number(rating) : (updated.managerRating || null),
+        managerRating: updated.managerRating || null,
+        managerRatingNotes: updated.managerRatingNotes || null,
+        specialNotes: updated.specialNotes || null,
+        closedAt: updated.closedAt || null,
+        closedById: updated.closedById || null,
+        updatedAt: updated.updatedAt,
+        assignments: updated.assignments,
+        goal: updated,
+      },
+      authorizedUsers,
+      goal.id
+    );
 
     return updated;
   }
@@ -1131,7 +1218,36 @@ export class GoalService {
       }
     }
 
-    emitToTenant(tenantId, 'goal_updated', { action: 'update', goalId: goal.id, goal: updated });
+    const authorizedUsers = this.getGoalAuthorizedUsers(updated);
+    const eventName = isApprove ? 'goal:approved' : 'goal:rejected';
+    emitGoalEvent(
+      tenantId,
+      eventName,
+      {
+        goalId: goal.id,
+        id: goal.id,
+        status: updated.status,
+        progress: updated.progress,
+        approvalMode: updated.approvalMode,
+        title: updated.title,
+        employeeId: updated.employeeId,
+        targetEmployeeId: targetEmployeeId || null,
+        reviewedEmpIds: reviewedEmpIds || [],
+        action: isApprove ? 'approved' : 'rejected',
+        comment: comment || null,
+        rating: rating !== undefined && rating !== null ? Number(rating) : (updated.managerRating || null),
+        managerRating: updated.managerRating || null,
+        managerRatingNotes: updated.managerRatingNotes || null,
+        specialNotes: updated.specialNotes || null,
+        closedAt: updated.closedAt || null,
+        closedById: updated.closedById || null,
+        updatedAt: updated.updatedAt,
+        assignments: updated.assignments,
+        goal: updated,
+      },
+      authorizedUsers,
+      goal.id
+    );
 
     return updated;
   }
@@ -1243,7 +1359,27 @@ export class GoalService {
       });
     }
 
-    emitToTenant(tenantId, 'goal_updated', { action: 'update', goalId: goal.id, goal: updated });
+    const authorizedUsers = this.getGoalAuthorizedUsers(updated);
+    emitGoalEvent(
+      tenantId,
+      'goal:updated',
+      {
+        goalId: goal.id,
+        id: goal.id,
+        status: updated.status,
+        progress: updated.progress,
+        approvalMode: updated.approvalMode,
+        title: updated.title,
+        employeeId: updated.employeeId,
+        action: 'resubmitted',
+        comment: comment || null,
+        updatedAt: updated.updatedAt,
+        assignments: updated.assignments,
+        goal: updated,
+      },
+      authorizedUsers,
+      goal.id
+    );
 
     return updated;
   }

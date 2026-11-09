@@ -66,3 +66,47 @@ export function htmlToText(html) {
     .replace(/\s+/g, ' ')
     .trim();
 }
+
+
+const GOAL_OPTIONS = {
+  allowedTags: [
+    'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'br', 'hr',
+    'strong', 'b', 'em', 'i', 'u', 's', 'strike', 'del',
+    'ul', 'ol', 'li',
+    'blockquote', 'code', 'pre',
+    'a', 'span', 'mark',
+  ],
+  allowedAttributes: {
+    a: ['href', 'title', 'target', 'rel'],
+    '*': ['style', 'class', 'data-color'],
+  },
+  allowedStyles: {
+    '*': {
+      'color': [/.*/],
+      'background-color': [/.*/],
+      'text-align': [/^(left|right|center|justify)$/i],
+    },
+  },
+  allowedSchemes: ['http', 'https', 'mailto'],
+  allowedSchemesAppliedToAttributes: ['href'],
+  transformTags: {
+    a: (tagName, attribs) => ({
+      tagName: 'a',
+      attribs: {
+        ...attribs,
+        ...(attribs.target === '_blank' ? { rel: 'noopener noreferrer' } : {}),
+      },
+    }),
+  },
+  nonTextTags: ['style', 'script', 'textarea', 'option', 'noscript', 'iframe'],
+};
+
+/**
+ * Sanitizes rich text HTML for Goal descriptions, tasks, and notes.
+ * Preserves safe formatting (headings, lists, bold/italic, alignment, colors, links)
+ * while stripping XSS vectors (scripts, iframes, inline event handlers).
+ */
+export function sanitizeGoalHtml(dirty) {
+  if (typeof dirty !== 'string') return '';
+  return sanitizeHtmlLib(dirty, GOAL_OPTIONS);
+}
