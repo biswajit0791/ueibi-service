@@ -2,6 +2,7 @@ import { Server } from 'socket.io';
 import { env } from '../config/env.js';
 import { verifyToken } from './jwt.js';
 import { parseCookies } from './cookies.js';
+import { prisma } from './prisma.js';
 import { registerChatHandlers, handleChatDisconnect } from '../services/chatSocket.service.js';
 
 let io;
@@ -72,6 +73,42 @@ export function initSocket(server) {
       }
     });
 
+    // Secure Goal Room Management
+    // Validate tenant isolation and user authorization against database before joining
+    socket.on('join_goal', async (goalId) => {
+      if (!goalId || typeof goalId !== 'string') return;
+      try {
+        const goal = await prisma.goal.findFirst({
+          where: { id: goalId, tenantId: authTenantId },
+          include: {
+            assignments: { select: { employeeId: true } },
+            employee: { select: { id: true, managerId: true } },
+          },
+        });
+        if (!goal) return;
+
+        const isElevated = ['SUPER_ADMIN', 'ADMIN', 'HR', 'CMD'].includes(socket.user.role);
+        const isAssignee = goal.employeeId === authUserId || goal.assignments?.some((a) => a.employeeId === authUserId);
+        const isOwner = goal.ownerManagerId === authUserId;
+        const isCreator = goal.createdById === authUserId;
+        const isManager = goal.employee?.managerId === authUserId;
+
+        if (isElevated || isAssignee || isOwner || isCreator || isManager) {
+          socket.join(`tenant:${authTenantId}:goal:${goalId}`);
+        } else {
+          console.warn(`[Socket] Unauthorized join_goal attempt by ${authUserId} for goal ${goalId}`);
+        }
+      } catch (err) {
+        console.error('[Socket] join_goal error:', err.message);
+      }
+    });
+
+    socket.on('leave_goal', (goalId) => {
+      if (goalId && typeof goalId === 'string') {
+        socket.leave(`tenant:${authTenantId}:goal:${goalId}`);
+      }
+    });
+
     registerChatHandlers(socket, { tenantId: authTenantId, userId: authUserId });
 
     socket.on('disconnect', () => {
@@ -93,4 +130,50 @@ export function emitToUser(tenantId, userId, event, payload) {
     io.to(`tenant:${tenantId}:user:${userId}`).emit(event, payload);
   }
 }
+
+/**
+ * Broadcast Goal Event securely to authorized users, goal room, and tenant room.
+ *
+ * Emits typed events ('goal:approved', 'goal:rejected', 'goal:updated')
+ * as well as legacy 'goal_updated' for complete backward compatibility.
+ *
+ * @param {string} tenantId
+ * @param {string} eventName - e.g. 'goal:approved', 'goal:rejected', 'goal:updated'
+ * @param {object} payload - structured event data including goalId, status, employeeId, etc.
+ * @param {string[]} authorizedUserIds - array of user IDs associated with this goal
+ * @param {string} [goalId] - optional goal ID to also broadcast to active goal room subscribers
+ */
+export function emitGoalEvent(tenantId, eventName, payload, authorizedUserIds = [], goalId = null) {
+  if (!io || !tenantId) return;
+
+  let broadcaster = io.to(`tenant_${tenantId}`);
+
+  if (Array.isArray(authorizedUserIds)) {
+    for (const userId of authorizedUserIds) {
+      if (userId) {
+        broadcaster = broadcaster.to(`tenant:${tenantId}:user:${userId}`);
+      }
+    }
+  }
+
+  if (goalId) {
+    broadcaster = broadcaster.to(`tenant:${tenantId}:goal:${goalId}`);
+  }
+
+  // 1. Emit primary event (e.g. 'goal:approved', 'goal:rejected', or 'goal:updated')
+  broadcaster.emit(eventName, payload);
+
+  // 2. Also emit 'goal:updated' if primary event was approved or rejected
+  if (eventName !== 'goal:updated') {
+    broadcaster.emit('goal:updated', payload);
+  }
+
+  // 3. Emit legacy 'goal_updated' event for backward compatibility
+  broadcaster.emit('goal_updated', {
+    action: payload.action || 'update',
+    goalId: payload.goalId || payload.id,
+    goal: payload.goal || payload,
+  });
+}
+
 

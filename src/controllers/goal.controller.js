@@ -21,6 +21,7 @@ import { ELEVATED_ROLES, SUPER_ELEVATED_ROLES, MANAGER_OR_ELEVATED_ROLES, hasRol
 import { getCurrentFinancialYear, getCurrentQuarter, getTenantFinancialYear, validateGoalDates } from '../lib/financialYear.js';
 import { GOAL_EDITABLE_STATUSES } from '../lib/workflowStatus.js';
 import { sanitizeGoalHtml } from '../lib/sanitizeHtml.js';
+import { emitGoalEvent } from '../lib/socket.js';
 
 /**
  * Traverses up the reporting chain from targetId to see if managerId is encountered.
@@ -762,6 +763,28 @@ export async function createGoal(req, res, next) {
         tasks: true,
       },
     });
+
+    const authorizedUsers = goalService.getGoalAuthorizedUsers(fullGoal || goal);
+    const isAutoApproved = fullGoal?.status === GOAL_STATUS.ACTIVE;
+    emitGoalEvent(
+      req.tenantId,
+      isAutoApproved ? 'goal:approved' : 'goal:updated',
+      {
+        goalId: goal.id,
+        id: goal.id,
+        status: fullGoal?.status,
+        progress: fullGoal?.progress || 0,
+        approvalMode: fullGoal?.approvalMode,
+        title: fullGoal?.title,
+        employeeId: fullGoal?.employeeId,
+        action: isAutoApproved ? 'approved' : 'created',
+        updatedAt: fullGoal?.updatedAt,
+        assignments: fullGoal?.assignments,
+        goal: fullGoal,
+      },
+      authorizedUsers,
+      goal.id
+    );
 
     res.status(201).json({
       ...fullGoal,
@@ -1523,6 +1546,27 @@ export async function updateGoal(req, res, next) {
       }
     }
 
+    const authorizedUsers = goalService.getGoalAuthorizedUsers(finalGoal || updated);
+    emitGoalEvent(
+      req.tenantId,
+      'goal:updated',
+      {
+        goalId: id,
+        id,
+        status: finalGoal?.status,
+        progress: finalGoal?.progress,
+        approvalMode: finalGoal?.approvalMode,
+        title: finalGoal?.title,
+        employeeId: finalGoal?.employeeId,
+        action: 'updated',
+        updatedAt: finalGoal?.updatedAt,
+        assignments: finalGoal?.assignments,
+        goal: finalGoal,
+      },
+      authorizedUsers,
+      id
+    );
+
     res.json({
       ...finalGoal,
       ownerId: finalGoal?.ownerManagerId || null,
@@ -1590,6 +1634,19 @@ export async function deleteGoal(req, res, next) {
       }),
       prisma.goal.delete({ where: { id } }),
     ]);
+
+    const authorizedUsers = goalService.getGoalAuthorizedUsers(goal);
+    emitGoalEvent(
+      req.tenantId,
+      'goal:deleted',
+      {
+        goalId: id,
+        id,
+        action: 'deleted',
+      },
+      authorizedUsers,
+      id
+    );
 
     res.json({ success: true, message: 'Goal deleted successfully' });
   } catch (err) {
