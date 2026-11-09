@@ -385,6 +385,45 @@ export async function approveDependency({
       },
     });
 
+    const depAuditChanges = [
+      {
+        field: 'dependency_status',
+        label: 'Dependency Approval Status',
+        oldValue: 'Pending Approval',
+        newValue: 'Approved',
+      },
+    ];
+    if (validDownlineIds.length > 0) {
+      depAuditChanges.push({
+        field: 'downline_assigned',
+        label: 'Downline Delegation',
+        oldValue: 'Manager',
+        newValue: `${validDownlineIds.length} assignee(s)`,
+      });
+    }
+
+    await tx.taskAuditLog.create({
+      data: {
+        taskId: dep.sourceTaskId,
+        performedById: user.id,
+        action: 'approved',
+        details: `Dependency "${dep.title}" was approved by ${user.name}.`,
+        previousValue: { changes: depAuditChanges },
+      },
+    });
+
+    if (dep.companionTaskId) {
+      await tx.taskAuditLog.create({
+        data: {
+          taskId: dep.companionTaskId,
+          performedById: user.id,
+          action: 'approved',
+          details: `Dependency task approved by ${user.name}. Status set to To Do.`,
+          previousValue: { changes: depAuditChanges },
+        },
+      });
+    }
+
     // 5. Notify Requester and Downline Employees
     await pushNotification({
       tenantId,
@@ -500,6 +539,43 @@ export async function rejectDependency({
         meta: { reason: reason.trim() },
       },
     });
+
+    const rejectChanges = [
+      {
+        field: 'dependency_status',
+        label: 'Dependency Approval Status',
+        oldValue: 'Pending Approval',
+        newValue: 'Rejected',
+      },
+      {
+        field: 'rejection_reason',
+        label: 'Rejection Reason',
+        oldValue: 'None',
+        newValue: reason.trim(),
+      },
+    ];
+
+    await tx.taskAuditLog.create({
+      data: {
+        taskId: dep.sourceTaskId,
+        performedById: user.id,
+        action: 'rejected',
+        details: `Dependency "${dep.title}" declined by ${user.name}: "${reason.trim()}".`,
+        previousValue: { changes: rejectChanges },
+      },
+    });
+
+    if (dep.companionTaskId) {
+      await tx.taskAuditLog.create({
+        data: {
+          taskId: dep.companionTaskId,
+          performedById: user.id,
+          action: 'rejected',
+          details: `Dependency task declined by ${user.name}: "${reason.trim()}".`,
+          previousValue: { changes: rejectChanges },
+        },
+      });
+    }
 
     // Notify Requester
     await pushNotification({
@@ -669,6 +745,31 @@ export async function verifyDependency({
         newStatus: 'VERIFIED',
         details: `Verified & accepted by ${user.name}. ${parentUnblocked ? 'Parent task has been UNBLOCKED!' : 'Other dependencies still pending.'}`,
         meta: { parentUnblocked, verificationNotes },
+      },
+    });
+
+    await tx.taskAuditLog.create({
+      data: {
+        taskId: dep.sourceTaskId,
+        performedById: user.id,
+        action: 'verified',
+        details: `Dependency "${dep.title}" verified and accepted by ${user.name}. ${parentUnblocked ? 'Parent task UNBLOCKED.' : ''}`,
+        previousValue: {
+          changes: [
+            {
+              field: 'verification_status',
+              label: 'Verification Status',
+              oldValue: 'Pending Verification',
+              newValue: 'Verified & Accepted',
+            },
+            ...(parentUnblocked ? [{
+              field: 'status',
+              label: 'Task Status',
+              oldValue: 'Blocked',
+              newValue: 'To Do (Unblocked)',
+            }] : []),
+          ],
+        },
       },
     });
 

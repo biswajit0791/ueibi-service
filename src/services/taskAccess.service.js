@@ -96,6 +96,38 @@ export async function loadTaskForUser(taskId, user, tenantId) {
     }
   }
 
+  // If the task has a dependency assigned to this user (or this user's downline),
+  // they are authorized to act on this task (e.g. approve/reject/update the dependency).
+  if (task.dependency && typeof task.dependency === 'object') {
+    const dep = task.dependency;
+    if (
+      dep.concernedPersonId === user.id ||
+      dep.concernedManagerId === user.id ||
+      dep.assigneeId === user.id
+    ) {
+      return task;
+    }
+    if (dep.concernedPersonId && await goalService.isSubordinate(user.id, dep.concernedPersonId, tenantId)) {
+      return task;
+    }
+  }
+
+  // Also check if this task is a parent of any companion task assigned to this user
+  const companionForUser = await prisma.task.findFirst({
+    where: {
+      tenantId,
+      isDependencyOf: task.id,
+      OR: [
+        { employeeId: user.id },
+        { assigneeIds: { has: user.id } },
+      ],
+    },
+    select: { id: true },
+  });
+  if (companionForUser) {
+    return task;
+  }
+
   throw { status: 403, message: "Access forbidden: you are not authorized to act on this task" };
 }
 

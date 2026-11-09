@@ -87,16 +87,35 @@ export async function visibleTaskWhere({ user, tenantId, employeeId, fy, forAppr
     }
 
     const allowedIdList = [...allowedIds];
-    const visibleParents = await prisma.task.findMany({
-      where: { tenantId, employeeId: { in: allowedIdList } },
-      select: { id: true },
-    });
+    const [visibleParents, companionTasksAssignedToMe] = await Promise.all([
+      prisma.task.findMany({
+        where: { tenantId, employeeId: { in: allowedIdList } },
+        select: { id: true },
+      }),
+      prisma.task.findMany({
+        where: {
+          tenantId,
+          OR: [
+            { employeeId: { in: allowedIdList } },
+            { assigneeIds: { hasSome: allowedIdList } },
+          ],
+          isDependencyOf: { not: null },
+        },
+        select: { isDependencyOf: true },
+      }),
+    ]);
+    const companionParentIds = companionTasksAssignedToMe
+      .map((t) => t.isDependencyOf)
+      .filter(Boolean);
+
     where.OR = [
       { employeeId: { in: allowedIdList } },
       { assigneeIds: { hasSome: allowedIdList } },
       { isDependencyOf: { in: visibleParents.map((t) => t.id) } },
+      ...(companionParentIds.length > 0 ? [{ id: { in: companionParentIds } }] : []),
     ];
-    // Private tasks of other team members must be excluded from manager queries
+    // Private tasks of other team members must be excluded from manager queries,
+    // but parent tasks linked to an assigned dependency must remain visible for dependency context.
     where.AND = [
       ...(where.AND || []),
       {
@@ -104,6 +123,7 @@ export async function visibleTaskWhere({ user, tenantId, employeeId, fy, forAppr
           { isPrivate: false },
           { employeeId: user.id },
           { assigneeIds: { has: user.id } },
+          ...(companionParentIds.length > 0 ? [{ id: { in: companionParentIds } }] : []),
         ],
       },
     ];
