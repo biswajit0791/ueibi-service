@@ -159,8 +159,16 @@ export async function isUserGoalAssignee(goalId, employeeId, tenantId) {
 export async function resolveTargetEmployee(requestingUser, tenantId, employeeId, parentTask = null, goalId = null) {
   const targetId = employeeId || requestingUser.id;
 
-  // Task Assignment Restriction: A task can only be assigned to an employee who is already assigned to the parent Goal.
-  if (goalId && !parentTask) {
+  const callerRole = String(requestingUser.role || '').toUpperCase();
+  const elevatedRoleList = ['SUPER_ADMIN', 'ADMIN', 'HR', 'CMD', 'DIRECTOR', 'OWNER', 'LEADERSHIP'];
+  const isElevated = hasRole(callerRole, elevatedRoleList);
+  const isManager = callerRole === 'MANAGER';
+  const canAutoAssignGoal = isElevated || isManager;
+
+  // Task Assignment Restriction: Regular employees can only assign tasks to themselves,
+  // and only if already assigned to the parent Goal.
+  // Managers and elevated roles can assign to authorized downline employees, who will be auto-assigned to the Goal.
+  if (goalId && !parentTask && !canAutoAssignGoal) {
     const isGoalAssignee = await isUserGoalAssignee(goalId, targetId, tenantId);
     if (!isGoalAssignee) {
       throw {
@@ -222,9 +230,7 @@ export async function resolveTargetEmployee(requestingUser, tenantId, employeeId
     throw { status: 403, message: 'Access forbidden: you can only raise a dependency from a task you own, or delegate to your downline' };
   }
 
-  const callerRole = String(requestingUser.role || '').toUpperCase();
   const targetRole = String(targetUser.role || '').toUpperCase();
-  const elevatedRoleList = ['SUPER_ADMIN', 'ADMIN', 'HR', 'CMD', 'DIRECTOR', 'OWNER', 'LEADERSHIP'];
 
   // Who a MANAGER may not hand work to: their peers, anyone above them, and
   // FINANCE.
@@ -635,6 +641,18 @@ export async function createTask(req, res, next) {
       return res.status(e.status || 400).json({ success: false, message: e.message });
     }
 
+    // Automatic Task Progress Logic:
+    // ASSIGNED ('todo') -> 0%
+    // IN PROGRESS ('in_progress') -> 0–5% (default 5%)
+    // COMPLETED ('done') -> 100%
+    if (effStatus === 'done') {
+      effProgress = 100;
+    } else if (effStatus === 'in_progress') {
+      effProgress = effProgress > 0 ? Math.min(5, Math.max(0, effProgress)) : 5;
+    } else if (effStatus === 'todo') {
+      effProgress = 0;
+    }
+
     if (isMilestoneTracked && (effStatus === 'done' || effProgress === 100)) {
       return res.status(400).json({
         success: false,
@@ -709,7 +727,9 @@ export async function createTask(req, res, next) {
 
       if (resolvedGoalId && !parentTask) {
         const isGoalAssignee = await isUserGoalAssignee(resolvedGoalId, target.id, tenantId);
-        if (!isGoalAssignee) {
+        const callerRole = String(req.user.role || '').toUpperCase();
+        const canAutoAssign = hasRole(callerRole, ELEVATED_ROLES) || callerRole === 'MANAGER';
+        if (!isGoalAssignee && !canAutoAssign) {
           return res.status(400).json({
             success: false,
             message: 'A task can only be assigned to an employee who is already assigned to the parent Goal.',
@@ -753,6 +773,54 @@ export async function createTask(req, res, next) {
     let createdMilestones = [];
     try {
       createdTask = await withWeightGuard(resolvedGoalId, async (tx) => {
+        // Auto-assign employee to Goal if not already assigned
+        if (resolvedGoalId && !effectiveIsStandalone && !effectiveIsPrivate) {
+          const wasGoalAssignee = await tx.goalAssignment.findUnique({
+            where: {
+              goalId_employeeId: {
+                goalId: resolvedGoalId,
+                employeeId: primaryTarget.id,
+              },
+            },
+          });
+
+          if (!wasGoalAssignee) {
+            const parentGoal = await tx.goal.findUnique({
+              where: { id: resolvedGoalId },
+              select: { id: true, status: true, employeeId: true, title: true },
+            });
+
+            if (parentGoal) {
+              await tx.goalAssignment.upsert({
+                where: {
+                  goalId_employeeId: {
+                    goalId: resolvedGoalId,
+                    employeeId: primaryTarget.id,
+                  },
+                },
+                create: {
+                  tenantId,
+                  goalId: resolvedGoalId,
+                  employeeId: primaryTarget.id,
+                  assignedById: req.user.id,
+                  status: parentGoal.status || 'ASSIGNED',
+                  progress: 0,
+                },
+                update: {},
+              });
+
+              await tx.goalAuditLog.create({
+                data: {
+                  goalId: resolvedGoalId,
+                  performedById: req.user.id,
+                  action: 'PARTICIPANT_ADDED',
+                  details: `${req.user.name} added ${primaryTarget.name || 'employee'} to goal "${parentGoal.title || 'Goal'}" via task assignment.`,
+                },
+              }).catch(() => null);
+            }
+          }
+        }
+
         const task = await tx.task.create({
           data: {
             title: title.trim(),
@@ -821,6 +889,21 @@ export async function createTask(req, res, next) {
       for (const empId of targetEmployeeIds) {
         await recalculateGoalProgress(resolvedGoalId, empId);
       }
+      if (primaryTarget.id !== req.user.id) {
+        const parentGoal = await prisma.goal.findUnique({
+          where: { id: resolvedGoalId },
+          select: { title: true },
+        });
+        await goalService.notify({
+          tenantId,
+          recipientId: primaryTarget.id,
+          type: 'goal_update',
+          title: `New Task Assigned: "${createdTask.title}"`,
+          body: `${req.user.name} assigned you a task on goal "${parentGoal?.title || 'Goal'}".`,
+          entityType: 'task',
+          entityId: createdTask.id,
+        }).catch(() => null);
+      }
     }
 
     await logTaskAudit({
@@ -848,6 +931,16 @@ export async function createTask(req, res, next) {
       goalId: resolvedGoalId,
       goalProgress,
     });
+    if (resolvedGoalId) {
+      emitToTenant(tenantId, 'goal:updated', {
+        goalId: resolvedGoalId,
+        goalProgress,
+      });
+      emitToTenant(tenantId, 'goal_updated', {
+        goalId: resolvedGoalId,
+        goalProgress,
+      });
+    }
 
     return res.status(201).json(createdTask);
   } catch (err) {
@@ -951,13 +1044,20 @@ export async function updateTaskStatus(req, res, next) {
     });
     if (!existing) return;
 
-    let progressUpdate = progress !== undefined ? Number(progress) : undefined;
-    if (progressUpdate === undefined) {
-      if (status === 'done') progressUpdate = 100;
-      else if (status === 'todo') progressUpdate = 0;
-      else if (status === 'in_progress' && (!existing.progress || existing.progress === 0)) progressUpdate = 10;
+    // Automatic Task Progress Logic:
+    // ASSIGNED ('todo') -> 0%
+    // IN PROGRESS ('in_progress') -> 0–5% (default 5%)
+    // COMPLETED ('done') -> 100%
+    let progressUpdate;
+    if (status === 'done') {
+      progressUpdate = 100;
+    } else if (status === 'todo') {
+      progressUpdate = 0;
+    } else if (status === 'in_progress') {
+      const p = progress !== undefined ? Number(progress) : (existing.progress > 0 && existing.progress <= 5 ? existing.progress : 5);
+      progressUpdate = Math.min(5, Math.max(0, p));
     } else {
-      progressUpdate = Math.min(100, Math.max(0, progressUpdate));
+      progressUpdate = existing.status === 'done' ? 5 : (existing.progress !== undefined ? Math.min(100, Math.max(0, existing.progress)) : 0);
     }
 
     // ── Milestone completion guard ───────────────────────────────────────
@@ -1128,6 +1228,16 @@ export async function updateTaskStatus(req, res, next) {
       goalId: updated.goalId,
       goalProgress,
     });
+    if (updated.goalId) {
+      emitToTenant(tenantId, 'goal:updated', {
+        goalId: updated.goalId,
+        goalProgress,
+      });
+      emitToTenant(tenantId, 'goal_updated', {
+        goalId: updated.goalId,
+        goalProgress,
+      });
+    }
 
     res.json(updated);
   } catch (err) {
@@ -1318,17 +1428,22 @@ export async function updateTask(req, res, next) {
       }
     }
 
-    let finalProgress = progress;
-    let finalStatus = status;
-    
-    if (finalProgress === undefined && status !== undefined) {
-      if (status === 'done') finalProgress = 100;
-      else if (status === 'todo') finalProgress = 0;
-    }
-    if (progress !== undefined && finalStatus === undefined) {
-      if (progress === 100) finalStatus = 'done';
-      else if (progress > 0) finalStatus = 'in_progress';
-      else if (progress === 0) finalStatus = 'todo';
+    let finalStatus = status !== undefined ? status : existing.status;
+    let finalProgress = existing.progress || 0;
+
+    // Automatic Task Progress Logic:
+    // ASSIGNED ('todo') -> 0%
+    // IN PROGRESS ('in_progress') -> 0–5% (default 5%)
+    // COMPLETED ('done') -> 100%
+    if (finalStatus === 'done') {
+      finalProgress = 100;
+    } else if (finalStatus === 'todo') {
+      finalProgress = 0;
+    } else if (finalStatus === 'in_progress') {
+      const p = progress !== undefined ? Number(progress) : (existing.progress > 0 && existing.progress <= 5 ? existing.progress : 5);
+      finalProgress = Math.min(5, Math.max(0, p));
+    } else if (progress !== undefined) {
+      finalProgress = Math.min(99, Math.max(0, Number(progress)));
     }
 
     // ── Weight ceiling & private/unmonitored zero weight ─────────────────
@@ -1343,6 +1458,7 @@ export async function updateTask(req, res, next) {
 
     // ── Task Assignment Restriction: A task can only be assigned to an employee who is already assigned to the parent Goal ──
     const effectiveParentGoalId = (effectiveIsStandalone || isCompanionTask) ? null : targetGoalId;
+    const canAutoAssignGoal = isElevated || isDirectManager || isAssigneeManager;
     if (effectiveParentGoalId) {
       const effectiveAssigneeIds = resolvedAssigneeIds !== undefined
         ? resolvedAssigneeIds
@@ -1351,7 +1467,7 @@ export async function updateTask(req, res, next) {
       for (const targetEmpId of effectiveAssigneeIds) {
         if (targetEmpId) {
           const isGoalAssignee = await isUserGoalAssignee(effectiveParentGoalId, targetEmpId, tenantId);
-          if (!isGoalAssignee) {
+          if (!isGoalAssignee && !canAutoAssignGoal) {
             return res.status(400).json({
               success: false,
               message: 'A task can only be assigned to an employee who is already assigned to the parent Goal.',
@@ -1470,7 +1586,53 @@ export async function updateTask(req, res, next) {
       req.user.id,
     );
 
-    const runUpdate = (tx) => {
+    const runUpdate = async (tx) => {
+      // Auto-assign reallocated employee to Goal if not already assigned
+      const newAssigneeId = employeeId !== undefined ? employeeId : (resolvedAssigneeIds?.[0]);
+      if (effectiveParentGoalId && newAssigneeId && newAssigneeId !== existing.employeeId) {
+        const wasGoalAssignee = await tx.goalAssignment.findUnique({
+          where: {
+            goalId_employeeId: {
+              goalId: effectiveParentGoalId,
+              employeeId: newAssigneeId,
+            },
+          },
+        });
+        if (!wasGoalAssignee) {
+          const parentGoal = await tx.goal.findUnique({
+            where: { id: effectiveParentGoalId },
+            select: { id: true, status: true, title: true },
+          });
+          if (parentGoal) {
+            await tx.goalAssignment.upsert({
+              where: {
+                goalId_employeeId: {
+                  goalId: effectiveParentGoalId,
+                  employeeId: newAssigneeId,
+                },
+              },
+              create: {
+                tenantId,
+                goalId: effectiveParentGoalId,
+                employeeId: newAssigneeId,
+                assignedById: req.user.id,
+                status: parentGoal.status || 'ASSIGNED',
+                progress: 0,
+              },
+              update: {},
+            });
+            await tx.goalAuditLog.create({
+              data: {
+                goalId: effectiveParentGoalId,
+                performedById: req.user.id,
+                action: 'PARTICIPANT_ADDED',
+                details: `${req.user.name} added employee to goal "${parentGoal.title || 'Goal'}" via task reassignment.`,
+              },
+            }).catch(() => null);
+          }
+        }
+      }
+
       const updateData = {
         ...actualDates.data,
         ...reviewFields,
@@ -1526,6 +1688,9 @@ export async function updateTask(req, res, next) {
     let goalProgress = 0;
     if (updated.goalId) {
       goalProgress = await recalculateGoalProgress(updated.goalId, updated.employeeId);
+      if (existing.employeeId && existing.employeeId !== updated.employeeId) {
+        await recalculateGoalProgress(updated.goalId, existing.employeeId);
+      }
       if (Array.isArray(updated.assigneeIds)) {
         for (const coId of updated.assigneeIds) {
           if (coId !== updated.employeeId) {
@@ -1646,6 +1811,16 @@ export async function updateTask(req, res, next) {
       goalId: updated.goalId,
       goalProgress,
     });
+    if (updated.goalId) {
+      emitToTenant(tenantId, 'goal:updated', {
+        goalId: updated.goalId,
+        goalProgress,
+      });
+      emitToTenant(tenantId, 'goal_updated', {
+        goalId: updated.goalId,
+        goalProgress,
+      });
+    }
 
     res.json(updated);
   } catch (err) {

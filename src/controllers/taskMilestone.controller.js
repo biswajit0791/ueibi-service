@@ -118,7 +118,7 @@ async function maybeUnlockTask(taskId) {
     taskId,
     performedById: task.employeeId,
     action: 'milestones_approved',
-    details: 'All milestones approved — task unlocked and moved to To Do.',
+    details: 'All milestones approved — task unlocked and moved to Assigned.',
   });
 }
 
