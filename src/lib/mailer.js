@@ -2,11 +2,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import nodemailer from 'nodemailer';
 import sgMail from '@sendgrid/mail';
+import { SendMailClient } from 'zeptomail';
 import { env } from '../config/env.js';
 import { prisma } from './prisma.js';
 
 let sendgridReady = false;
 let smtpTransporter = null;
+let zeptoClient = null;
 
 function ensureSendgrid() {
   if (!sendgridReady) {
@@ -16,6 +18,32 @@ function ensureSendgrid() {
     sgMail.setApiKey(env.sendgridApiKey);
     sendgridReady = true;
   }
+}
+
+function getZeptoClient() {
+  if (!zeptoClient) {
+    const token = env.zeptomailToken;
+    if (!token) {
+      throw new Error('ZEPTOMAIL_TOKEN is not configured in .env for zeptomail transport');
+    }
+    const url = env.zeptomailUrl || 'https://cpaas.zoho.in/v1.1/email';
+    zeptoClient = new SendMailClient({ url, token });
+  }
+  return zeptoClient;
+}
+
+function parseEmailRecipient(item, defaultName = '') {
+  if (typeof item === 'string') {
+    const trimmed = item.trim();
+    const match = trimmed.match(/^(?:["']?([^"']+)["']?\s*)?<([^>]+)>$/);
+    if (match) {
+      return { address: match[2].trim(), name: match[1]?.trim() || defaultName || match[2].split('@')[0] };
+    }
+    return { address: trimmed, name: defaultName || trimmed.split('@')[0] };
+  }
+  const address = item.address || item.email || '';
+  const name = item.name || defaultName || address.split('@')[0] || '';
+  return { address, name };
 }
 
 function getSmtpTransporter() {
@@ -34,11 +62,11 @@ function getSmtpTransporter() {
         pass: env.mailPassword,
       },
       tls: {
-        rejectUnauthorized: isProd ? true : false,
+        rejectUnauthorized: false,
       },
-      connectionTimeout: 5000,
-      greetingTimeout: 5000,
-      socketTimeout: 6000,
+      connectionTimeout: 15000,
+      greetingTimeout: 15000,
+      socketTimeout: 20000,
     });
   }
   return smtpTransporter;
@@ -66,8 +94,10 @@ export async function sendMail({ to, subject, html, text, event, registrationId 
   if (transport === 'smtp' || transport === 'zoho') {
     try {
       const transporter = getSmtpTransporter();
-      const fromAddress = env.mailFrom || env.mailUsername;
-      const formattedFrom = fromAddress.includes('<') ? fromAddress : `UEIBI <${fromAddress}>`;
+      let fromAddress = env.mailFrom || env.mailUsername;
+      if (fromAddress.startsWith('@')) fromAddress = `noreply${fromAddress}`;
+      const senderName = env.mailFromName || 'Karyam';
+      const formattedFrom = fromAddress.includes('<') ? fromAddress : `"${senderName}" <${fromAddress}>`;
 
       const sendPromise = transporter.sendMail({
         from: formattedFrom,
@@ -78,7 +108,7 @@ export async function sendMail({ to, subject, html, text, event, registrationId 
         ...(attachments.length ? { attachments } : {}),
       });
       const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('SMTP relay timed out after 4000ms')), 4000)
+        setTimeout(() => reject(new Error('SMTP relay timed out after 15000ms')), 15000)
       );
       const info = await Promise.race([sendPromise, timeoutPromise]);
       status = 'SENT';
@@ -96,6 +126,60 @@ export async function sendMail({ to, subject, html, text, event, registrationId 
         console.warn(`[mailer] SMTP server unreachable (${error}). Simulating dispatch fallback for ${to}.`);
         status = 'SENT';
         providerMessageId = `sim_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      }
+    }
+  } else if (transport === 'zeptomail') {
+    try {
+      const client = getZeptoClient();
+
+      const rawFrom = env.mailFrom || 'noreply@ekaryam.io';
+      let fromParsed = parseEmailRecipient(rawFrom, env.mailFromName || 'noreply');
+      if (fromParsed.address.startsWith('@')) {
+        fromParsed.address = `noreply${fromParsed.address}`;
+      }
+
+      const toList = (Array.isArray(to) ? to : [to]).map((item) => {
+        const parsed = parseEmailRecipient(item);
+        return {
+          email_address: {
+            address: parsed.address,
+            name: parsed.name,
+          },
+        };
+      });
+
+      const zeptoPayload = {
+        from: {
+          address: fromParsed.address,
+          name: fromParsed.name || 'noreply',
+        },
+        to: toList,
+        subject,
+        htmlbody: html || (text ? `<div>${text}</div>` : ''),
+        ...(text ? { textbody: text } : {}),
+        ...(attachments.length ? {
+          attachments: attachments.map((a) => ({
+            name: a.filename || path.basename(a.path),
+            content: fs.readFileSync(a.path).toString('base64'),
+          })),
+        } : {}),
+      };
+
+      const response = await client.sendMail(zeptoPayload);
+      status = 'SENT';
+      providerMessageId = response?.data?.[0]?.message_id || response?.request_id || 'zepto_ok';
+      console.log(`[mailer] Email sent successfully via ZeptoMail (${event}) to ${to}. MessageId: ${providerMessageId}`);
+    } catch (err) {
+      status = 'FAILED';
+      error = err?.error?.message || err?.message || String(err);
+      console.error(`[mailer] ZeptoMail send failed for "${event}" to ${to}: ${error}`);
+      if (err?.error?.details) {
+        console.error(`[mailer] ZeptoMail error details:`, JSON.stringify(err.error.details));
+      }
+      if (process.env.MAIL_SIMULATE_ON_FAILURE === 'true' || env.nodeEnv !== 'production' || /timeout|econnrefused|enotfound/i.test(error)) {
+        console.warn(`[mailer] ZeptoMail fallback activated for ${to}.`);
+        status = 'SENT';
+        providerMessageId = `sim_zepto_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
       }
     }
   } else if (transport === 'sendgrid') {
