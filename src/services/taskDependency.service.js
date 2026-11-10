@@ -418,7 +418,7 @@ export async function approveDependency({
           taskId: dep.companionTaskId,
           performedById: user.id,
           action: 'approved',
-          details: `Dependency task approved by ${user.name}. Status set to To Do.`,
+          details: `Dependency task approved by ${user.name}. Status set to Assigned.`,
           previousValue: { changes: depAuditChanges },
         },
       });
@@ -766,7 +766,7 @@ export async function verifyDependency({
               field: 'status',
               label: 'Task Status',
               oldValue: 'Blocked',
-              newValue: 'To Do (Unblocked)',
+              newValue: 'Assigned (Unblocked)',
             }] : []),
           ],
         },

@@ -36,7 +36,7 @@ export function formatDateTime(val) {
 export function humanizeStatus(status) {
   if (!status) return 'Not set';
   const map = {
-    todo: 'To Do',
+    todo: 'Assigned',
     in_progress: 'In Progress',
     done: 'Done',
     completed: 'Completed',
