@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import { seedOrganizationStructures } from '../scripts/seed-organization-structures.js';
 
 const prisma = new PrismaClient();
 
@@ -44,6 +45,9 @@ async function main() {
     },
   });
   console.log('Created coupons: BDM100, BDM20');
+
+  // 3. Seed Organization Structures (Private Limited, Public Limited, LLP, etc.)
+  await seedOrganizationStructures();
 }
 
 main()

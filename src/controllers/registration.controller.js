@@ -161,6 +161,32 @@ export async function createRegistration(req, res, next) {
       return res.status(409).json({ error: 'A registration with this domain already exists' });
     }
 
+    // Validate organization structure: must exist and be actively enabled
+    let orgStructure = null;
+    if (data.organizationStructureId) {
+      orgStructure = await prisma.organizationStructure.findFirst({
+        where: { id: data.organizationStructureId, isActive: true },
+      });
+    }
+    if (!orgStructure && data.companyType) {
+      orgStructure = await prisma.organizationStructure.findFirst({
+        where: {
+          OR: [
+            { id: data.companyType },
+            { code: { equals: data.companyType, mode: 'insensitive' } },
+            { name: { equals: data.companyType, mode: 'insensitive' } },
+          ],
+          isActive: true,
+        },
+      });
+    }
+
+    if (!orgStructure) {
+      return res.status(400).json({
+        error: 'Invalid or inactive organization structure selected. Please refresh and select an active structure.',
+      });
+    }
+
     const passwordHash = await bcrypt.hash(data.password, 10);
     const tenantCode = generateTenantCode(data.companyName);
     const rawFinanceToken = generateRawToken();
@@ -169,7 +195,8 @@ export async function createRegistration(req, res, next) {
       const created = await tx.companyRegistration.create({
         data: {
           companyName: data.companyName,
-          companyType: data.companyType,
+          companyType: orgStructure.name,
+          organizationStructureId: orgStructure.id,
           domainName: normalizeDomain(data.domainName),
           tenantCode,
           fullName: data.fullName,

@@ -15,7 +15,8 @@ export const otpVerifySchema = z.object({
 export const registrationSchema = z
   .object({
     companyName: z.string().min(1),
-    companyType: z.enum(COMPANY_TYPES),
+    companyType: z.string().trim().min(1, 'Company type is required'),
+    organizationStructureId: z.string().trim().optional(),
     domainName: z.string().min(1),
     fullName: z.string().min(1),
     designation: z.enum(DESIGNATIONS),
