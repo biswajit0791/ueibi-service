@@ -48,7 +48,15 @@ export async function requestOtp(req, res, next) {
       },
     });
 
-    await sendMail({
+    // Prominently print OTP to console so developers and admins can view it in terminal / PM2 logs
+    console.log('\n======================================================');
+    console.log(`🔑 [AUTH/OTP] Generated Registration OTP`);
+    console.log(`📧 Recipient : ${email}`);
+    console.log(`🔐 OTP Code  : >>> ${otp} <<<`);
+    console.log(`⏱️  Expires   : In ${env.otpTtlMinutes} minutes (${otpExpiresAt.toISOString()})`);
+    console.log('======================================================\n');
+
+    const mailResult = await sendMail({
       to: email,
       subject: 'Your UEIBI verification code',
       text: `Your verification code is ${otp}. It expires in ${env.otpTtlMinutes} minutes.`,
@@ -56,7 +64,15 @@ export async function requestOtp(req, res, next) {
       event: 'OTP_REQUESTED',
     });
 
-    res.json({ message: 'OTP sent', expiresInSeconds: env.otpTtlMinutes * 60 });
+    if (mailResult?.status === 'FAILED') {
+      console.warn(`[AUTH/OTP] ⚠️ Email delivery failed for ${email}. OTP is printed above in console: ${otp}`);
+    }
+
+    res.json({
+      message: 'OTP sent',
+      expiresInSeconds: env.otpTtlMinutes * 60,
+      ...(process.env.NODE_ENV !== 'production' || process.env.EXPOSE_OTP === 'true' || mailResult?.status === 'FAILED' ? { otp } : {}),
+    });
   } catch (err) {
     next(err);
   }

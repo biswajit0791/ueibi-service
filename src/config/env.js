@@ -17,8 +17,11 @@ export const env = {
   frontendOrigin: process.env.FRONTEND_ORIGIN || "http://localhost:5173",
   backendUrl: (process.env.BACKEND_URL || process.env.API_URL || `http://localhost:${process.env.PORT || 4000}`).replace(/\/+$/, ''),
 
-  // Email (Zoho SMTP / SendGrid / Console)
+  // Email (Zoho ZeptoMail / SMTP / SendGrid / Console)
   mailTransport: process.env.MAIL_TRANSPORT || "smtp",
+  zeptomailUrl: process.env.ZEPTOMAIL_URL || "https://cpaas.zoho.in/v1.1/email",
+  zeptomailToken: process.env.ZEPTOMAIL_TOKEN || "",
+  mailFromName: process.env.MAIL_FROM_NAME || "noreply",
   mailHost: process.env.MAIL_HOST || "mail.ueibi.com",
   mailPort: parseInt(process.env.MAIL_PORT || "465", 10),
   mailEncryption: process.env.MAIL_ENCRYPTION || "ssl",
@@ -27,7 +30,7 @@ export const env = {
   mailFrom:
     process.env.MAIL_FROM_ADDRESS ||
     process.env.MAIL_FROM ||
-    "noreply@ueibi.com",
+    "noreply@ekaryam.io",
   sendgridApiKey: process.env.SENDGRID_API_KEY,
   ueibiNotifyEmail: process.env.UEIBI_NOTIFY_EMAIL || "ops@ueibi.local",
 
