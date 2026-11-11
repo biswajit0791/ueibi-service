@@ -23,12 +23,28 @@ export async function notifyStakeholders({
     ? env.ueibiNotifyEmail
     : (env.mailUsername || 'administrator@ueibi.com');
 
-  const recipients = [
+  const rawRecipients = [
     { email: registration.email, role: 'CMD_DIRECTOR' },
-    { email: registration.financeEmail, role: 'FINANCE' },
-    { email: registration.hrEmail, role: 'HR' },
+    { email: (!registration.financeNotRequired ? registration.financeEmail : null), role: 'FINANCE' },
+    { email: (!registration.hrNotRequired ? registration.hrEmail : null), role: 'HR' },
     { email: ueibiEmail, role: 'UEIBI' },
   ];
+
+  const seenEmails = new Set();
+  const recipients = [];
+  for (const r of rawRecipients) {
+    if (!r.email || typeof r.email !== 'string' || !r.email.trim()) continue;
+    const clean = r.email.trim().toLowerCase();
+    if (seenEmails.has(clean)) {
+      if (actionRole && r.role === actionRole) {
+        const idx = recipients.findIndex((x) => x.email.trim().toLowerCase() === clean);
+        if (idx !== -1) recipients[idx] = r;
+      }
+      continue;
+    }
+    seenEmails.add(clean);
+    recipients.push(r);
+  }
 
   await Promise.all(
     recipients.map(({ email, role }) => {

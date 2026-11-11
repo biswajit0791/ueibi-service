@@ -126,9 +126,10 @@ export async function activateTenantFromRegistration({
         },
       });
 
-      // 5. Create HR User (if distinct email)
+      // 5. Create HR User (if required and distinct email)
       let createdHr = null;
       if (
+        !registration.hrNotRequired &&
         registration.hrEmail &&
         registration.hrEmail.toLowerCase() !== registration.email.toLowerCase()
       ) {
@@ -147,12 +148,19 @@ export async function activateTenantFromRegistration({
         });
       }
 
-      // 6. Create Finance User (if distinct email)
+      // 6. Create Finance User (if required and distinct email)
       let createdFinance = null;
+      const hrEmailClean = (!registration.hrNotRequired && registration.hrEmail)
+        ? registration.hrEmail.trim().toLowerCase()
+        : null;
+      const finEmailClean = (!registration.financeNotRequired && registration.financeEmail)
+        ? registration.financeEmail.trim().toLowerCase()
+        : null;
+
       if (
-        registration.financeEmail &&
-        registration.financeEmail.toLowerCase() !== registration.email.toLowerCase() &&
-        registration.financeEmail.toLowerCase() !== registration.hrEmail.toLowerCase()
+        finEmailClean &&
+        finEmailClean !== registration.email.toLowerCase() &&
+        (!hrEmailClean || finEmailClean !== hrEmailClean)
       ) {
         const dummyHash = await bcrypt.hash(crypto.randomBytes(24).toString('hex'), 10);
         createdFinance = await tx.tenantUser.create({
@@ -165,6 +173,19 @@ export async function activateTenantFromRegistration({
             status: 'ACTIVE',
             mustChangePassword: true,
             designation: 'Finance Head',
+          },
+        });
+      } else if (
+        finEmailClean &&
+        hrEmailClean &&
+        finEmailClean === hrEmailClean &&
+        createdHr
+      ) {
+        // One employee manages both HR and Finance! Consume 1 licence and designate both responsibilities.
+        await tx.tenantUser.update({
+          where: { id: createdHr.id },
+          data: {
+            designation: 'HR & Finance Head',
           },
         });
       }

@@ -17,6 +17,7 @@ import { sendMail } from '../lib/mailer.js';
 import { renderOtpEmail } from '../lib/emailTemplates.js';
 import { computePricing, couponValidationError } from '../lib/pricing.js';
 import { getRegistrationConfig } from '../services/registrationConfig.service.js';
+import { computeRegistrationPricing, calculateLicenceBreakdown } from '../services/licenceCalculation.service.js';
 import {
   validateDomainSyntax,
   validateCompanyName,
@@ -48,25 +49,36 @@ export async function getPublicPricingPreview(req, res, next) {
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
-    const { licenseQuantity, couponCode } = parsed.data;
+    const {
+      cmdEmail,
+      hrEmail,
+      hrNotRequired,
+      financeEmail,
+      financeNotRequired,
+      additionalLicenses,
+      licenseQuantity,
+      couponCode,
+    } = parsed.data;
+
     const { coupon, error: couponError } = await lookupCoupon(couponCode);
 
-    const [unitPrice, gstRate, taxEnabled, minQty, maxQty] = await Promise.all([
-      getRegistrationConfig('LICENSE_UNIT_PRICE', env.licenseUnitPrice),
-      getRegistrationConfig('GST_RATE', env.gstRate),
-      getRegistrationConfig('TAX_ENABLED', true),
+    const [minQty, maxQty] = await Promise.all([
       getRegistrationConfig('MIN_LICENSE_QUANTITY', 1),
       getRegistrationConfig('MAX_LICENSE_QUANTITY', 10000),
     ]);
 
-    const effectiveGstRate = taxEnabled ? gstRate : 0;
-
-    const pricing = computePricing({
-      quantity: licenseQuantity,
-      unitPrice,
-      coupon,
-      gstRate: effectiveGstRate,
-    });
+    const pricing = await computeRegistrationPricing(
+      {
+        cmdEmail,
+        hrEmail,
+        hrNotRequired,
+        financeEmail,
+        financeNotRequired,
+        additionalLicenses,
+        licenseQuantity,
+      },
+      { coupon }
+    );
 
     res.json({
       ...pricing,
@@ -404,26 +416,25 @@ export async function createRegistration(req, res, next) {
     }
 
     // Purchase Configuration (CMD Controlled)
-    const [unitPrice, gstRate, taxEnabled, actionTokenTtlDays] = await Promise.all([
-      getRegistrationConfig('LICENSE_UNIT_PRICE', env.licenseUnitPrice),
-      getRegistrationConfig('GST_RATE', env.gstRate),
-      getRegistrationConfig('TAX_ENABLED', true),
-      getRegistrationConfig('ACTION_TOKEN_TTL_DAYS', env.actionTokenTtlDays),
-    ]);
+    const actionTokenTtlDays = await getRegistrationConfig('ACTION_TOKEN_TTL_DAYS', env.actionTokenTtlDays || 14);
 
-    const effectiveGstRate = taxEnabled ? gstRate : 0;
-    const licenseQuantity = data.licenseQuantity && data.licenseQuantity > 0 ? data.licenseQuantity : 10;
     const { coupon, error: couponError } = await lookupCoupon(data.couponCode);
     if (data.couponCode && couponError) {
       return res.status(400).json({ error: couponError });
     }
 
-    const pricing = computePricing({
-      quantity: licenseQuantity,
-      unitPrice,
-      coupon,
-      gstRate: effectiveGstRate,
-    });
+    const pricing = await computeRegistrationPricing(
+      {
+        cmdEmail: data.email,
+        hrEmail: data.hrEmail,
+        hrNotRequired: data.hrNotRequired,
+        financeEmail: data.financeEmail,
+        financeNotRequired: data.financeNotRequired,
+        additionalLicenses: data.additionalLicenses,
+        licenseQuantity: data.licenseQuantity,
+      },
+      { coupon }
+    );
 
     const passwordHash = await bcrypt.hash(data.password, 10);
     const tenantCode = generateTenantCode(data.companyName);
@@ -441,19 +452,22 @@ export async function createRegistration(req, res, next) {
           designation: data.designation,
           email: data.email,
           passwordHash,
-          financeEmail: data.financeEmail,
-          financeName: data.financeName || null,
-          hrEmail: data.hrEmail,
-          hrName: data.hrName || null,
-          licenseQuantity,
+          financeEmail: data.financeNotRequired ? null : (data.financeEmail ? data.financeEmail.trim() : null),
+          financeName: data.financeNotRequired ? null : (data.financeName ? data.financeName.trim() : null),
+          financeNotRequired: Boolean(data.financeNotRequired),
+          hrEmail: data.hrNotRequired ? null : (data.hrEmail ? data.hrEmail.trim() : null),
+          hrName: data.hrNotRequired ? null : (data.hrName ? data.hrName.trim() : null),
+          hrNotRequired: Boolean(data.hrNotRequired),
+          additionalLicenses: pricing.additionalLicenses,
+          licenseQuantity: pricing.totalLicenses,
           gstin: data.gstin || null,
           unitPrice: pricing.unitPrice,
           couponId: coupon?.id || null,
           discountAmount: pricing.discountAmount,
-          subtotalAmount: pricing.subtotal,
+          subtotalAmount: pricing.subtotalAmount,
           gstRate: pricing.gstRate,
           gstAmount: pricing.gstAmount,
-          totalAmount: pricing.total,
+          totalAmount: pricing.totalAmount,
           acceptedTermsAt: new Date(),
         },
       });
@@ -499,16 +513,24 @@ export async function createRegistration(req, res, next) {
       return created;
     });
 
-    await notifyStakeholders({
-      registration,
-      event: 'LEVEL1_SUBMITTED',
-      subject: `Company registration submitted: ${registration.companyName}`,
-      message: `${registration.fullName} (${registration.designation}) has submitted a company registration for ${registration.companyName}. It is now pending Finance review.`,
-      actionRole: 'FINANCE',
-      actionUrl: `${env.frontendOrigin}/finance/registrations/${rawFinanceToken}`,
-    });
+    if (!data.financeNotRequired) {
+      await notifyStakeholders({
+        registration,
+        event: 'LEVEL1_SUBMITTED',
+        subject: `Company registration submitted: ${registration.companyName}`,
+        message: `${registration.fullName} (${registration.designation}) has submitted a company registration for ${registration.companyName}. It is now pending Finance review.`,
+        actionRole: 'FINANCE',
+        actionUrl: `${env.frontendOrigin}/finance/registrations/${rawFinanceToken}`,
+      });
+    }
 
-    res.status(201).json({ id: registration.id, status: registration.status });
+    res.status(201).json({
+      id: registration.id,
+      status: registration.status,
+      directPayment: Boolean(data.financeNotRequired),
+      paymentToken: rawFinanceToken,
+      paymentUrl: `/finance/registrations/${rawFinanceToken}`,
+    });
   } catch (err) {
     next(err);
   }
