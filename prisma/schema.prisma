@@ -584,10 +584,13 @@ model CompanyRegistration {
   designation     String
   email           String   @unique
   passwordHash    String
-  financeEmail    String
+  financeEmail    String?
   financeName     String?
-  hrEmail         String
+  financeNotRequired Boolean @default(false)
+  hrEmail         String?
   hrName          String?
+  hrNotRequired   Boolean @default(false)
+  additionalLicenses Int @default(0)
   acceptedTermsAt DateTime
 
   // Level 2 — Finance

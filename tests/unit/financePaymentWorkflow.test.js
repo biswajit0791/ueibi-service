@@ -117,9 +117,9 @@ test('CMD Purchase Ownership & Finance Payment-Only Workflow Tests', async (t) =
     const dupCmdHr = { ...validPayload, hrEmail: 'vikram@acmetech.com' };
     assert.equal(registrationSchema.safeParse(dupCmdHr).success, false);
 
-    // Reject duplicate email between HR and Finance
+    // Support one employee managing both HR and Finance (1 person = 1 licence)
     const dupHrFin = { ...validPayload, financeEmail: 'meera@acmetech.com' };
-    assert.equal(registrationSchema.safeParse(dupHrFin).success, false);
+    assert.equal(registrationSchema.safeParse(dupHrFin).success, true);
 
     // Reject invalid GSTIN format
     const invalidGst = { ...validPayload, gstin: 'INVALID_GST' };

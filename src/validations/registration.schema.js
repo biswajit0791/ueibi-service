@@ -21,6 +21,12 @@ export const validateOfficialEmailSchema = z.object({
 });
 
 export const publicPricingPreviewSchema = z.object({
+  cmdEmail: z.string().trim().optional(),
+  hrEmail: z.string().trim().optional(),
+  hrNotRequired: z.coerce.boolean().optional().default(false),
+  financeEmail: z.string().trim().optional(),
+  financeNotRequired: z.coerce.boolean().optional().default(false),
+  additionalLicenses: z.coerce.number().int().min(0).optional().default(0),
   licenseQuantity: z.coerce.number().int().min(1, 'License quantity must be at least 1').default(10),
   couponCode: z.string().trim().optional().nullable(),
 });
@@ -83,32 +89,29 @@ export const registrationSchema = z
     confirmPassword: z.string().min(8, 'Confirm password must be at least 8 characters'),
 
     // Stakeholders (HR and Finance)
+    hrNotRequired: z.boolean().default(false),
     hrName: z
       .string()
       .trim()
-      .min(2, 'HR full name must be at least 2 characters')
       .max(100, 'HR full name cannot exceed 100 characters')
-      .refine((val) => validateFullName(val).valid, {
-        message: 'HR full name cannot be an email address, URL, or numbers-only',
-      })
       .optional()
-      .nullable(),
-    hrEmail: z.string().trim().email('Invalid HR Head email address'),
+      .nullable()
+      .or(z.literal('')),
+    hrEmail: z.string().trim().optional().nullable().or(z.literal('')),
 
+    financeNotRequired: z.boolean().default(false),
     financeName: z
       .string()
       .trim()
-      .min(2, 'Finance full name must be at least 2 characters')
       .max(100, 'Finance full name cannot exceed 100 characters')
-      .refine((val) => validateFullName(val).valid, {
-        message: 'Finance full name cannot be an email address, URL, or numbers-only',
-      })
       .optional()
-      .nullable(),
-    financeEmail: z.string().trim().email('Invalid Finance Head email address'),
+      .nullable()
+      .or(z.literal('')),
+    financeEmail: z.string().trim().optional().nullable().or(z.literal('')),
 
     // Purchase Configuration (CMD Controlled)
-    licenseQuantity: z.coerce.number().int().min(1, 'License quantity must be at least 1').default(10),
+    additionalLicenses: z.coerce.number().int().min(0, 'Additional licenses cannot be negative').default(0),
+    licenseQuantity: z.coerce.number().int().min(1, 'License quantity must be at least 1').optional(),
     gstin: z
       .string()
       .trim()
@@ -124,31 +127,83 @@ export const registrationSchema = z
     }),
     verificationToken: z.string().min(1, 'Valid email verification token is required'),
   })
-  .refine((data) => data.password === data.confirmPassword, {
-    message: 'Passwords do not match',
-    path: ['confirmPassword'],
-  })
-  .refine((data) => domainMatchesEmail(data.domainName, data.email), {
-    message: 'CMD email domain must match registered company domain exactly',
-    path: ['email'],
-  })
-  .refine((data) => domainMatchesEmail(data.domainName, data.hrEmail), {
-    message: 'HR email domain must match registered company domain exactly',
-    path: ['hrEmail'],
-  })
-  .refine((data) => domainMatchesEmail(data.domainName, data.financeEmail), {
-    message: 'Finance email domain must match registered company domain exactly',
-    path: ['financeEmail'],
-  })
-  .refine((data) => data.email.toLowerCase() !== data.hrEmail.toLowerCase(), {
-    message: 'HR email must be different from CMD official email',
-    path: ['hrEmail'],
-  })
-  .refine((data) => data.email.toLowerCase() !== data.financeEmail.toLowerCase(), {
-    message: 'Finance email must be different from CMD official email',
-    path: ['financeEmail'],
-  })
-  .refine((data) => data.hrEmail.toLowerCase() !== data.financeEmail.toLowerCase(), {
-    message: 'Finance email must be different from HR official email',
-    path: ['financeEmail'],
+  .superRefine((data, ctx) => {
+    if (data.password !== data.confirmPassword) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Passwords do not match',
+        path: ['confirmPassword'],
+      });
+    }
+
+    if (!domainMatchesEmail(data.domainName, data.email)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'CMD email domain must match registered company domain exactly',
+        path: ['email'],
+      });
+    }
+
+    // HR validation when not marked 'Not Required'
+    if (!data.hrNotRequired) {
+      const hr = (data.hrEmail || '').trim();
+      if (!hr) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'HR Head official email is required (or check "HR Department Not Required")',
+          path: ['hrEmail'],
+        });
+      } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(hr)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Invalid HR Head email address',
+          path: ['hrEmail'],
+        });
+      } else if (!domainMatchesEmail(data.domainName, hr)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'HR email domain must match registered company domain exactly',
+          path: ['hrEmail'],
+        });
+      }
+    }
+
+    // Finance validation when not marked 'Not Required'
+    if (!data.financeNotRequired) {
+      const fin = (data.financeEmail || '').trim();
+      if (!fin) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Finance Head official email is required (or check "Finance Department Not Required")',
+          path: ['financeEmail'],
+        });
+      } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fin)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Invalid Finance Head email address',
+          path: ['financeEmail'],
+        });
+      } else if (!domainMatchesEmail(data.domainName, fin)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Finance email domain must match registered company domain exactly',
+          path: ['financeEmail'],
+        });
+      }
+    }
+
+    if (!data.hrNotRequired && data.hrEmail && data.hrEmail.trim().toLowerCase() === data.email.trim().toLowerCase()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'HR email must be different from CMD official email (or select "HR Department Not Required")',
+        path: ['hrEmail'],
+      });
+    }
+    if (!data.financeNotRequired && data.financeEmail && data.financeEmail.trim().toLowerCase() === data.email.trim().toLowerCase()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Finance email must be different from CMD official email (or select "Finance Department Not Required")',
+        path: ['financeEmail'],
+      });
+    }
   });
