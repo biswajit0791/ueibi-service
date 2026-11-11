@@ -184,6 +184,46 @@ model OrganizationStructure {
   @@map("organization_structures")
 }
 
+model RegistrationConfiguration {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       String
+  dataType    String   @default("STRING") // NUMBER, STRING, BOOLEAN, PERCENT
+  category    String   // PRICING, TAX, OTP, ACTION_TOKEN
+  label       String
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  updatedBy   String?
+
+  audits RegistrationConfigurationAudit[]
+
+  @@index([category])
+  @@index([isActive])
+  @@map("registration_configurations")
+}
+
+model RegistrationConfigurationAudit {
+  id              String                     @id @default(cuid())
+  configurationId String?
+  configuration   RegistrationConfiguration? @relation(fields: [configurationId], references: [id], onDelete: SetNull)
+  key             String
+  oldValue        String?
+  newValue        String
+  category        String
+  reason          String?
+  changedBy       String?
+  ipAddress       String?
+  userAgent       String?
+  createdAt       DateTime                   @default(now())
+
+  @@index([key])
+  @@index([category])
+  @@index([createdAt])
+  @@map("registration_configuration_audits")
+}
+
 enum EmploymentType {
   PERMANENT
   CONTRACT
@@ -545,7 +585,9 @@ model CompanyRegistration {
   email           String   @unique
   passwordHash    String
   financeEmail    String
+  financeName     String?
   hrEmail         String
+  hrName          String?
   acceptedTermsAt DateTime
 
   // Level 2 — Finance

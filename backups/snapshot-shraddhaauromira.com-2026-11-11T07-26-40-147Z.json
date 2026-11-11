@@ -1,0 +1,487 @@
+{
+  "targetDomain": "shraddhaauromira.com",
+  "timestamp": "2026-11-11T07:26:40.148Z",
+  "tenant": {
+    "id": "cmwayzr4x000zl4s3ra33pyc3",
+    "companyName": "Shradha auromira",
+    "domainName": "shraddhaauromira.com",
+    "tenantCode": "shradha-auromira-f5e6",
+    "licenseLimit": 10,
+    "creditBalance": "0",
+    "isPlatform": false,
+    "status": "ACTIVE",
+    "planEndsAt": "2027-11-10T17:34:41.692Z",
+    "suspendedAt": null,
+    "suspendedReason": null,
+    "createdAt": "2026-11-10T17:34:41.693Z",
+    "updatedAt": "2026-11-10T17:34:41.693Z",
+    "registrationId": "cmwawxnyn0004l4s30cgfrtlz",
+    "registration": {
+      "id": "cmwawxnyn0004l4s30cgfrtlz",
+      "companyName": "Shradha auromira",
+      "companyType": "Private Limited",
+      "organizationStructureId": "cmwaqlyb10000uudohpmul5v0",
+      "domainName": "shraddhaauromira.com",
+      "tenantCode": "shradha-auromira-f5e6",
+      "fullName": "Chandra",
+      "designation": "CMD",
+      "email": "chandra@shraddhaauromira.com",
+      "passwordHash": "$2b$10$ndzszv6Rqscx3UQBhllIvuLsG6ylcXFUvIV.h3DjRbPAbJsuBg7iu",
+      "financeEmail": "pratik@shraddhaauromira.com",
+      "hrEmail": "nihar@shraddhaauromira.com",
+      "acceptedTermsAt": "2026-11-10T16:37:05.038Z",
+      "gstin": "dsfds332ew",
+      "licenseQuantity": 10,
+      "unitPrice": "3999",
+      "couponId": null,
+      "discountAmount": "0",
+      "subtotalAmount": "39990",
+      "gstRate": "0.18",
+      "gstAmount": "7198.2",
+      "totalAmount": "47188.2",
+      "paymentMethod": "CHEQUE",
+      "paymentReference": "CHQ-PENDING-MWAYNVUH",
+      "chequeNumber": null,
+      "chequeDate": null,
+      "transactionId": null,
+      "financeApprovedAt": "2026-11-10T17:25:27.929Z",
+      "activatedAt": "2026-11-10T17:34:41.690Z",
+      "status": "ACTIVE",
+      "createdAt": "2026-11-10T16:37:05.039Z",
+      "updatedAt": "2026-11-10T17:34:41.691Z"
+    }
+  },
+  "registration": {
+    "id": "cmwawxnyn0004l4s30cgfrtlz",
+    "companyName": "Shradha auromira",
+    "companyType": "Private Limited",
+    "organizationStructureId": "cmwaqlyb10000uudohpmul5v0",
+    "domainName": "shraddhaauromira.com",
+    "tenantCode": "shradha-auromira-f5e6",
+    "fullName": "Chandra",
+    "designation": "CMD",
+    "email": "chandra@shraddhaauromira.com",
+    "passwordHash": "$2b$10$ndzszv6Rqscx3UQBhllIvuLsG6ylcXFUvIV.h3DjRbPAbJsuBg7iu",
+    "financeEmail": "pratik@shraddhaauromira.com",
+    "hrEmail": "nihar@shraddhaauromira.com",
+    "acceptedTermsAt": "2026-11-10T16:37:05.038Z",
+    "gstin": "dsfds332ew",
+    "licenseQuantity": 10,
+    "unitPrice": "3999",
+    "couponId": null,
+    "discountAmount": "0",
+    "subtotalAmount": "39990",
+    "gstRate": "0.18",
+    "gstAmount": "7198.2",
+    "totalAmount": "47188.2",
+    "paymentMethod": "CHEQUE",
+    "paymentReference": "CHQ-PENDING-MWAYNVUH",
+    "chequeNumber": null,
+    "chequeDate": null,
+    "transactionId": null,
+    "financeApprovedAt": "2026-11-10T17:25:27.929Z",
+    "activatedAt": "2026-11-10T17:34:41.690Z",
+    "status": "ACTIVE",
+    "createdAt": "2026-11-10T16:37:05.039Z",
+    "updatedAt": "2026-11-10T17:34:41.691Z"
+  },
+  "users": [
+    {
+      "id": "cmwayzr550013l4s3r61cpqyp",
+      "email": "chandra@shraddhaauromira.com",
+      "name": "Chandra",
+      "role": "SUPER_ADMIN",
+      "tenantId": "cmwayzr4x000zl4s3ra33pyc3"
+    },
+    {
+      "id": "cmwayzr5a0017l4s3sumit2nf",
+      "email": "pratik@shraddhaauromira.com",
+      "name": "Finance Head",
+      "role": "FINANCE",
+      "tenantId": "cmwayzr4x000zl4s3ra33pyc3"
+    },
+    {
+      "id": "cmwayzr580015l4s3ybfrucyi",
+      "email": "nihar@shraddhaauromira.com",
+      "name": "HR Head",
+      "role": "HR",
+      "tenantId": "cmwayzr4x000zl4s3ra33pyc3"
+    },
+    {
+      "id": "cmwaz6hhd001ul4s3wbnruoyw",
+      "email": "test@user.com",
+      "name": "New User",
+      "role": "MANAGER",
+      "tenantId": "cmwayzr4x000zl4s3ra33pyc3"
+    },
+    {
+      "id": "cmwaz9poi001yl4s3894d58gt",
+      "email": "pravas@shraddhaauromira.com",
+      "name": "Pravas S",
+      "role": "EMPLOYEE",
+      "tenantId": "cmwayzr4x000zl4s3ra33pyc3"
+    }
+  ],
+  "identifiedReport": [
+    {
+      "table": "tasks",
+      "count": 0,
+      "description": "Tasks"
+    },
+    {
+      "table": "task_dependencies",
+      "count": 0,
+      "description": "Task dependencies"
+    },
+    {
+      "table": "dependency_audit_logs",
+      "count": 0,
+      "description": "Dependency audit logs"
+    },
+    {
+      "table": "task_milestones",
+      "count": 0,
+      "description": "Task milestones"
+    },
+    {
+      "table": "task_milestone_audits",
+      "count": 0,
+      "description": "Milestone audit logs"
+    },
+    {
+      "table": "task_audit_logs",
+      "count": 0,
+      "description": "Task audit logs"
+    },
+    {
+      "table": "task_comments",
+      "count": 0,
+      "description": "Task comments"
+    },
+    {
+      "table": "task_assignees",
+      "count": 0,
+      "description": "Task assignees"
+    },
+    {
+      "table": "sub_tasks",
+      "count": 0,
+      "description": "Sub tasks"
+    },
+    {
+      "table": "sub_task_audit_logs",
+      "count": 0,
+      "description": "Subtask audit logs"
+    },
+    {
+      "table": "goals",
+      "count": 0,
+      "description": "Goals"
+    },
+    {
+      "table": "goal_assignments",
+      "count": 0,
+      "description": "Goal assignments"
+    },
+    {
+      "table": "goal_audit_logs",
+      "count": 0,
+      "description": "Goal audit logs"
+    },
+    {
+      "table": "goal_comments",
+      "count": 0,
+      "description": "Goal comments"
+    },
+    {
+      "table": "policies",
+      "count": 0,
+      "description": "Policies"
+    },
+    {
+      "table": "policy_versions",
+      "count": 0,
+      "description": "Policy versions"
+    },
+    {
+      "table": "policy_assignments",
+      "count": 0,
+      "description": "Policy assignments"
+    },
+    {
+      "table": "policy_acceptances",
+      "count": 0,
+      "description": "Policy acceptances"
+    },
+    {
+      "table": "policy_audit_logs",
+      "count": 0,
+      "description": "Policy audit logs"
+    },
+    {
+      "table": "leave_requests",
+      "count": 0,
+      "description": "Leave requests"
+    },
+    {
+      "table": "leave_balances",
+      "count": 0,
+      "description": "Leave balances"
+    },
+    {
+      "table": "leave_types",
+      "count": 0,
+      "description": "Leave types"
+    },
+    {
+      "table": "leave_audit_logs",
+      "count": 0,
+      "description": "Leave audit logs"
+    },
+    {
+      "table": "leave_balance_adjustments",
+      "count": 0,
+      "description": "Leave adjustments"
+    },
+    {
+      "table": "wfh_policies",
+      "count": 0,
+      "description": "WFH policies"
+    },
+    {
+      "table": "wfh_balances",
+      "count": 0,
+      "description": "WFH balances"
+    },
+    {
+      "table": "appraisal_cycles",
+      "count": 0,
+      "description": "Appraisal cycles"
+    },
+    {
+      "table": "appraisal_parameters",
+      "count": 0,
+      "description": "Appraisal parameters"
+    },
+    {
+      "table": "performance_reviews",
+      "count": 0,
+      "description": "Performance reviews"
+    },
+    {
+      "table": "peer_nominations",
+      "count": 0,
+      "description": "Peer nominations"
+    },
+    {
+      "table": "peer_feedbacks",
+      "count": 0,
+      "description": "Peer feedbacks"
+    },
+    {
+      "table": "departments",
+      "count": 11,
+      "description": "Departments"
+    },
+    {
+      "table": "subscriptions",
+      "count": 1,
+      "description": "Subscriptions"
+    },
+    {
+      "table": "invoices",
+      "count": 0,
+      "description": "Invoices"
+    },
+    {
+      "table": "payments",
+      "count": 0,
+      "description": "Payments"
+    },
+    {
+      "table": "refunds",
+      "count": 0,
+      "description": "Refunds"
+    },
+    {
+      "table": "coupon_redemptions",
+      "count": 0,
+      "description": "Coupon redemptions"
+    },
+    {
+      "table": "wallet_transactions",
+      "count": 0,
+      "description": "Wallet transactions"
+    },
+    {
+      "table": "cxo_messages",
+      "count": 0,
+      "description": "CXO messages"
+    },
+    {
+      "table": "cxo_message_replies",
+      "count": 0,
+      "description": "CXO replies"
+    },
+    {
+      "table": "disputes",
+      "count": 0,
+      "description": "Disputes"
+    },
+    {
+      "table": "dispute_messages",
+      "count": 0,
+      "description": "Dispute messages"
+    },
+    {
+      "table": "dispute_subjects",
+      "count": 0,
+      "description": "Dispute subjects"
+    },
+    {
+      "table": "hub_events",
+      "count": 0,
+      "description": "Hub events"
+    },
+    {
+      "table": "gallery_posts",
+      "count": 0,
+      "description": "Gallery posts"
+    },
+    {
+      "table": "gallery_comments",
+      "count": 0,
+      "description": "Gallery comments"
+    },
+    {
+      "table": "gallery_likes",
+      "count": 0,
+      "description": "Gallery likes"
+    },
+    {
+      "table": "document_templates",
+      "count": 0,
+      "description": "Document templates"
+    },
+    {
+      "table": "generated_documents",
+      "count": 0,
+      "description": "Generated documents"
+    },
+    {
+      "table": "document_tokens",
+      "count": 0,
+      "description": "Document tokens"
+    },
+    {
+      "table": "tenant_settings",
+      "count": 1,
+      "description": "Tenant settings"
+    },
+    {
+      "table": "blood_groups",
+      "count": 0,
+      "description": "Blood groups"
+    },
+    {
+      "table": "goal_options",
+      "count": 0,
+      "description": "Goal options"
+    },
+    {
+      "table": "user_capabilities",
+      "count": 0,
+      "description": "User capabilities"
+    },
+    {
+      "table": "capability_audit_logs",
+      "count": 0,
+      "description": "Capability audit logs"
+    },
+    {
+      "table": "permission_audit_logs",
+      "count": 0,
+      "description": "Permission audit logs"
+    },
+    {
+      "table": "bank_details",
+      "count": 0,
+      "description": "User bank details"
+    },
+    {
+      "table": "work_histories",
+      "count": 0,
+      "description": "Work histories"
+    },
+    {
+      "table": "employee_educations",
+      "count": 0,
+      "description": "Educations"
+    },
+    {
+      "table": "exit_details",
+      "count": 0,
+      "description": "Exit details"
+    },
+    {
+      "table": "exit_clearances",
+      "count": 0,
+      "description": "Exit clearances"
+    },
+    {
+      "table": "password_reset_tokens",
+      "count": 2,
+      "description": "Password reset tokens"
+    },
+    {
+      "table": "notifications",
+      "count": 0,
+      "description": "Notifications"
+    },
+    {
+      "table": "messages",
+      "count": 0,
+      "description": "Direct chat messages"
+    },
+    {
+      "table": "followers",
+      "count": 0,
+      "description": "Followers"
+    },
+    {
+      "table": "tenant_users",
+      "count": 5,
+      "description": "Tenant User accounts"
+    },
+    {
+      "table": "tenants",
+      "count": 1,
+      "description": "Tenant root record"
+    },
+    {
+      "table": "registration_action_tokens",
+      "count": 2,
+      "description": "Registration tokens"
+    },
+    {
+      "table": "registration_verifications",
+      "count": 0,
+      "description": "Registration verifications"
+    },
+    {
+      "table": "notification_logs",
+      "count": 18,
+      "description": "Notification dispatch logs"
+    },
+    {
+      "table": "company_registrations",
+      "count": 1,
+      "description": "Company registration record"
+    },
+    {
+      "table": "email_verifications",
+      "count": 5,
+      "description": "OTP & Email verification challenges"
+    }
+  ]
+}

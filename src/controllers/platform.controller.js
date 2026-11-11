@@ -38,6 +38,7 @@ import {
   listPlatformAudit,
   PLATFORM_ACTIONS,
 } from '../services/platformAudit.service.js';
+import { getRegistrationConfig } from '../services/registrationConfig.service.js';
 
 /** Tenants that belong to customers — the internal platform tenant is not a company. */
 const CUSTOMER_TENANTS = { isPlatform: false };
@@ -1178,7 +1179,8 @@ export async function resendOnboardingLink(req, res, next) {
     }
 
     const rawToken = generateRawToken();
-    const expiresAt = new Date(Date.now() + env.actionTokenTtlDays * 24 * 60 * 60 * 1000);
+    const actionTokenTtlDays = await getRegistrationConfig('ACTION_TOKEN_TTL_DAYS', env.actionTokenTtlDays);
+    const expiresAt = new Date(Date.now() + actionTokenTtlDays * 24 * 60 * 60 * 1000);
 
     await prisma.$transaction(async (tx) => {
       await tx.registrationActionToken.create({

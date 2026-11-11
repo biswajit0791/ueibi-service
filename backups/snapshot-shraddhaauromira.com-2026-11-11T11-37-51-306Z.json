@@ -1,0 +1,74 @@
+{
+  "targetDomain": "shraddhaauromira.com",
+  "timestamp": "2026-11-11T11:37:51.306Z",
+  "tenant": null,
+  "registration": {
+    "id": "cmwc1g5wy0004uukovdre1rj5",
+    "companyName": "Shraddha Auromira",
+    "companyType": "Private Limited",
+    "organizationStructureId": "cmwaqlyb10000uudohpmul5v0",
+    "domainName": "shraddhaauromira.com",
+    "tenantCode": "shraddha-auromira-9ec5",
+    "fullName": "Chandra S Biswal",
+    "designation": "CMD",
+    "email": "chandra@shraddhaauromira.com",
+    "passwordHash": "$2b$10$LHDxTXlfGQFXHgVnULElAushh1IKofncXX49xQRDWqNf8QOD5InTe",
+    "financeEmail": "pratik@shraddhaauromira.com",
+    "financeName": "Pratik Parida",
+    "hrEmail": "nihar@shraddhaauromira.com",
+    "hrName": "Nihar Rout",
+    "acceptedTermsAt": "2026-11-11T11:31:12.747Z",
+    "gstin": null,
+    "licenseQuantity": 10,
+    "unitPrice": "3999",
+    "couponId": null,
+    "discountAmount": "0",
+    "subtotalAmount": "39990",
+    "gstRate": "0.18",
+    "gstAmount": "7198.2",
+    "totalAmount": "47188.2",
+    "paymentMethod": null,
+    "paymentReference": null,
+    "chequeNumber": null,
+    "chequeDate": null,
+    "transactionId": null,
+    "financeApprovedAt": null,
+    "activatedAt": null,
+    "status": "PENDING_FINANCE_REVIEW",
+    "createdAt": "2026-11-11T11:31:12.755Z",
+    "updatedAt": "2026-11-11T11:31:12.755Z"
+  },
+  "users": [],
+  "identifiedReport": [
+    {
+      "table": "tenant_users",
+      "count": 0,
+      "description": "Tenant User accounts"
+    },
+    {
+      "table": "registration_action_tokens",
+      "count": 1,
+      "description": "Registration tokens"
+    },
+    {
+      "table": "registration_verifications",
+      "count": 0,
+      "description": "Registration verifications"
+    },
+    {
+      "table": "notification_logs",
+      "count": 5,
+      "description": "Notification dispatch logs"
+    },
+    {
+      "table": "company_registrations",
+      "count": 1,
+      "description": "Company registration record"
+    },
+    {
+      "table": "email_verifications",
+      "count": 1,
+      "description": "OTP & Email verification challenges"
+    }
+  ]
+}

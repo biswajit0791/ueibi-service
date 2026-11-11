@@ -1,18 +1,13 @@
-export function normalizeDomain(input) {
-  if (!input) return '';
-  return input
-    .trim()
-    .toLowerCase()
-    .replace(/^https?:\/\//, '')
-    .replace(/^www\./, '')
-    .replace(/\/.*$/, '');
-}
-
-export function emailDomain(email) {
-  if (!email || !email.includes('@')) return '';
-  return email.trim().toLowerCase().split('@')[1] || '';
-}
-
-export function domainMatchesEmail(domainName, email) {
-  return normalizeDomain(domainName) === emailDomain(email);
-}
+export {
+  normalizeDomain,
+  emailDomain,
+  domainMatchesEmail,
+  validateCompanyName,
+  validateFullName,
+  validateDomainSyntax,
+  checkDomainMxRecords,
+  validateOfficialEmailMatch,
+  validatePassword,
+  validateGstin,
+  PUBLIC_WEBMAIL_DOMAINS,
+} from './mouValidation.js';
