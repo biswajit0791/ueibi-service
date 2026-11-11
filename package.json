@@ -15,6 +15,7 @@
     "prisma:studio": "prisma studio",
     "seed:platform-owner": "node scripts/seed-platform-owner.js",
     "seed:org-structures": "node scripts/seed-organization-structures.js",
+    "seed:reg-configs": "node scripts/seed-registration-configurations.js",
     "list-companies": "node list-companies.js",
     "reset-password": "node reset-password.js",
     "seed-users": "node seed-users.js",

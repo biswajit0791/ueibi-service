@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import { seedOrganizationStructures } from '../scripts/seed-organization-structures.js';
+import { seedRegistrationConfigurations } from '../scripts/seed-registration-configurations.js';
 
 const prisma = new PrismaClient();
 
@@ -48,6 +49,9 @@ async function main() {
 
   // 3. Seed Organization Structures (Private Limited, Public Limited, LLP, etc.)
   await seedOrganizationStructures();
+
+  // 4. Seed Dynamic Registration, Pricing, Tax & Security Configurations
+  await seedRegistrationConfigurations();
 }
 
 main()

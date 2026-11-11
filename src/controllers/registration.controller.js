@@ -15,7 +15,207 @@ import { generateTenantCode } from '../lib/slug.js';
 import { notifyStakeholders } from '../lib/notify.js';
 import { sendMail } from '../lib/mailer.js';
 import { renderOtpEmail } from '../lib/emailTemplates.js';
-import { otpRequestSchema, otpVerifySchema, registrationSchema } from '../validations/registration.schema.js';
+import { computePricing, couponValidationError } from '../lib/pricing.js';
+import { getRegistrationConfig } from '../services/registrationConfig.service.js';
+import {
+  validateDomainSyntax,
+  validateCompanyName,
+  checkDomainMxRecords,
+  validateOfficialEmailMatch,
+} from '../lib/mouValidation.js';
+import {
+  otpRequestSchema,
+  otpVerifySchema,
+  registrationSchema,
+  validateDomainSchema,
+  validateOfficialEmailSchema,
+  publicPricingPreviewSchema,
+} from '../validations/registration.schema.js';
+
+async function lookupCoupon(couponCode) {
+  if (!couponCode) return { coupon: null, error: null };
+  const coupon = await prisma.coupon.findUnique({ where: { code: couponCode } });
+  const error = couponValidationError(coupon);
+  return { coupon: error ? null : coupon, error };
+}
+
+/**
+ * Public pricing and coupon preview for CMD during MOU registration (Step 3).
+ */
+export async function getPublicPricingPreview(req, res, next) {
+  try {
+    const parsed = publicPricingPreviewSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    }
+    const { licenseQuantity, couponCode } = parsed.data;
+    const { coupon, error: couponError } = await lookupCoupon(couponCode);
+
+    const [unitPrice, gstRate, taxEnabled, minQty, maxQty] = await Promise.all([
+      getRegistrationConfig('LICENSE_UNIT_PRICE', env.licenseUnitPrice),
+      getRegistrationConfig('GST_RATE', env.gstRate),
+      getRegistrationConfig('TAX_ENABLED', true),
+      getRegistrationConfig('MIN_LICENSE_QUANTITY', 1),
+      getRegistrationConfig('MAX_LICENSE_QUANTITY', 10000),
+    ]);
+
+    const effectiveGstRate = taxEnabled ? gstRate : 0;
+
+    const pricing = computePricing({
+      quantity: licenseQuantity,
+      unitPrice,
+      coupon,
+      gstRate: effectiveGstRate,
+    });
+
+    res.json({
+      ...pricing,
+      couponValid: Boolean(coupon),
+      couponCode: coupon?.code || null,
+      couponError,
+      minQuantity: minQty,
+      maxQuantity: maxQty,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Real-time AJAX validation for company domain.
+ * Validates syntax, normalization, MX records, and checks existing registrations.
+ */
+export async function validateCompanyDomain(req, res, next) {
+  try {
+    const parsed = validateDomainSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        valid: false,
+        error: 'Validation failed',
+        details: parsed.error.issues,
+      });
+    }
+
+    const { domainName, companyName } = parsed.data;
+
+    // Validate domain syntax and reject public webmail providers
+    const domainCheck = validateDomainSyntax(domainName);
+    if (!domainCheck.valid) {
+      return res.status(400).json({
+        valid: false,
+        field: 'domainName',
+        error: domainCheck.message,
+      });
+    }
+
+    const normalizedDomain = domainCheck.normalizedDomain;
+
+    // If companyName is provided, also validate company name rules
+    if (companyName) {
+      const companyCheck = validateCompanyName(companyName);
+      if (!companyCheck.valid) {
+        return res.status(400).json({
+          valid: false,
+          field: 'companyName',
+          error: companyCheck.message,
+        });
+      }
+    }
+
+    // Check if domain is already registered in CompanyRegistration or active Tenant
+    const [existingReg, existingTenant] = await Promise.all([
+      prisma.companyRegistration.findFirst({
+        where: { domainName: { equals: normalizedDomain, mode: 'insensitive' } },
+      }),
+      prisma.tenant.findFirst({
+        where: { domainName: { equals: normalizedDomain, mode: 'insensitive' } },
+      }),
+    ]);
+
+    if (existingReg || existingTenant) {
+      return res.status(409).json({
+        valid: false,
+        field: 'domainName',
+        error: `The domain "${normalizedDomain}" is already registered in Karyam. Please sign in or contact support.`,
+      });
+    }
+
+    // Check DNS MX / host records
+    const dnsResult = await checkDomainMxRecords(normalizedDomain);
+    if (!dnsResult.valid) {
+      return res.status(400).json({
+        valid: false,
+        field: 'domainName',
+        error: dnsResult.message,
+      });
+    }
+
+    return res.json({
+      valid: true,
+      domainName: normalizedDomain,
+      mxVerified: dnsResult.hasMx,
+      message: 'Company domain is valid, active, and available for registration.',
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Real-time AJAX validation for official CMD contact email.
+ * Strictly verifies domain match with the Step 1 company domain and checks existing accounts.
+ */
+export async function validateOfficialEmail(req, res, next) {
+  try {
+    const parsed = validateOfficialEmailSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        valid: false,
+        error: 'Validation failed',
+        details: parsed.error.issues,
+      });
+    }
+
+    const { email, domainName } = parsed.data;
+
+    const emailCheck = validateOfficialEmailMatch(email, domainName);
+    if (!emailCheck.valid) {
+      return res.status(400).json({
+        valid: false,
+        field: 'email',
+        error: emailCheck.message,
+      });
+    }
+
+    const normalizedEmail = emailCheck.email;
+
+    // Check existing registration or existing active tenant user
+    const [existingReg, existingUser] = await Promise.all([
+      prisma.companyRegistration.findFirst({
+        where: { email: { equals: normalizedEmail, mode: 'insensitive' } },
+      }),
+      prisma.tenantUser.findFirst({
+        where: { email: { equals: normalizedEmail, mode: 'insensitive' } },
+      }),
+    ]);
+
+    if (existingReg || existingUser) {
+      return res.status(409).json({
+        valid: false,
+        field: 'email',
+        error: 'An account with this email address already exists in Karyam. Please sign in or use another company email.',
+      });
+    }
+
+    return res.json({
+      valid: true,
+      email: normalizedEmail,
+      message: 'Valid company email address.',
+    });
+  } catch (err) {
+    next(err);
+  }
+}
 
 export async function requestOtp(req, res, next) {
   try {
@@ -25,24 +225,39 @@ export async function requestOtp(req, res, next) {
     }
     const { email, domainName } = parsed.data;
 
-    if (!domainMatchesEmail(domainName, email)) {
+    const emailMatch = validateOfficialEmailMatch(email, domainName);
+    if (!emailMatch.valid) {
       return res.status(400).json({
-        error: `Domain name must match your email domain (e.g. ${email.split('@')[0]}@${normalizeDomain(domainName)})`,
+        error: emailMatch.message,
       });
     }
 
-    const existing = await prisma.companyRegistration.findUnique({ where: { email } });
-    if (existing) {
-      return res.status(409).json({ error: 'A registration with this email already exists' });
+    const [existingReg, existingUser] = await Promise.all([
+      prisma.companyRegistration.findFirst({
+        where: { email: { equals: email, mode: 'insensitive' } },
+      }),
+      prisma.tenantUser.findFirst({
+        where: { email: { equals: email, mode: 'insensitive' } },
+      }),
+    ]);
+
+    if (existingReg || existingUser) {
+      return res.status(409).json({ error: 'An account with this email already exists' });
     }
 
+    // Invalidate any previously unconsumed OTPs for this email to prevent reuse
+    await prisma.emailVerification.updateMany({
+      where: { email: { equals: email, mode: 'insensitive' }, consumedAt: null },
+      data: { consumedAt: new Date() },
+    });
+
     const otp = generateOtp();
-    const otpExpiresAt = new Date(Date.now() + env.otpTtlMinutes * 60 * 1000);
+    const otpExpiresAt = new Date(Date.now() + otpTtlMinutes * 60 * 1000);
 
     await prisma.emailVerification.create({
       data: {
         email,
-        domainName,
+        domainName: normalizeDomain(domainName),
         otpHash: hashOtp(otp),
         otpExpiresAt,
       },
@@ -53,14 +268,14 @@ export async function requestOtp(req, res, next) {
     console.log(`🔑 [AUTH/OTP] Generated Registration OTP`);
     console.log(`📧 Recipient : ${email}`);
     console.log(`🔐 OTP Code  : >>> ${otp} <<<`);
-    console.log(`⏱️  Expires   : In ${env.otpTtlMinutes} minutes (${otpExpiresAt.toISOString()})`);
+    console.log(`⏱️  Expires   : In ${otpTtlMinutes} minutes (${otpExpiresAt.toISOString()})`);
     console.log('======================================================\n');
 
     const mailResult = await sendMail({
       to: email,
       subject: 'Your UEIBI verification code',
-      text: `Your verification code is ${otp}. It expires in ${env.otpTtlMinutes} minutes.`,
-      html: renderOtpEmail({ code: otp, expiresMinutes: env.otpTtlMinutes }),
+      text: `Your verification code is ${otp}. It expires in ${otpTtlMinutes} minutes.`,
+      html: renderOtpEmail({ code: otp, expiresMinutes: otpTtlMinutes }),
       event: 'OTP_REQUESTED',
     });
 
@@ -70,7 +285,7 @@ export async function requestOtp(req, res, next) {
 
     res.json({
       message: 'OTP sent',
-      expiresInSeconds: env.otpTtlMinutes * 60,
+      expiresInSeconds: otpTtlMinutes * 60,
       ...(process.env.NODE_ENV !== 'production' || process.env.EXPOSE_OTP === 'true' || mailResult?.status === 'FAILED' ? { otp } : {}),
     });
   } catch (err) {
@@ -97,7 +312,8 @@ export async function verifyOtp(req, res, next) {
     if (challenge.otpExpiresAt.getTime() < Date.now()) {
       return res.status(400).json({ error: 'OTP has expired' });
     }
-    if (challenge.attempts >= env.otpMaxAttempts) {
+    const maxAttempts = await getRegistrationConfig('OTP_MAX_ATTEMPTS', env.otpMaxAttempts);
+    if (challenge.attempts >= maxAttempts) {
       return res.status(429).json({ error: 'Too many incorrect attempts' });
     }
     if (!verifyOtpHash(otp, challenge.otpHash)) {
@@ -187,6 +403,28 @@ export async function createRegistration(req, res, next) {
       });
     }
 
+    // Purchase Configuration (CMD Controlled)
+    const [unitPrice, gstRate, taxEnabled, actionTokenTtlDays] = await Promise.all([
+      getRegistrationConfig('LICENSE_UNIT_PRICE', env.licenseUnitPrice),
+      getRegistrationConfig('GST_RATE', env.gstRate),
+      getRegistrationConfig('TAX_ENABLED', true),
+      getRegistrationConfig('ACTION_TOKEN_TTL_DAYS', env.actionTokenTtlDays),
+    ]);
+
+    const effectiveGstRate = taxEnabled ? gstRate : 0;
+    const licenseQuantity = data.licenseQuantity && data.licenseQuantity > 0 ? data.licenseQuantity : 10;
+    const { coupon, error: couponError } = await lookupCoupon(data.couponCode);
+    if (data.couponCode && couponError) {
+      return res.status(400).json({ error: couponError });
+    }
+
+    const pricing = computePricing({
+      quantity: licenseQuantity,
+      unitPrice,
+      coupon,
+      gstRate: effectiveGstRate,
+    });
+
     const passwordHash = await bcrypt.hash(data.password, 10);
     const tenantCode = generateTenantCode(data.companyName);
     const rawFinanceToken = generateRawToken();
@@ -204,7 +442,18 @@ export async function createRegistration(req, res, next) {
           email: data.email,
           passwordHash,
           financeEmail: data.financeEmail,
+          financeName: data.financeName || null,
           hrEmail: data.hrEmail,
+          hrName: data.hrName || null,
+          licenseQuantity,
+          gstin: data.gstin || null,
+          unitPrice: pricing.unitPrice,
+          couponId: coupon?.id || null,
+          discountAmount: pricing.discountAmount,
+          subtotalAmount: pricing.subtotal,
+          gstRate: pricing.gstRate,
+          gstAmount: pricing.gstAmount,
+          totalAmount: pricing.total,
           acceptedTermsAt: new Date(),
         },
       });
@@ -238,7 +487,7 @@ export async function createRegistration(req, res, next) {
           registrationId: created.id,
           role: 'FINANCE',
           tokenHash: hashToken(rawFinanceToken),
-          expiresAt: new Date(Date.now() + env.actionTokenTtlDays * 24 * 60 * 60 * 1000),
+          expiresAt: new Date(Date.now() + actionTokenTtlDays * 24 * 60 * 60 * 1000),
         },
       });
 

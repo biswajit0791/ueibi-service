@@ -32,4 +32,12 @@ export const authRateLimit = rateLimit({
   message: { error: 'Too many login attempts from this IP, please try again later.' },
 });
 
+export const mouValidationRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 150,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many validation requests, please wait a moment.' },
+});
+
 
