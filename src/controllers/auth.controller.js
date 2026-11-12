@@ -10,6 +10,13 @@ import { sendMail } from '../lib/mailer.js';
 import { renderPasswordResetEmail } from '../lib/emailTemplates.js';
 import { loginSchema, forgotPasswordSchema, resetPasswordSchema } from '../validations/auth.schema.js';
 import { tenantAccessDenial } from '../lib/tenantAccess.js';
+import {
+  is2FAEnforcedForUser,
+  initiateLoginChallenge,
+  verifyLoginChallenge,
+  resendLoginChallenge,
+  formatAuthUser,
+} from '../services/login2fa.service.js';
 
 export async function login(req, res, next) {
   try {
@@ -89,6 +96,15 @@ export async function login(req, res, next) {
         data: { email: normalizedEmail },
       }).catch(() => { });
       user.email = normalizedEmail;
+    }
+
+    // ── Two-Factor Authentication (2FA) Check ────────────────────────────────
+    // When enabled, do NOT issue tokens or session cookies at this stage.
+    // Instead, dispatch an OTP to the user's verified email and return a challenge.
+    const requires2FA = await is2FAEnforcedForUser(user);
+    if (requires2FA) {
+      const challengeData = await initiateLoginChallenge({ user, req });
+      return res.json(challengeData);
     }
 
     const userCapabilities = await loadCapabilities(user.id);
@@ -412,6 +428,68 @@ export async function resetPassword(req, res, next) {
       });
     }
     next(err);
+  }
+}
+
+/**
+ * Step 5: Verify Login OTP and issue authenticated session
+ * POST /api/auth/verify-login-otp
+ */
+export async function verifyLoginOtp(req, res, next) {
+  try {
+    const { challengeId, otp } = req.body || {};
+    if (!challengeId || typeof challengeId !== 'string') {
+      return res.status(400).json({ error: 'Challenge ID is required' });
+    }
+    if (!otp || typeof otp !== 'string') {
+      return res.status(400).json({ error: 'OTP code is required' });
+    }
+
+    const result = await verifyLoginChallenge({ challengeId, otp });
+
+    // Set HTTP-only session cookie
+    res.cookie('ueibi_session', result.token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+      maxAge: 24 * 60 * 60 * 1000, // 24 hours
+      path: '/',
+    });
+
+    return res.json({
+      token: result.token,
+      user: result.user,
+    });
+  } catch (err) {
+    return res.status(err.status || 400).json({
+      error: err.message || 'Verification failed',
+      code: err.code,
+      remainingAttempts: err.remainingAttempts,
+      isLocked: err.isLocked,
+    });
+  }
+}
+
+/**
+ * Step 6: Resend Login OTP
+ * POST /api/auth/resend-login-otp
+ */
+export async function resendLoginOtp(req, res, next) {
+  try {
+    const { challengeId } = req.body || {};
+    if (!challengeId || typeof challengeId !== 'string') {
+      return res.status(400).json({ error: 'Challenge ID is required' });
+    }
+
+    const result = await resendLoginChallenge({ challengeId, req });
+    return res.json(result);
+  } catch (err) {
+    return res.status(err.status || 400).json({
+      error: err.message || 'Failed to resend verification code',
+      cooldownSeconds: err.cooldownSeconds,
+      remainingSeconds: err.remainingSeconds,
+      maxResendAttempts: err.maxResendAttempts,
+    });
   }
 }
 

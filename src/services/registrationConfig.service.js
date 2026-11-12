@@ -136,12 +136,33 @@ export function validateConfigValue(key, value) {
     case 'LICENSE_PRICING_ACTIVE':
     case 'TAX_ENABLED':
     case 'TAX_ACTIVE':
-    case 'ACTION_TOKEN_ENABLED': {
+    case 'ACTION_TOKEN_ENABLED':
+    case 'LOGIN_2FA_ENABLED': {
       const boolVal = strVal.toLowerCase();
       if (boolVal !== 'true' && boolVal !== 'false') {
         throw new Error('Status value must be "true" or "false".');
       }
       return boolVal;
+    }
+    case 'LOGIN_2FA_ENFORCEMENT': {
+      const upper = strVal.toUpperCase();
+      if (upper !== 'MANDATORY' && upper !== 'OPTIONAL') {
+        throw new Error('2FA Enforcement Mode must be MANDATORY or OPTIONAL.');
+      }
+      return upper;
+    }
+    case 'LOGIN_2FA_ROLES': {
+      if (!strVal) {
+        throw new Error('2FA Enforced Roles cannot be empty (use "ALL" or comma-separated roles).');
+      }
+      return strVal.toUpperCase();
+    }
+    case 'LOGIN_MAX_ACTIVE_CHALLENGES': {
+      const qty = parseInt(strVal, 10);
+      if (Number.isNaN(qty) || qty < 1 || qty > 50) {
+        throw new Error('Max Active Login Challenges must be between 1 and 50.');
+      }
+      return String(qty);
     }
     default:
       return strVal;
