@@ -118,6 +118,7 @@ model Tenant {
   disputeMessages      DisputeMessage[]
   disputeSubjects      DisputeSubject[]
   oneOnOneMeetings     OneOnOneMeeting[]
+  loginChallenges      LoginChallenge[]
   userCapabilities     UserCapability[]
   bloodGroups          BloodGroup[]
   goalOptions          GoalOption[]
@@ -401,6 +402,7 @@ model TenantUser {
   dependencyAuditLogs   DependencyAuditLog[] @relation("DepAuditPerformer")
   createdEvents       HubEvent[]           @relation("EventCreator")
   passwordResetTokens PasswordResetToken[]
+  loginChallenges     LoginChallenge[]
   galleryPosts        GalleryPost[]        @relation("GalleryPostUploader")
   galleryLikes        GalleryLike[]        @relation("GalleryLikeUser")
   galleryComments     GalleryComment[]     @relation("GalleryCommentAuthor")
@@ -2314,6 +2316,37 @@ model PasswordResetToken {
   @@index([tokenHash])
   @@index([expiresAt])
   @@map("password_reset_tokens")
+}
+
+model LoginChallenge {
+  id                String      @id @default(cuid())
+  userId            String
+  user              TenantUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenantId          String?
+  tenant            Tenant?     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email             String
+  otpHash           String
+  otpExpiresAt      DateTime
+  attempts          Int         @default(0)
+  maxAttempts       Int         @default(5)
+  resendAttempts    Int         @default(0)
+  maxResendAttempts Int         @default(3)
+  lastResentAt      DateTime?
+  verifiedAt        DateTime?
+  consumedAt        DateTime?
+  isLocked          Boolean     @default(false)
+  purpose           String      @default("LOGIN_2FA")
+  ipAddress         String?
+  userAgent         String?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  @@index([email])
+  @@index([userId])
+  @@index([tenantId])
+  @@index([otpExpiresAt])
+  @@index([purpose])
+  @@map("login_challenges")
 }
 
 // ── Corporate Gallery ───────────────────────────────────────────────────────

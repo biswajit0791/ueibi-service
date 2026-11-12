@@ -104,6 +104,54 @@ export function renderOtpEmail({ code, expiresMinutes }) {
 }
 
 /**
+ * Login Two-Factor Authentication (2FA) Email Template
+ */
+export function renderLogin2FAEmail({ code, expiresMinutes = 10, userName = null, ipAddress = null, userAgent = null }) {
+  const greeting = userName ? `Hello ${userName},` : 'Hello,';
+  const contentHtml = `
+    <div style="text-align: center; margin-bottom: 24px;">
+      <div style="display: inline-block; width: 52px; height: 52px; background-color: #ede9fe; border-radius: 50%; margin-bottom: 16px; line-height: 52px; text-align: center;">
+        <span style="font-size: 26px; color: #6366f1;">🔐</span>
+      </div>
+      <h1 style="margin: 0 0 8px 0; font-size: 22px; font-weight: 700; color: #0f172a;">Verify Your Identity</h1>
+      <p style="margin: 0; font-size: 15px; color: #475569; line-height: 1.5;">
+        ${greeting} A sign-in attempt was made for your Karyam account. Please use the verification code below to complete your login.
+      </p>
+    </div>
+
+    <!-- OTP Code Display Box -->
+    <div style="background-color: #f8fafc; border: 2px dashed #818cf8; border-radius: 12px; padding: 24px; text-align: center; margin: 24px 0;">
+      <span style="display: block; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: #64748b; margin-bottom: 8px;">Login Verification Code</span>
+      <span style="font-family: 'SF Mono', Consolas, Monaco, monospace; font-size: 38px; font-weight: 800; letter-spacing: 10px; color: #4f46e5; margin-left: 10px;">${code}</span>
+    </div>
+
+    <div style="background-color: #fffbe0; border-left: 4px solid #eab308; padding: 12px 16px; border-radius: 4px; margin-bottom: 20px;">
+      <p style="margin: 0; font-size: 13px; color: #854d0e; line-height: 1.5;">
+        ⏱️ This code will expire in <strong>${expiresMinutes} minutes</strong>. <strong>Never share this code</strong> with anyone, including Karyam support personnel.
+      </p>
+    </div>
+
+    ${ipAddress || userAgent ? `
+    <div style="background-color: #f1f5f9; border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; font-size: 12px; color: #64748b; text-align: left;">
+      <div style="font-weight: 600; margin-bottom: 4px; color: #334155;">Login Request Details:</div>
+      ${ipAddress ? `<div><strong>IP Address:</strong> ${ipAddress}</div>` : ''}
+      ${userAgent ? `<div><strong>Device / Browser:</strong> ${userAgent}</div>` : ''}
+    </div>
+    ` : ''}
+
+    <p style="margin: 0; font-size: 13px; color: #94a3b8; text-align: center; line-height: 1.5;">
+      If you did not initiate this login request, your password may have been compromised. We strongly recommend resetting your password immediately.
+    </p>
+  `;
+
+  return renderEmailWrapper({
+    title: 'Your Karyam Login Verification Code',
+    preheader: `Your login code is ${code}. Valid for ${expiresMinutes} minutes.`,
+    contentHtml,
+  });
+}
+
+/**
  * Level 1 Signup Submitted Email Template
  */
 export function renderLevel1SubmittedEmail({ registration, actionUrl = null, isActionRecipient = false }) {

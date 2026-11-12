@@ -163,6 +163,44 @@ export const DEFAULT_CONFIGURATIONS = [
     description: 'Master toggle for action token link generation.',
     isActive: true,
   },
+
+  // ── Login Security & Two-Factor Authentication (2FA) ──
+  {
+    key: 'LOGIN_2FA_ENABLED',
+    value: 'true',
+    dataType: 'BOOLEAN',
+    category: 'SECURITY',
+    label: 'Email Two-Factor Authentication (2FA)',
+    description: 'Require email OTP verification on user login before issuing authenticated sessions.',
+    isActive: true,
+  },
+  {
+    key: 'LOGIN_2FA_ENFORCEMENT',
+    value: 'MANDATORY',
+    dataType: 'STRING',
+    category: 'SECURITY',
+    label: '2FA Enforcement Mode',
+    description: 'MANDATORY enforces 2FA for all accounts. OPTIONAL allows users without 2FA enforcement to bypass.',
+    isActive: true,
+  },
+  {
+    key: 'LOGIN_2FA_ROLES',
+    value: 'ALL',
+    dataType: 'STRING',
+    category: 'SECURITY',
+    label: 'Enforced Roles',
+    description: 'ALL applies to all roles, or specify comma-separated roles e.g. PLATFORM_OWNER,CMD,HR,FINANCE,EMPLOYEE.',
+    isActive: true,
+  },
+  {
+    key: 'LOGIN_MAX_ACTIVE_CHALLENGES',
+    value: '5',
+    dataType: 'NUMBER',
+    category: 'SECURITY',
+    label: 'Maximum Active Login Challenges',
+    description: 'Maximum concurrent unexpired login challenges allowed per user account.',
+    isActive: true,
+  },
 ];
 
 /**
