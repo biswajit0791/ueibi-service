@@ -438,10 +438,6 @@ export async function inviteEmployee(req, res, next) {
       return { user: u, tenant: t, ...tokenData };
     });
 
-      const tokenData = await issueInvitePasswordToken(tx, u.id);
-      return { user: u, tenant: t, ...tokenData };
-    });
-
     const companyName = tenant?.companyName || 'your organization';
     const { html, text } = renderInvitationEmail({
       setupUrl,
