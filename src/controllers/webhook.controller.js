@@ -7,11 +7,12 @@
 import crypto from 'crypto';
 import { prisma } from '../lib/prisma.js';
 import { env } from '../config/env.js';
+import { activateTenantFromRegistration } from '../services/tenantActivation.service.js';
 
 export async function handleRazorpayWebhook(req, res) {
   try {
     const signature = req.headers['x-razorpay-signature'];
-    const secret = process.env.RAZORPAY_WEBHOOK_SECRET || env.RAZORPAY_KEY_SECRET;
+    const secret = process.env.RAZORPAY_WEBHOOK_SECRET || env.razorpayKeySecret;
 
     if (!signature || !secret) {
       return res.status(400).json({ error: 'Missing webhook signature or secret configuration' });
@@ -58,7 +59,41 @@ export async function handleRazorpayWebhook(req, res) {
       const amountInRupees = (paymentEntity?.amount || payload?.order?.entity?.amount || 0) / 100;
       const paymentRef = paymentEntity?.id || eventId;
 
-      // Match invoice by invoiceId note or registrationId
+      // 2a. Automatic Registration Activation if this payment is for MOU Onboarding
+      if (notes.registrationId) {
+        try {
+          const registration = await prisma.companyRegistration.findUnique({
+            where: { id: notes.registrationId },
+          });
+
+          if (registration && registration.status === 'PENDING_FINANCE_REVIEW') {
+            await prisma.companyRegistration.update({
+              where: { id: registration.id },
+              data: {
+                paymentMethod: 'ONLINE',
+                paymentReference: orderId,
+                transactionId: paymentRef,
+                razorpayOrderId: orderId,
+                razorpayPaymentId: paymentRef,
+                paymentVerifiedAt: new Date(),
+                financeApprovedAt: new Date(),
+              },
+            });
+
+            await activateTenantFromRegistration({
+              registrationId: registration.id,
+              paymentMethod: 'ONLINE',
+              paymentReference: orderId,
+              transactionId: paymentRef,
+              performedBy: 'WEBHOOK',
+            });
+          }
+        } catch (regErr) {
+          console.error('[WEBHOOK] Error activating registration from webhook:', regErr);
+        }
+      }
+
+      // 2b. Match invoice by invoiceId note or registrationId
       let invoice = null;
       if (notes.invoiceId) {
         invoice = await prisma.invoice.findUnique({ where: { id: notes.invoiceId } });

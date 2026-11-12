@@ -37,7 +37,7 @@ function getRazorpay() {
   return _razorpay;
 }
 
-async function resolveFinanceToken(req, res) {
+async function resolveFinanceToken(req, res, { allowActive = false } = {}) {
   const parsedParams = tokenParamSchema.safeParse(req.params);
   if (!parsedParams.success) {
     res.status(400).json({ error: 'Invalid parameters', details: parsedParams.error.issues });
@@ -53,6 +53,9 @@ async function resolveFinanceToken(req, res) {
     return null;
   }
   const { status } = actionToken.registration;
+  if (status === 'ACTIVE' && allowActive) {
+    return actionToken;
+  }
   if (status !== 'PENDING_FINANCE_REVIEW' && status !== 'PENDING_CHEQUE_CONFIRMATION') {
     res.status(410).json({ error: 'This registration has already been processed by Finance' });
     return null;
@@ -69,7 +72,7 @@ async function lookupCoupon(couponCode) {
 
 export async function getFinanceSummary(req, res, next) {
   try {
-    const actionToken = await resolveFinanceToken(req, res);
+    const actionToken = await resolveFinanceToken(req, res, { allowActive: true });
     if (!actionToken) return;
     const { registration } = actionToken;
 
@@ -80,6 +83,30 @@ export async function getFinanceSummary(req, res, next) {
     const gstRate = registration.gstRate ? Number(registration.gstRate) : env.gstRate;
     const gstAmount = registration.gstAmount ? Number(registration.gstAmount) : Math.round((subtotal - discountAmount) * gstRate * 100) / 100;
     const totalAmount = registration.totalAmount ? Number(registration.totalAmount) : (subtotal - discountAmount + gstAmount);
+    const onlinePaymentMode = env.razorpayKeyId.startsWith('rzp_test_') ? 'test' : 'live';
+
+    if (registration.status === 'ACTIVE') {
+      return res.json({
+        status: 'ACTIVE',
+        alreadyActive: true,
+        companyName: registration.companyName,
+        companyType: registration.companyType,
+        domainName: registration.domainName,
+        fullName: registration.fullName,
+        designation: registration.designation,
+        email: registration.email,
+        licenseQuantity,
+        totalAmount,
+        total: totalAmount,
+        paymentMethod: registration.paymentMethod || 'ONLINE',
+        paymentReference: registration.paymentReference,
+        transactionId: registration.transactionId,
+        razorpayOrderId: registration.razorpayOrderId,
+        razorpayPaymentId: registration.razorpayPaymentId,
+        onlinePaymentAvailable: onlinePaymentConfigured(),
+        onlinePaymentMode,
+      });
+    }
 
     res.json({
       status: registration.status,
@@ -108,6 +135,8 @@ export async function getFinanceSummary(req, res, next) {
       totalAmount,
       total: totalAmount,
       onlinePaymentAvailable: onlinePaymentConfigured(),
+      onlinePaymentMode,
+      onlinePaymentKeyId: env.razorpayKeyId || null,
     });
   } catch (err) {
     next(err);
@@ -267,24 +296,48 @@ export async function createOrder(req, res, next) {
 
     const amountInPaise = Math.round(pricing.total * 100);
     const receipt = `reg-${registration.id.slice(-8)}-${Date.now().toString(36)}`;
-
     const razorpay = getRazorpay();
-    const order = await razorpay.orders.create({
-      amount: amountInPaise,
-      currency: 'INR',
-      receipt,
-      notes: {
-        registrationId: registration.id,
-        companyName: registration.companyName,
-        licenseQuantity: String(quantity),
-      },
-    });
+
+    let order = null;
+    // Check if an uncaptured order already exists for this registration with identical amount
+    if (registration.razorpayOrderId) {
+      try {
+        const existingOrder = await razorpay.orders.fetch(registration.razorpayOrderId);
+        if (existingOrder && existingOrder.status === 'created' && existingOrder.amount === amountInPaise) {
+          order = existingOrder;
+        }
+      } catch (_) {
+        // Fallback to creating a new order
+      }
+    }
+
+    if (!order) {
+      order = await razorpay.orders.create({
+        amount: amountInPaise,
+        currency: 'INR',
+        receipt,
+        notes: {
+          registrationId: registration.id,
+          companyName: registration.companyName,
+          licenseQuantity: String(quantity),
+        },
+      });
+
+      await prisma.companyRegistration.update({
+        where: { id: registration.id },
+        data: {
+          razorpayOrderId: order.id,
+          paymentReference: order.id,
+        },
+      });
+    }
 
     res.json({
       orderId: order.id,
       amount: order.amount,
       currency: order.currency,
       keyId: env.razorpayKeyId,
+      mode: env.razorpayKeyId.startsWith('rzp_test_') ? 'test' : 'live',
     });
   } catch (err) {
     next(err);
@@ -298,19 +351,37 @@ export async function createOrder(req, res, next) {
 
 export async function verifyPayment(req, res, next) {
   try {
-    const actionToken = await resolveFinanceToken(req, res);
+    const actionToken = await resolveFinanceToken(req, res, { allowActive: true });
     if (!actionToken) return;
     const { registration } = actionToken;
-
-    if (registration.status !== 'PENDING_FINANCE_REVIEW') {
-      return res.status(409).json({ error: 'Registration is not pending Finance review' });
-    }
 
     const parsed = verifyPaymentSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
     const data = parsed.data;
+
+    // Idempotent return if already activated with this payment
+    if (registration.status === 'ACTIVE') {
+      if (
+        registration.razorpayPaymentId === data.razorpay_payment_id ||
+        registration.transactionId === data.razorpay_payment_id ||
+        registration.paymentReference === data.razorpay_order_id
+      ) {
+        return res.json({
+          status: 'ACTIVE',
+          alreadyActive: true,
+          paymentReference: data.razorpay_order_id,
+          transactionId: data.razorpay_payment_id,
+          message: 'Payment already verified and tenant active!',
+        });
+      }
+      return res.status(409).json({ error: 'This registration has already been activated' });
+    }
+
+    if (registration.status !== 'PENDING_FINANCE_REVIEW') {
+      return res.status(409).json({ error: 'Registration is not pending Finance review' });
+    }
 
     // ── 1. Cryptographic signature verification ──
     const expectedSig = crypto
@@ -331,7 +402,7 @@ export async function verifyPayment(req, res, next) {
       gstRate: registration.gstRate ? Number(registration.gstRate) : env.gstRate,
     });
 
-    // ── 3. Cross-check Razorpay order amount ──
+    // ── 3. Cross-check Razorpay order amount & registration ownership ──
     const razorpay = getRazorpay();
     const order = await razorpay.orders.fetch(data.razorpay_order_id);
     const expectedPaise = Math.round(pricing.total * 100);
@@ -342,7 +413,34 @@ export async function verifyPayment(req, res, next) {
       });
     }
 
-    // ── 4. Automatic Tenant Activation upon Verified Payment ──
+    if (order.notes?.registrationId && order.notes.registrationId !== registration.id) {
+      return res.status(400).json({
+        error: 'Order does not belong to this company registration',
+      });
+    }
+
+    if (registration.razorpayOrderId && registration.razorpayOrderId !== data.razorpay_order_id) {
+      return res.status(400).json({
+        error: `Order ID mismatch: expected ${registration.razorpayOrderId} but received ${data.razorpay_order_id}`,
+      });
+    }
+
+    // ── 4. Record payment details on registration ──
+    await prisma.companyRegistration.update({
+      where: { id: registration.id },
+      data: {
+        paymentMethod: 'ONLINE',
+        paymentReference: data.razorpay_order_id,
+        transactionId: data.razorpay_payment_id,
+        razorpayOrderId: data.razorpay_order_id,
+        razorpayPaymentId: data.razorpay_payment_id,
+        razorpaySignature: data.razorpay_signature,
+        paymentVerifiedAt: new Date(),
+        financeApprovedAt: new Date(),
+      },
+    });
+
+    // ── 5. Automatic Tenant Activation upon Verified Payment ──
     const activationResult = await activateTenantFromRegistration({
       registrationId: registration.id,
       paymentMethod: 'ONLINE',

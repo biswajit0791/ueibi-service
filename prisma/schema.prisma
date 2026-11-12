@@ -611,6 +611,12 @@ model CompanyRegistration {
   transactionId     String?
   financeApprovedAt DateTime?
 
+  // Razorpay Gateway Details
+  razorpayOrderId     String?
+  razorpayPaymentId   String?
+  razorpaySignature   String?
+  paymentVerifiedAt   DateTime?
+
   // Level 3 — HR
   activatedAt DateTime?
 

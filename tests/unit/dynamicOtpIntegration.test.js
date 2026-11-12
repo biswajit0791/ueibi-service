@@ -1,8 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-
-process.env.NODE_ENV = 'test';
-
 import express from 'express';
 import { prisma } from '../../src/lib/prisma.js';
 import registrationRoutes from '../../src/routes/registration.routes.js';
@@ -274,3 +271,4 @@ test('Dynamic Registration OTP Security Integration Tests', async (t) => {
     assert.match(verify2Data.error, /no pending otp/i);
   });
 });
+
