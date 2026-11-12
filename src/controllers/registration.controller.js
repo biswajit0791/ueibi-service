@@ -229,6 +229,49 @@ export async function validateOfficialEmail(req, res, next) {
   }
 }
 
+/**
+ * Public registration & OTP security settings for signup flow.
+ */
+export async function getPublicRegistrationSettings(req, res, next) {
+  try {
+    const [
+      otpTtlMinutes,
+      otpLength,
+      otpMaxAttempts,
+      otpCooldownSecs,
+      otpMaxResendAttempts,
+      unitPrice,
+      currency,
+      gstRate,
+      taxEnabled,
+    ] = await Promise.all([
+      getRegistrationConfig('OTP_TTL_MINUTES', 10),
+      getRegistrationConfig('OTP_LENGTH', 6),
+      getRegistrationConfig('OTP_MAX_ATTEMPTS', 5),
+      getRegistrationConfig('OTP_RESEND_COOLDOWN_SECONDS', 60),
+      getRegistrationConfig('OTP_MAX_RESEND_ATTEMPTS', 3),
+      getRegistrationConfig('LICENSE_UNIT_PRICE', 3999),
+      getRegistrationConfig('CURRENCY', 'INR'),
+      getRegistrationConfig('GST_RATE', 0.18),
+      getRegistrationConfig('TAX_ENABLED', true),
+    ]);
+
+    res.json({
+      otpTtlMinutes: Number(otpTtlMinutes) || 10,
+      otpLength: Number(otpLength) || 6,
+      otpMaxAttempts: Number(otpMaxAttempts) || 5,
+      otpResendCooldownSeconds: Number(otpCooldownSecs) || 60,
+      otpMaxResendAttempts: Number(otpMaxResendAttempts) || 3,
+      licenseUnitPrice: Number(unitPrice) || 3999,
+      currency: currency || 'INR',
+      gstRate: Number(gstRate) || 0.18,
+      taxEnabled: Boolean(taxEnabled),
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function requestOtp(req, res, next) {
   try {
     const parsed = otpRequestSchema.safeParse(req.body);
@@ -257,13 +300,61 @@ export async function requestOtp(req, res, next) {
       return res.status(409).json({ error: 'An account with this email already exists' });
     }
 
-    // Invalidate any previously unconsumed OTPs for this email to prevent reuse
-    await prisma.emailVerification.updateMany({
-      where: { email: { equals: email, mode: 'insensitive' }, consumedAt: null },
-      data: { consumedAt: new Date() },
+    // Dynamic OTP security parameters from Platform Owner configuration
+    const [otpTtlMinutes, otpLength, otpMaxAttempts, otpCooldownSecs, otpMaxResendAttempts] = await Promise.all([
+      getRegistrationConfig('OTP_TTL_MINUTES', 10),
+      getRegistrationConfig('OTP_LENGTH', 6),
+      getRegistrationConfig('OTP_MAX_ATTEMPTS', 5),
+      getRegistrationConfig('OTP_RESEND_COOLDOWN_SECONDS', 60),
+      getRegistrationConfig('OTP_MAX_RESEND_ATTEMPTS', 3),
+    ]);
+
+    // Check existing pending challenge
+    const latestChallenge = await prisma.emailVerification.findFirst({
+      where: {
+        email: { equals: email, mode: 'insensitive' },
+        consumedAt: null,
+        verifiedAt: null,
+      },
+      orderBy: { createdAt: 'desc' },
     });
 
-    const otp = generateOtp();
+    let resendCount = 0;
+    if (latestChallenge) {
+      const isStillActive = latestChallenge.otpExpiresAt.getTime() > Date.now();
+      if (isStillActive) {
+        // Enforce resend cooldown
+        const referenceTime = latestChallenge.lastResentAt || latestChallenge.createdAt;
+        const elapsedSecs = Math.floor((Date.now() - referenceTime.getTime()) / 1000);
+        if (elapsedSecs < otpCooldownSecs) {
+          const remaining = otpCooldownSecs - elapsedSecs;
+          return res.status(429).json({
+            error: `Please wait ${remaining} second${remaining === 1 ? '' : 's'} before requesting another OTP.`,
+            remainingSeconds: remaining,
+            cooldownSeconds: otpCooldownSecs,
+          });
+        }
+
+        // Enforce max resend attempts
+        if ((latestChallenge.resendAttempts || 0) >= otpMaxResendAttempts) {
+          return res.status(429).json({
+            error: `Maximum OTP resend limit (${otpMaxResendAttempts}) reached for this verification session. Please wait for the OTP to expire.`,
+            maxResendReached: true,
+            maxResendAttempts: otpMaxResendAttempts,
+          });
+        }
+        resendCount = (latestChallenge.resendAttempts || 0) + 1;
+      }
+
+      // Invalidate the previous active challenge so old code cannot be used
+      await prisma.emailVerification.update({
+        where: { id: latestChallenge.id },
+        data: { consumedAt: new Date() },
+      });
+    }
+
+    // Generate dynamic OTP of configured length
+    const otp = generateOtp(otpLength);
     const otpExpiresAt = new Date(Date.now() + otpTtlMinutes * 60 * 1000);
 
     await prisma.emailVerification.create({
@@ -272,15 +363,18 @@ export async function requestOtp(req, res, next) {
         domainName: normalizeDomain(domainName),
         otpHash: hashOtp(otp),
         otpExpiresAt,
+        resendAttempts: resendCount,
+        lastResentAt: new Date(),
       },
     });
 
     // Prominently print OTP to console so developers and admins can view it in terminal / PM2 logs
     console.log('\n======================================================');
     console.log(`🔑 [AUTH/OTP] Generated Registration OTP`);
-    console.log(`📧 Recipient : ${email}`);
-    console.log(`🔐 OTP Code  : >>> ${otp} <<<`);
-    console.log(`⏱️  Expires   : In ${otpTtlMinutes} minutes (${otpExpiresAt.toISOString()})`);
+    console.log(`📧 Recipient  : ${email}`);
+    console.log(`🔐 OTP Code   : >>> ${otp} <<< (${otpLength} digits)`);
+    console.log(`⏱️  Expires    : In ${otpTtlMinutes} minutes (${otpExpiresAt.toISOString()})`);
+    console.log(`🔄 Resend #   : ${resendCount} of ${otpMaxResendAttempts}`);
     console.log('======================================================\n');
 
     const mailResult = await sendMail({
@@ -296,8 +390,13 @@ export async function requestOtp(req, res, next) {
     }
 
     res.json({
-      message: 'OTP sent',
+      message: `OTP sent. Code expires in ${otpTtlMinutes} minutes.`,
       expiresInSeconds: otpTtlMinutes * 60,
+      otpTtlMinutes,
+      otpLength,
+      cooldownSeconds: otpCooldownSecs,
+      resendAttempts: resendCount,
+      maxResendAttempts: otpMaxResendAttempts,
       ...(process.env.NODE_ENV !== 'production' || process.env.EXPOSE_OTP === 'true' || mailResult?.status === 'FAILED' ? { otp } : {}),
     });
   } catch (err) {
@@ -314,39 +413,82 @@ export async function verifyOtp(req, res, next) {
     const { email, otp } = parsed.data;
 
     const challenge = await prisma.emailVerification.findFirst({
-      where: { email, consumedAt: null, verifiedAt: null },
+      where: {
+        email: { equals: email, mode: 'insensitive' },
+        consumedAt: null,
+        verifiedAt: null,
+      },
       orderBy: { createdAt: 'desc' },
     });
 
     if (!challenge) {
-      return res.status(400).json({ error: 'No pending OTP for this email' });
-    }
-    if (challenge.otpExpiresAt.getTime() < Date.now()) {
-      return res.status(400).json({ error: 'OTP has expired' });
-    }
-    const maxAttempts = await getRegistrationConfig('OTP_MAX_ATTEMPTS', env.otpMaxAttempts);
-    if (challenge.attempts >= maxAttempts) {
-      return res.status(429).json({ error: 'Too many incorrect attempts' });
-    }
-    if (!verifyOtpHash(otp, challenge.otpHash)) {
-      await prisma.emailVerification.update({
-        where: { id: challenge.id },
-        data: { attempts: { increment: 1 } },
-      });
-      return res.status(400).json({ error: 'Incorrect OTP' });
+      return res.status(400).json({ error: 'No pending OTP verification found for this email. Please request an OTP first.' });
     }
 
+    if (challenge.otpExpiresAt.getTime() < Date.now()) {
+      await prisma.emailVerification.update({
+        where: { id: challenge.id },
+        data: { consumedAt: new Date() },
+      });
+      return res.status(400).json({ error: 'OTP has expired. Please request a new verification code.', expired: true });
+    }
+
+    const otpMaxAttempts = await getRegistrationConfig('OTP_MAX_ATTEMPTS', 5);
+
+    if (challenge.attempts >= otpMaxAttempts) {
+      await prisma.emailVerification.update({
+        where: { id: challenge.id },
+        data: { consumedAt: new Date() },
+      });
+      return res.status(429).json({
+        error: `Too many incorrect attempts (${otpMaxAttempts}). This verification code has been locked. Please request a new OTP.`,
+        locked: true,
+      });
+    }
+
+    if (!verifyOtpHash(otp, challenge.otpHash)) {
+      const newAttempts = challenge.attempts + 1;
+      const isLocked = newAttempts >= otpMaxAttempts;
+      await prisma.emailVerification.update({
+        where: { id: challenge.id },
+        data: {
+          attempts: { increment: 1 },
+          ...(isLocked ? { consumedAt: new Date() } : {}),
+        },
+      });
+
+      if (isLocked) {
+        return res.status(429).json({
+          error: `Incorrect OTP. Maximum attempts (${otpMaxAttempts}) reached. This code is now locked. Please request a new OTP.`,
+          locked: true,
+          attemptsLeft: 0,
+        });
+      }
+
+      const remaining = otpMaxAttempts - newAttempts;
+      return res.status(400).json({
+        error: `Incorrect OTP. ${remaining} attempt${remaining === 1 ? '' : 's'} remaining.`,
+        attemptsLeft: remaining,
+      });
+    }
+
+    // Successful verification
     const verificationToken = generateRawToken();
     await prisma.emailVerification.update({
       where: { id: challenge.id },
       data: {
         verifiedAt: new Date(),
         verificationToken,
-        verificationTokenExpiresAt: new Date(Date.now() + 30 * 60 * 1000),
+        verificationTokenExpiresAt: new Date(Date.now() + 60 * 60 * 1000), // 1 hour validity
       },
     });
 
-    res.json({ verificationToken, expiresInSeconds: 30 * 60 });
+    res.json({
+      valid: true,
+      message: 'Email verified successfully.',
+      verificationToken,
+      expiresInSeconds: 60 * 60,
+    });
   } catch (err) {
     next(err);
   }

@@ -199,3 +199,4 @@ test('Registration Schema allows same email for HR and Finance (1 employee for b
   const parsed = registrationSchema.safeParse(validData);
   assert.equal(parsed.success, true, parsed.error ? JSON.stringify(parsed.error.issues) : '');
 });
+
