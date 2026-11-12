@@ -37,8 +37,8 @@ export const ROLE_CREATION_MAP = {
   HR: ['MANAGER', 'EMPLOYEE'],
   MANAGER: ['EMPLOYEE'],
   EMPLOYEE: [],
-  // Non-hierarchy roles get no creation rights by default
-  CMD: [],
+  // CMD (Chief Managing Director / Owner) has organizational administrative rights to assign leadership & operational roles
+  CMD: ['ADMIN', 'HR', 'FINANCE', 'MANAGER', 'EMPLOYEE'],
   FINANCE: [],
   STUDENT: [],
   MENTOR: [],

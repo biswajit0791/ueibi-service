@@ -46,20 +46,50 @@ export const listEmployeesQuerySchema = z.object({
   status: z.enum(['INVITED', 'ACTIVE', 'EXITED']).optional(),
 });
 
+export const validateFieldSchema = z.object({
+  field: z.string().min(1, "Field name is required"),
+  value: z.any(),
+  employeeIdToExclude: z.string().optional().nullable(),
+});
+
+const nameRegex = /^[\p{L}\s.'-]+$/u;
+export const employeeNameField = z.string().trim()
+  .min(2, "Name must be at least 2 characters")
+  .max(50, "Name cannot exceed 50 characters")
+  .refine(val => !/^\d+$/.test(val.replace(/[\s.'-]/g, '')), "Name cannot be numbers only")
+  .refine(val => (val.match(/[\p{L}]/gu) || []).length >= 2, "Name must contain at least 2 letters")
+  .refine(val => !/\d/.test(val), "Name cannot contain numbers")
+  .refine(val => nameRegex.test(val), "Name contains invalid characters");
+
+export const employeePhoneField = z.string().trim()
+  .refine(val => !val || !/[a-zA-Z]/.test(val), "Phone number cannot contain alphabetic letters")
+  .refine(val => {
+    if (!val) return true;
+    const digits = val.replace(/\D/g, '');
+    return digits.length >= 7 && digits.length <= 15;
+  }, "Phone number must contain between 7 and 15 digits")
+  .optional()
+  .nullable()
+  .or(z.literal(''));
+
+export const employeeDesignationField = z.string().trim()
+  .min(2, "Designation must be at least 2 characters")
+  .max(100, "Designation cannot exceed 100 characters");
+
 export const inviteEmployeeSchema = z.object({
   email: z.string().trim().toLowerCase().email("A valid email address is required"),
-  employeeId: z.string().trim().optional().nullable().or(z.literal('')),
-  empType: z.string().optional().nullable().or(z.literal('')),
-  firstName: z.string().trim().optional().nullable().or(z.literal('')),
-  lastName: z.string().trim().optional().nullable().or(z.literal('')),
-  name: z.string().trim().optional().nullable().or(z.literal('')),
+  employeeId: z.string().trim().max(30).optional().nullable().or(z.literal('')),
+  empType: z.enum(['PERMANENT', 'CONTRACT', 'PROBATION', 'INTERN', 'PART_TIME']).optional().nullable().or(z.literal('')),
+  firstName: employeeNameField.optional().nullable().or(z.literal('')),
+  lastName: employeeNameField.optional().nullable().or(z.literal('')),
+  name: z.string().trim().min(2).max(100).optional().nullable().or(z.literal('')),
   role: z.string().optional().nullable().or(z.literal('')),
-  designation: z.string().optional().nullable().or(z.literal('')),
-  department: z.string().optional().nullable().or(z.literal('')),
+  designation: employeeDesignationField.optional().nullable().or(z.literal('')),
+  department: z.string().trim().min(1, "Department is required").optional().nullable().or(z.literal('')),
   band: z.string().optional().nullable().or(z.literal('')),
   managerId: z.string().min(1).optional().nullable().or(z.literal('')),
   joinDate: z.string().optional().nullable().or(z.literal('')),
-  phone: z.string().optional().nullable().or(z.literal('')),
+  phone: employeePhoneField,
   pan: panSchema,
   aadhaar: aadhaarSchema,
   dob: z.string().optional().nullable().or(z.literal('')),
@@ -70,17 +100,17 @@ export const bulkInviteEmployeesSchema = z.object({
   employees: z.array(
     z.object({
       email: z.string().trim().toLowerCase().email("Valid email required"),
-      employeeId: z.string().trim().optional().nullable().or(z.literal('')),
+      employeeId: z.string().trim().max(30).optional().nullable().or(z.literal('')),
       empType: z.string().optional().nullable().or(z.literal('')),
       firstName: z.string().trim().optional().nullable().or(z.literal('')),
       lastName: z.string().trim().optional().nullable().or(z.literal('')),
       name: z.string().trim().optional().nullable().or(z.literal('')),
       role: z.string().optional().nullable().or(z.literal('')),
-      designation: z.string().optional().nullable().or(z.literal('')),
-      department: z.string().optional().nullable().or(z.literal('')),
+      designation: z.string().trim().optional().nullable().or(z.literal('')),
+      department: z.string().trim().optional().nullable().or(z.literal('')),
       joinDate: z.string().optional().nullable().or(z.literal('')),
       managerId: z.string().optional().nullable().or(z.literal('')),
-      phone: z.string().optional().nullable().or(z.literal('')),
+      phone: employeePhoneField,
     }).passthrough()
   ).min(1, "At least one employee must be provided"),
 });
@@ -114,9 +144,10 @@ const educationEntrySchema = z.object({
 // Explicit allow-list of fields an HR/Admin edit may change on an active employee.
 // Anything not listed here (passwordHash, status, role, isDeleted, tenantId, …) is ignored.
 export const updateEmployeeSchema = z.object({
-  name: z.string().min(2, "Name must be at least 2 characters").optional(),
-  employeeId: z.string().trim().optional().nullable().or(z.literal('')),
-  designation: z.string().min(2, "Designation is required").optional(),
+  name: employeeNameField.optional(),
+  email: z.string().trim().toLowerCase().email("A valid email address is required").optional(),
+  employeeId: z.string().trim().max(30).optional().nullable().or(z.literal('')),
+  designation: employeeDesignationField.optional(),
   department: z.string().optional(),
   band: z.string().optional().nullable(),
   officeLocation: z.string().optional().nullable(),
@@ -124,7 +155,7 @@ export const updateEmployeeSchema = z.object({
   managerId: z.string().min(1).optional().nullable(),
   joinDate: z.string().optional().nullable(),
   confirmationDate: z.string().optional().nullable(),
-  phone: z.string().min(10, "Phone must be at least 10 characters").optional().or(z.literal('')),
+  phone: employeePhoneField,
   personalEmail: z.string().email().optional().or(z.literal('')),
   gender: z.string().optional().nullable(),
   dob: z.string().optional().nullable(),

@@ -21,10 +21,23 @@ import {
   employeeIdOnlyParamSchema,
   listEmployeesQuerySchema,
   addLicenseSchema,
+  validateFieldSchema,
 } from '../validations/employee.schema.js';
 import { env } from '../config/env.js';
 import { canCreateRole, getAllowedRoles } from '../lib/roleHierarchy.js';
 import { validatePasswordStrength } from '../lib/passwordPolicy.js';
+import {
+  validateSingleField,
+  validateTenantEmail,
+  validateEmployeeName,
+  validateEmployeePhone,
+  validateEmployeeDesignation,
+  validateEmployeeType,
+  validateEmployeeId,
+  validateDepartment,
+  validateReportingManager,
+  validateRoleAssignment,
+} from '../lib/employeeValidation.js';
 import {
   getLicenseStats,
   assertLicenseAvailable,
@@ -183,62 +196,130 @@ export function normalizeEmploymentType(val) {
   return 'PERMANENT';
 }
 
+export async function validateEmployeeField(req, res, next) {
+  try {
+    const tenantId = req.tenantId;
+    const creatorRole = req.user?.role || 'EMPLOYEE';
+    const parsed = validateFieldSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        valid: false,
+        error: parsed.error.issues[0]?.message || 'Invalid validation request',
+      });
+    }
+
+    const result = await validateSingleField(tenantId, creatorRole, parsed.data);
+    if (!result.valid) {
+      return res.status(200).json({
+        valid: false,
+        error: result.error,
+      });
+    }
+
+    return res.status(200).json({
+      valid: true,
+      normalizedValue: result.value !== undefined ? result.value : parsed.data.value,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function inviteEmployee(req, res, next) {
   try {
+    const tenantId = req.tenantId;
+    const creatorRole = req.user.role;
+
     const parsed = inviteEmployeeSchema.safeParse(req.body || {});
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
     const { email, employeeId, empType, firstName, lastName, name, role, designation, department, band, managerId, joinDate, phone, pan, dob, feedbackRemarks } = parsed.data;
 
+    // 1. Strict Tenant Email Domain Validation & Email Uniqueness
+    const emailResult = await validateTenantEmail(email, tenantId);
+    if (!emailResult.valid) {
+      return res.status(400).json({ error: emailResult.error });
+    }
+    const cleanEmail = emailResult.value;
+
+    // 2. Name validation
+    if (firstName) {
+      const fnRes = validateEmployeeName(firstName, 'First Name');
+      if (!fnRes.valid) return res.status(400).json({ error: fnRes.error });
+    }
+    if (lastName) {
+      const lnRes = validateEmployeeName(lastName, 'Last Name');
+      if (!lnRes.valid) return res.status(400).json({ error: lnRes.error });
+    }
     const resolvedName = (firstName || lastName)
       ? `${firstName || ''} ${lastName || ''}`.trim()
       : (name || '').trim();
 
-    if (!resolvedName) {
-      return res.status(400).json({ error: 'Employee name is required' });
+    const nameRes = validateEmployeeName(resolvedName, 'Employee Name');
+    if (!nameRes.valid) {
+      return res.status(400).json({ error: nameRes.error });
     }
 
-    const tenantId = req.tenantId;
+    // 3. Designation validation (Required, 2-100 chars)
+    const desRes = validateEmployeeDesignation(designation);
+    if (!desRes.valid) {
+      return res.status(400).json({ error: desRes.error });
+    }
+    const cleanDesignation = desRes.value;
 
-    // ── Role-creation authorization ───────────────────────────────────────────
+    // 4. Department validation (Required, must exist and be active in tenant)
+    const deptRes = await validateDepartment(department, tenantId);
+    if (!deptRes.valid) {
+      return res.status(400).json({ error: deptRes.error });
+    }
+    const cleanDepartment = deptRes.departmentName;
+
+    // 5. Employee Type validation (Required)
+    const empTypeRes = validateEmployeeType(empType || 'PERMANENT');
+    if (!empTypeRes.valid) {
+      return res.status(400).json({ error: empTypeRes.error });
+    }
+    const cleanEmpType = empTypeRes.value;
+
+    // 6. Employee ID validation (if provided, alphanumeric + tenant unique)
+    let cleanEmployeeId = null;
+    if (employeeId && String(employeeId).trim()) {
+      const empIdRes = await validateEmployeeId(employeeId, tenantId);
+      if (!empIdRes.valid) {
+        return res.status(400).json({ error: empIdRes.error });
+      }
+      cleanEmployeeId = empIdRes.value;
+    }
+
+    // 7. Phone validation (if provided, reject letters)
+    let cleanPhone = null;
+    if (phone && String(phone).trim()) {
+      const phoneRes = validateEmployeePhone(phone);
+      if (!phoneRes.valid) {
+        return res.status(400).json({ error: phoneRes.error });
+      }
+      cleanPhone = phoneRes.value;
+    }
+
+    // 8. Role-creation authorization
     const targetRole = (role || 'EMPLOYEE').toUpperCase();
-
-    const validRoles = [
-      'SUPER_ADMIN', 'ADMIN', 'CMD', 'HR', 'FINANCE',
-      'MANAGER', 'EMPLOYEE', 'STUDENT', 'MENTOR',
-    ];
-    if (!validRoles.includes(targetRole)) {
-      return res.status(400).json({ error: `Invalid role: ${targetRole}` });
-    }
-
-    const creatorRole = req.user.role;
-    if (!canCreateRole(creatorRole, targetRole)) {
+    const roleRes = validateRoleAssignment(creatorRole, targetRole);
+    if (!roleRes.valid) {
       return res.status(403).json({
-        error: `Forbidden: ${creatorRole} cannot assign role ${targetRole}`,
+        error: roleRes.error,
         allowedRoles: getAllowedRoles(creatorRole),
       });
     }
 
+    // 9. Reporting Manager validation
     let resolvedManagerId = null;
-    if (managerId) {
-      const trimmed = String(managerId).trim();
-      const mgr = await prisma.tenantUser.findFirst({
-        where: {
-          tenantId,
-          isDeleted: false,
-          OR: [
-            { id: trimmed },
-            { name: { equals: trimmed, mode: 'insensitive' } },
-            { email: { equals: trimmed.toLowerCase(), mode: 'insensitive' } },
-          ],
-        },
-        select: { id: true },
-      });
-      if (mgr) {
-        resolvedManagerId = mgr.id;
+    if (managerId && String(managerId).trim()) {
+      const mgrRes = await validateReportingManager(managerId, tenantId);
+      if (!mgrRes.valid) {
+        return res.status(400).json({ error: mgrRes.error });
       }
-      // If manager name is not found, resolvedManagerId remains null (can be edited later)
+      resolvedManagerId = mgrRes.value;
     }
 
     const initialPlaceholder = 'INVITED_NO_PASS_' + crypto.randomBytes(16).toString('hex');
@@ -257,7 +338,7 @@ export async function inviteEmployee(req, res, next) {
     })() : null;
 
     const existing = await prisma.tenantUser.findUnique({
-      where: { email: email.trim().toLowerCase() },
+      where: { email: cleanEmail },
     });
 
     if (existing) {
@@ -268,13 +349,13 @@ export async function inviteEmployee(req, res, next) {
             data: {
               name: resolvedName,
               role: targetRole,
-              employeeId: employeeId ? employeeId.trim() : existing.employeeId,
-              empType: empType ? normalizeEmploymentType(empType) : existing.empType,
-              designation: designation ? designation.trim() : existing.designation,
-              department: department ? department.trim() : existing.department,
+              employeeId: cleanEmployeeId || existing.employeeId,
+              empType: cleanEmpType,
+              designation: cleanDesignation,
+              department: cleanDepartment,
               band: band || existing.band,
               managerId: resolvedManagerId || existing.managerId,
-              phone: phone ? phone.trim() : existing.phone,
+              phone: cleanPhone || existing.phone,
               pan: pan ? pan.trim().toUpperCase() : existing.pan,
               dob: parsedDob || existing.dob,
             },
@@ -293,11 +374,11 @@ export async function inviteEmployee(req, res, next) {
           expiresHours,
           name: resolvedName,
           companyName,
-          email,
+          email: cleanEmail,
         });
 
         await sendMail({
-          to: email,
+          to: cleanEmail,
           subject: `Invitation to join ${companyName} - Set Your Password`,
           text,
           html,
@@ -333,25 +414,29 @@ export async function inviteEmployee(req, res, next) {
       const u = await tx.tenantUser.create({
         data: {
           tenantId,
-          email: email.trim().toLowerCase(),
+          email: cleanEmail,
           passwordHash,
           name: resolvedName,
           role: targetRole,
           status: 'INVITED',
           mustChangePassword: true,
-          employeeId: employeeId ? employeeId.trim() : null,
-          empType: normalizeEmploymentType(empType),
-          designation: designation ? designation.trim() : 'Member',
-          department: department ? department.trim() : 'General',
+          employeeId: cleanEmployeeId,
+          empType: cleanEmpType,
+          designation: cleanDesignation,
+          department: cleanDepartment,
           band: band || undefined,
           managerId: resolvedManagerId,
           joinDate: parsedJoinDate,
-          phone: phone ? phone.trim() : null,
+          phone: cleanPhone,
           pan: pan ? pan.trim().toUpperCase() : null,
           dob: parsedDob,
           remarks: feedbackRemarks || null,
         },
       });
+
+      const tokenData = await issueInvitePasswordToken(tx, u.id);
+      return { user: u, tenant: t, ...tokenData };
+    });
 
       const tokenData = await issueInvitePasswordToken(tx, u.id);
       return { user: u, tenant: t, ...tokenData };
@@ -415,41 +500,115 @@ export async function bulkInviteEmployees(req, res, next) {
     const creatorRole = req.user.role;
     const items = parsed.data.employees;
 
-    const emailsSeen = new Set();
-    const batchDuplicates = [];
-    for (const emp of items) {
-      const em = emp.email.trim().toLowerCase();
-      if (emailsSeen.has(em)) {
-        batchDuplicates.push(em);
-      }
-      emailsSeen.add(em);
-    }
-    if (batchDuplicates.length > 0) {
+    // Fetch tenant to get official domainName
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { id: true, companyName: true, domainName: true },
+    });
+    if (!tenant || !tenant.domainName) {
       return res.status(400).json({
-        error: `Duplicate emails found within the import file: ${batchDuplicates.join(', ')}`,
+        error: 'Tenant domain is not configured or verified. Please contact administrator.',
       });
     }
 
-    const existingUsers = await prisma.tenantUser.findMany({
-      where: {
-        email: { in: Array.from(emailsSeen) },
-      },
-      select: { email: true, status: true },
-    });
-    if (existingUsers.length > 0) {
-      const existingEmails = existingUsers.map(u => u.email).join(', ');
-      return res.status(409).json({
-        error: `The following email(s) already exist in the system: ${existingEmails}`,
+    // Comprehensive per-row validation
+    const rowErrors = [];
+    const seenEmails = new Set();
+    const seenEmployeeIds = new Set();
+
+    for (let i = 0; i < items.length; i++) {
+      const emp = items[i];
+      const rowNum = i + 1;
+      const errors = [];
+
+      // 1. Email check
+      const em = (emp.email || '').trim().toLowerCase();
+      if (!em) {
+        errors.push('Email is required');
+      } else if (seenEmails.has(em)) {
+        errors.push(`Duplicate email "${em}" within this import file`);
+      } else {
+        seenEmails.add(em);
+        const emailRes = await validateTenantEmail(em, tenantId);
+        if (!emailRes.valid) {
+          errors.push(emailRes.error);
+        }
+      }
+
+      // 2. Name check
+      const fullName = (emp.firstName || emp.lastName)
+        ? `${emp.firstName || ''} ${emp.lastName || ''}`.trim()
+        : (emp.name || '').trim();
+      if (!fullName) {
+        errors.push('Employee name is required');
+      } else {
+        const nameRes = validateEmployeeName(fullName, 'Name');
+        if (!nameRes.valid) errors.push(nameRes.error);
+      }
+
+      // 3. Designation check
+      if (emp.designation && String(emp.designation).trim()) {
+        const desRes = validateEmployeeDesignation(emp.designation);
+        if (!desRes.valid) errors.push(desRes.error);
+      } else {
+        errors.push('Designation is required');
+      }
+
+      // 4. Department check
+      if (emp.department && String(emp.department).trim()) {
+        const deptRes = await validateDepartment(emp.department, tenantId);
+        if (!deptRes.valid) errors.push(deptRes.error);
+      } else {
+        errors.push('Department is required');
+      }
+
+      // 5. Employee ID check
+      if (emp.employeeId && String(emp.employeeId).trim()) {
+        const empId = String(emp.employeeId).trim();
+        if (seenEmployeeIds.has(empId.toLowerCase())) {
+          errors.push(`Duplicate employeeId "${empId}" within this import file`);
+        } else {
+          seenEmployeeIds.add(empId.toLowerCase());
+          const empIdRes = await validateEmployeeId(empId, tenantId);
+          if (!empIdRes.valid) errors.push(empIdRes.error);
+        }
+      }
+
+      // 6. Role check
+      const targetRole = (emp.role || 'EMPLOYEE').toUpperCase();
+      const roleRes = validateRoleAssignment(creatorRole, targetRole);
+      if (!roleRes.valid) {
+        errors.push(roleRes.error);
+      }
+
+      // 7. Phone check
+      if (emp.phone && String(emp.phone).trim()) {
+        const phoneRes = validateEmployeePhone(emp.phone);
+        if (!phoneRes.valid) errors.push(phoneRes.error);
+      }
+
+      if (errors.length > 0) {
+        rowErrors.push({
+          row: rowNum,
+          email: em || 'N/A',
+          name: fullName || 'N/A',
+          errors,
+        });
+      }
+    }
+
+    if (rowErrors.length > 0) {
+      return res.status(400).json({
+        error: `Validation failed for ${rowErrors.length} row(s) in the import file.`,
+        totalRows: items.length,
+        failedCount: rowErrors.length,
+        rowErrors,
       });
     }
 
     const createdUsers = await prisma.$transaction(async (tx) => {
       await assertBulkLicenseAvailable(tx, tenantId, items.length);
 
-      const tenant = await tx.tenant.findUnique({
-        where: { id: tenantId },
-        select: { companyName: true },
-      });
       const companyName = tenant?.companyName || 'your organization';
       // Resolve reporting managers by name, email, or id across the organization
       const existingTenantUsers = await tx.tenantUser.findMany({
@@ -1913,20 +2072,70 @@ export async function updateEmployee(req, res, next) {
       }
     }
 
-    // Validate a re-assigned reporting manager stays within the tenant.
+    // If email is being modified, ensure tenant domain and uniqueness
+    if (updates.email !== undefined && updates.email !== '' && updates.email !== existing.email) {
+      const emailRes = await validateTenantEmail(updates.email, tenantId, { excludeUserId: id });
+      if (!emailRes.valid) {
+        return res.status(400).json({ error: emailRes.error });
+      }
+      updates.email = emailRes.value;
+    }
+
+    // Name validation
+    if (updates.name !== undefined && updates.name !== '') {
+      const nameRes = validateEmployeeName(updates.name, 'Name');
+      if (!nameRes.valid) {
+        return res.status(400).json({ error: nameRes.error });
+      }
+      updates.name = nameRes.value;
+    }
+
+    // Designation validation
+    if (updates.designation !== undefined && updates.designation !== '') {
+      const desRes = validateEmployeeDesignation(updates.designation);
+      if (!desRes.valid) {
+        return res.status(400).json({ error: desRes.error });
+      }
+      updates.designation = desRes.value;
+    }
+
+    // Department validation
+    if (updates.department !== undefined && updates.department !== '') {
+      const deptRes = await validateDepartment(updates.department, tenantId);
+      if (!deptRes.valid) {
+        return res.status(400).json({ error: deptRes.error });
+      }
+      updates.department = deptRes.departmentName;
+    }
+
+    // Employee ID validation (tenant scoped uniqueness)
+    if (updates.employeeId !== undefined && updates.employeeId !== null && updates.employeeId !== '') {
+      const empIdRes = await validateEmployeeId(updates.employeeId, tenantId, { excludeUserId: id });
+      if (!empIdRes.valid) {
+        return res.status(400).json({ error: empIdRes.error });
+      }
+      updates.employeeId = empIdRes.value;
+    }
+
+    // Phone validation
+    if (updates.phone !== undefined && updates.phone !== null && updates.phone !== '') {
+      const phoneRes = validateEmployeePhone(updates.phone);
+      if (!phoneRes.valid) {
+        return res.status(400).json({ error: phoneRes.error });
+      }
+      updates.phone = phoneRes.value;
+    }
+
+    // Validate a re-assigned reporting manager stays within the tenant & avoids circular loops
     if (updates.managerId !== undefined) {
       if (updates.managerId === null || updates.managerId === '') {
         updates.managerId = null;
-      } else if (updates.managerId === id) {
-        return res.status(400).json({ error: 'An employee cannot be their own manager' });
       } else {
-        const mgr = await prisma.tenantUser.findFirst({
-          where: { id: updates.managerId, tenantId, isDeleted: false },
-          select: { id: true },
-        });
-        if (!mgr) {
-          return res.status(400).json({ error: 'Selected reporting manager was not found in this organization' });
+        const mgrRes = await validateReportingManager(updates.managerId, tenantId, { employeeId: id });
+        if (!mgrRes.valid) {
+          return res.status(400).json({ error: mgrRes.error });
         }
+        updates.managerId = mgrRes.value;
       }
     }
 

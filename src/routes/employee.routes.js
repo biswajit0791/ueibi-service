@@ -2,6 +2,7 @@ import { Router } from 'express';
 import {
   inviteEmployee,
   bulkInviteEmployees,
+  validateEmployeeField,
   getEligibleManagers,
   resendInvite,
   onboardEmployee,
@@ -43,8 +44,9 @@ import { authorize, authorizeRoleOrCapability } from '../middleware/rbac.js';
 const router = Router();
 
 // ── Active Employees ─────────────────────────────────────────────────────────
-router.post('/employees', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'MANAGER'), inviteEmployee);
-router.post('/employees/bulk-invite', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'MANAGER'), bulkInviteEmployees);
+router.post('/employees', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'MANAGER', 'CMD'), inviteEmployee);
+router.post('/employees/validate-field', requireAuth, requireTenant, validateEmployeeField);
+router.post('/employees/bulk-invite', requireAuth, requireTenant, authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'MANAGER', 'CMD'), bulkInviteEmployees);
 router.get('/employees/managers', requireAuth, requireTenant, getEligibleManagers);
 router.patch('/employees/onboard', requireAuth, requireTenant, onboardEmployee);
 router.get('/employees', requireAuth, requireTenant, listEmployees);
