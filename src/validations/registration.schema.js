@@ -46,7 +46,7 @@ export const otpRequestSchema = z
 
 export const otpVerifySchema = z.object({
   email: z.string().trim().email('Invalid email address format'),
-  otp: z.string().trim().length(6, 'OTP must be exactly 6 digits'),
+  otp: z.string().trim().min(4, 'OTP must be at least 4 digits').max(10, 'OTP cannot exceed 10 digits'),
 });
 
 export const registrationSchema = z

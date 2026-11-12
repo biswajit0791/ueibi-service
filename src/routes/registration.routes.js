@@ -6,10 +6,15 @@ import {
   validateCompanyDomain,
   validateOfficialEmail,
   getPublicPricingPreview,
+  getPublicRegistrationSettings,
 } from '../controllers/registration.controller.js';
 import { otpRateLimit, mouValidationRateLimit } from '../middleware/rateLimit.js';
 
 const router = Router();
+
+// Public Configuration Settings for Registration & OTP Security
+router.get('/public/mou/settings', mouValidationRateLimit, getPublicRegistrationSettings);
+router.get('/registrations/settings', mouValidationRateLimit, getPublicRegistrationSettings);
 
 // Real-time AJAX Validation Endpoints
 router.post('/public/mou/validate-company-domain', mouValidationRateLimit, validateCompanyDomain);

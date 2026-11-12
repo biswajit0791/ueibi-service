@@ -636,6 +636,8 @@ model EmailVerification {
   otpHash                    String
   otpExpiresAt               DateTime
   attempts                   Int       @default(0)
+  resendAttempts             Int       @default(0)
+  lastResentAt               DateTime?
   verifiedAt                 DateTime?
   verificationToken          String?   @unique
   verificationTokenExpiresAt DateTime?
