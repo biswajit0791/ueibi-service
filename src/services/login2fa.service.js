@@ -74,13 +74,18 @@ export function formatAuthUser(user, capabilities = []) {
  * Checks whether 2FA is enforced for a given user account based on Platform Owner settings.
  */
 export async function is2FAEnforcedForUser(user) {
+  // Temporary exception: bypass email OTP verification exclusively for PLATFORM_OWNER
+  const userRole = (user?.role || '').toUpperCase();
+  if (userRole === 'PLATFORM_OWNER') {
+    return false;
+  }
+
   const isEnabled = await getRegistrationConfig('LOGIN_2FA_ENABLED', true);
   if (!isEnabled) return false;
 
   const rolesConfig = await getRegistrationConfig('LOGIN_2FA_ROLES', 'ALL');
   if (rolesConfig && typeof rolesConfig === 'string' && rolesConfig.trim() !== 'ALL') {
     const roles = rolesConfig.split(',').map((r) => r.trim().toUpperCase());
-    const userRole = (user.role || '').toUpperCase();
     if (!roles.includes(userRole)) {
       return false;
     }
