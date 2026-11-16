@@ -742,6 +742,518 @@ export const DEFAULT_HIERARCHY_VISIBILITY = {
     canViewDeptFilters: false,
     canUseActions: false,
   },
+  STUDENT: {
+    canViewTree: false,
+    canViewLadder: false,
+    canViewMatrix: false,
+    canViewStats: false,
+    canViewDirectory: false,
+    canViewDeptFilters: false,
+    canUseActions: false,
+  },
+  MENTOR: {
+    canViewTree: false,
+    canViewLadder: false,
+    canViewMatrix: false,
+    canViewStats: false,
+    canViewDirectory: false,
+    canViewDeptFilters: false,
+    canUseActions: false,
+  },
+};
+
+export const SIDEBAR_MENU_CATALOG = [
+  // ── Category 1: Workspace & Core Navigation ──
+  {
+    key: 'dashboard',
+    label: 'Dashboard',
+    category: 'WORKSPACE_CORE',
+    categoryLabel: 'Workspace & Core Navigation',
+    path: '/uer/dashboard',
+    description: 'Primary corporate workspace & personal KPI overview',
+  },
+  {
+    key: 'hr_dashboard',
+    label: 'HR Dashboard',
+    category: 'WORKSPACE_CORE',
+    categoryLabel: 'Workspace & Core Navigation',
+    path: '/uer/hr-dashboard',
+    description: 'Workforce analytics, recruitment pipeline & HR overview',
+  },
+  {
+    key: 'hub',
+    label: 'Company Hub',
+    category: 'WORKSPACE_CORE',
+    categoryLabel: 'Workspace & Core Navigation',
+    path: '/uer/hub',
+    description: 'Corporate social hub, events, announcements & socials',
+  },
+  {
+    key: 'messages',
+    label: 'Messages',
+    category: 'WORKSPACE_CORE',
+    categoryLabel: 'Workspace & Core Navigation',
+    path: '/uer/messages',
+    description: 'Internal real-time 1-on-1 and team communication',
+  },
+  {
+    key: 'cxo_connect',
+    label: 'CXO Connect',
+    category: 'WORKSPACE_CORE',
+    categoryLabel: 'Workspace & Core Navigation',
+    path: '/uer/cxo-connect',
+    description: 'Direct communication channel between employees and leadership',
+  },
+
+  // ── Category 2: Workforce & Organization ──
+  {
+    key: 'team',
+    label: 'Team Directory',
+    category: 'WORKFORCE_ORG',
+    categoryLabel: 'Workforce & Organization',
+    path: '/uer/team',
+    description: 'Team structure, departmental reporting & downline visibility',
+  },
+  {
+    key: 'my_performance',
+    label: 'My Performance',
+    category: 'WORKFORCE_ORG',
+    categoryLabel: 'Workforce & Organization',
+    path: '/uer/team/my-performance',
+    description: 'Individual employee achievements, contributions & milestones',
+  },
+  {
+    key: 'employee_records',
+    label: 'Employee Records',
+    category: 'WORKFORCE_ORG',
+    categoryLabel: 'Workforce & Organization',
+    path: '/uer/employee-records',
+    description: 'Workforce registry, statutory records, license allocation & invitations',
+  },
+  {
+    key: 'role_hierarchy',
+    label: 'Role Hierarchy',
+    category: 'WORKFORCE_ORG',
+    categoryLabel: 'Workforce & Organization',
+    path: '/uer/role-hierarchy',
+    description: 'Organizational chart, role ladder, permission matrix & visibility controls',
+  },
+  {
+    key: 'exit_clearances',
+    label: 'Exit Clearances',
+    category: 'WORKFORCE_ORG',
+    categoryLabel: 'Workforce & Organization',
+    path: '/uer/exit-clearances',
+    description: 'Multi-department clearance sequence, asset handovers & exit reviews',
+  },
+
+  // ── Category 3: Operations & Execution ──
+  {
+    key: 'goals',
+    label: 'Goals',
+    category: 'OPERATIONS_EXEC',
+    categoryLabel: 'Operations & Execution',
+    path: '/uer/goals',
+    description: 'Quarterly and annual company goals, OKRs & weightage alignment',
+  },
+  {
+    key: 'tasks',
+    label: 'Task Board',
+    category: 'OPERATIONS_EXEC',
+    categoryLabel: 'Operations & Execution',
+    path: '/uer/tasks',
+    description: 'Task board, milestones, cross-team dependencies & execution locks',
+  },
+  {
+    key: 'leaves',
+    label: 'Leave & WFH',
+    category: 'OPERATIONS_EXEC',
+    categoryLabel: 'Operations & Execution',
+    path: '/uer/leaves',
+    description: 'Leave applications, WFH quota tracking, calendar & approvals',
+  },
+  {
+    key: 'document_templates',
+    label: 'Document Templates',
+    category: 'OPERATIONS_EXEC',
+    categoryLabel: 'Operations & Execution',
+    path: '/uer/document-templates',
+    description: 'Official corporate letters, legal notices, offer letters & templates',
+  },
+
+  // ── Category 4: Performance & Governance ──
+  {
+    key: 'policies',
+    label: 'Policy Compliance',
+    category: 'PERF_GOV',
+    categoryLabel: 'Performance & Governance',
+    path: '/uer/policies',
+    description: 'Company handbook, statutory policies, version tracking & employee acknowledgments',
+  },
+  {
+    key: 'reviews',
+    label: 'Appraisal & Reviews',
+    category: 'PERF_GOV',
+    categoryLabel: 'Performance & Governance',
+    path: '/uer/reviews',
+    description: 'Annual & quarterly appraisals, 2-stage reviews, and rating scales',
+  },
+  {
+    key: 'feedback',
+    label: '360 Feedback',
+    category: 'PERF_GOV',
+    categoryLabel: 'Performance & Governance',
+    path: '/uer/feedback',
+    description: 'Peer reviews, anonymous feedback, and cross-departmental evaluations',
+  },
+  {
+    key: 'reports',
+    label: 'Reports & Analytics',
+    category: 'PERF_GOV',
+    categoryLabel: 'Performance & Governance',
+    path: '/uer/reports',
+    description: 'Executive reporting, workforce KPIs, attendance & compliance analytics',
+  },
+
+  // ── Category 5: Company Administration ──
+  {
+    key: 'profile',
+    label: 'My Profile',
+    category: 'COMPANY_ADMIN',
+    categoryLabel: 'Company Administration',
+    path: '/uer/profile',
+    description: 'Personal profile, statutory details, security settings & emergency contacts',
+  },
+  {
+    key: 'departments',
+    label: 'Master Data (Departments)',
+    category: 'COMPANY_ADMIN',
+    categoryLabel: 'Company Administration',
+    path: '/uer/departments',
+    description: 'Department master list, blood groups & organization units',
+  },
+  {
+    key: 'company_settings',
+    label: 'Company Settings',
+    category: 'COMPANY_ADMIN',
+    categoryLabel: 'Company Administration',
+    path: '/uer/company-settings',
+    description: 'Company profile, branding appearance, working hours & alert configurations',
+  },
+
+  // ── Category 6: Academic & Career Platform ──
+  {
+    key: 'uskep_dashboard',
+    label: 'Student / Career Dashboard',
+    category: 'ACADEMIC_CAREER',
+    categoryLabel: 'Academic & Career Platform',
+    path: '/uskep/dashboard',
+    description: 'Academic portal dashboard for students and mentors',
+  },
+  {
+    key: 'uskep_assessments',
+    label: 'Skill Assessments',
+    category: 'ACADEMIC_CAREER',
+    categoryLabel: 'Academic & Career Platform',
+    path: '/uskep/assessments',
+    description: 'Technical and domain skill tests & certifications',
+  },
+  {
+    key: 'uskep_internships',
+    label: 'Internships',
+    category: 'ACADEMIC_CAREER',
+    categoryLabel: 'Academic & Career Platform',
+    path: '/uskep/internships',
+    description: 'Internship discovery and corporate applications',
+  },
+  {
+    key: 'uskep_mentorship',
+    label: 'Mentorship',
+    category: 'ACADEMIC_CAREER',
+    categoryLabel: 'Academic & Career Platform',
+    path: '/uskep/mentorship',
+    description: 'Mentor sessions and guidance portal',
+  },
+  {
+    key: 'uskep_alumni',
+    label: 'Alumni Network',
+    category: 'ACADEMIC_CAREER',
+    categoryLabel: 'Academic & Career Platform',
+    path: '/uskep/alumni',
+    description: 'Graduate network and career alumni connectivity',
+  },
+  {
+    key: 'uskep_college',
+    label: 'College Dashboard',
+    category: 'ACADEMIC_CAREER',
+    categoryLabel: 'Academic & Career Platform',
+    path: '/uskep/college',
+    description: 'Institutional placement and college department tracking',
+  },
+];
+
+export const DEFAULT_SIDEBAR_VISIBILITY = {
+  SUPER_ADMIN: {
+    dashboard: true,
+    hr_dashboard: true,
+    employee_records: true,
+    hub: true,
+    messages: true,
+    cxo_connect: true,
+    team: true,
+    my_performance: true,
+    role_hierarchy: true,
+    exit_clearances: true,
+    goals: true,
+    tasks: true,
+    leaves: true,
+    document_templates: true,
+    policies: true,
+    reviews: true,
+    feedback: true,
+    reports: true,
+    profile: true,
+    departments: true,
+    company_settings: true,
+    uskep_dashboard: true,
+    uskep_assessments: true,
+    uskep_internships: true,
+    uskep_mentorship: true,
+    uskep_alumni: true,
+    uskep_college: true,
+  },
+  CMD: {
+    dashboard: true,
+    hr_dashboard: true,
+    employee_records: true,
+    hub: true,
+    messages: true,
+    cxo_connect: true,
+    team: true,
+    my_performance: true,
+    role_hierarchy: true,
+    exit_clearances: true,
+    goals: true,
+    tasks: true,
+    leaves: true,
+    document_templates: true,
+    policies: true,
+    reviews: true,
+    feedback: true,
+    reports: true,
+    profile: true,
+    departments: true,
+    company_settings: true,
+    uskep_dashboard: false,
+    uskep_assessments: false,
+    uskep_internships: false,
+    uskep_mentorship: false,
+    uskep_alumni: false,
+    uskep_college: false,
+  },
+  ADMIN: {
+    dashboard: true,
+    hr_dashboard: true,
+    employee_records: true,
+    hub: true,
+    messages: true,
+    cxo_connect: true,
+    team: true,
+    my_performance: true,
+    role_hierarchy: true,
+    exit_clearances: true,
+    goals: true,
+    tasks: true,
+    leaves: true,
+    document_templates: true,
+    policies: true,
+    reviews: true,
+    feedback: true,
+    reports: true,
+    profile: true,
+    departments: true,
+    company_settings: true,
+    uskep_dashboard: false,
+    uskep_assessments: false,
+    uskep_internships: false,
+    uskep_mentorship: false,
+    uskep_alumni: false,
+    uskep_college: false,
+  },
+  HR: {
+    dashboard: true,
+    hr_dashboard: true,
+    employee_records: true,
+    hub: true,
+    messages: true,
+    cxo_connect: true,
+    team: true,
+    my_performance: true,
+    role_hierarchy: true,
+    exit_clearances: true,
+    goals: true,
+    tasks: true,
+    leaves: true,
+    document_templates: true,
+    policies: true,
+    reviews: true,
+    feedback: true,
+    reports: true,
+    profile: true,
+    departments: true,
+    company_settings: true,
+    uskep_dashboard: false,
+    uskep_assessments: false,
+    uskep_internships: false,
+    uskep_mentorship: false,
+    uskep_alumni: false,
+    uskep_college: false,
+  },
+  FINANCE: {
+    dashboard: true,
+    hr_dashboard: false,
+    employee_records: true,
+    hub: true,
+    messages: true,
+    cxo_connect: true,
+    team: false,
+    my_performance: true,
+    role_hierarchy: true,
+    exit_clearances: false,
+    goals: true,
+    tasks: true,
+    leaves: true,
+    document_templates: false,
+    policies: true,
+    reviews: true,
+    feedback: true,
+    reports: false,
+    profile: true,
+    departments: false,
+    company_settings: false,
+    uskep_dashboard: false,
+    uskep_assessments: false,
+    uskep_internships: false,
+    uskep_mentorship: false,
+    uskep_alumni: false,
+    uskep_college: false,
+  },
+  MANAGER: {
+    dashboard: true,
+    hr_dashboard: false,
+    employee_records: false,
+    hub: true,
+    messages: true,
+    cxo_connect: true,
+    team: true,
+    my_performance: true,
+    role_hierarchy: true,
+    exit_clearances: true,
+    goals: true,
+    tasks: true,
+    leaves: true,
+    document_templates: false,
+    policies: true,
+    reviews: true,
+    feedback: true,
+    reports: false,
+    profile: true,
+    departments: false,
+    company_settings: false,
+    uskep_dashboard: false,
+    uskep_assessments: false,
+    uskep_internships: false,
+    uskep_mentorship: false,
+    uskep_alumni: false,
+    uskep_college: false,
+  },
+  EMPLOYEE: {
+    dashboard: true,
+    hr_dashboard: false,
+    employee_records: false,
+    hub: true,
+    messages: true,
+    cxo_connect: true,
+    team: false,
+    my_performance: true,
+    role_hierarchy: true,
+    exit_clearances: false,
+    goals: true,
+    tasks: true,
+    leaves: true,
+    document_templates: false,
+    policies: true,
+    reviews: true,
+    feedback: true,
+    reports: false,
+    profile: true,
+    departments: false,
+    company_settings: false,
+    uskep_dashboard: false,
+    uskep_assessments: false,
+    uskep_internships: false,
+    uskep_mentorship: false,
+    uskep_alumni: false,
+    uskep_college: false,
+  },
+  STUDENT: {
+    dashboard: true,
+    hr_dashboard: false,
+    employee_records: false,
+    hub: true,
+    messages: false,
+    cxo_connect: false,
+    team: false,
+    my_performance: false,
+    role_hierarchy: false,
+    exit_clearances: false,
+    goals: false,
+    tasks: false,
+    leaves: false,
+    document_templates: false,
+    policies: false,
+    reviews: false,
+    feedback: false,
+    reports: false,
+    profile: true,
+    departments: false,
+    company_settings: false,
+    uskep_dashboard: true,
+    uskep_assessments: true,
+    uskep_internships: true,
+    uskep_mentorship: true,
+    uskep_alumni: true,
+    uskep_college: true,
+  },
+  MENTOR: {
+    dashboard: true,
+    hr_dashboard: false,
+    employee_records: false,
+    hub: true,
+    messages: false,
+    cxo_connect: false,
+    team: false,
+    my_performance: false,
+    role_hierarchy: false,
+    exit_clearances: false,
+    goals: false,
+    tasks: false,
+    leaves: false,
+    document_templates: false,
+    policies: false,
+    reviews: false,
+    feedback: false,
+    reports: false,
+    profile: true,
+    departments: false,
+    company_settings: false,
+    uskep_dashboard: true,
+    uskep_assessments: false,
+    uskep_internships: true,
+    uskep_mentorship: true,
+    uskep_alumni: false,
+    uskep_college: false,
+  },
 };
 
 export const SUPPORTED_DASHBOARD_WIDGETS = [
@@ -1315,54 +1827,132 @@ export async function resetRolePermissions(tenantId, actor, { role = 'ALL' }) {
 }
 
 /**
- * Returns dynamic role hierarchy visibility controls for the tenant.
+ * Returns dynamic role hierarchy & sidebar menu visibility controls for the tenant.
  */
 export async function getHierarchyVisibility(tenantId, caller = null) {
   const settings = await prisma.tenantSettings.findUnique({
     where: { tenantId },
-    select: { hierarchyVisibility: true },
+    select: { hierarchyVisibility: true, sidebarVisibility: true },
   });
 
   const effectiveConfig = settings?.hierarchyVisibility || DEFAULT_HIERARCHY_VISIBILITY;
+  const storedSidebar = (settings?.sidebarVisibility && typeof settings.sidebarVisibility === 'object') ? settings.sidebarVisibility : {};
+
+  // Build complete effective sidebar visibility map across all corporate roles
+  const effectiveSidebar = {};
+  for (const role of Object.keys(DEFAULT_SIDEBAR_VISIBILITY)) {
+    effectiveSidebar[role] = {
+      ...(DEFAULT_SIDEBAR_VISIBILITY[role] || {}),
+      ...(storedSidebar[role] || {}),
+    };
+  }
+  // SUPER_ADMIN Root Authority is non-revocable
+  effectiveSidebar.SUPER_ADMIN = { ...DEFAULT_SIDEBAR_VISIBILITY.SUPER_ADMIN };
+
   const callerRole = String(caller?.role || 'EMPLOYEE').toUpperCase();
-  const isSuperAdminOrAdmin = ['SUPER_ADMIN', 'ADMIN'].includes(callerRole);
+  const isElevatedAdmin = ['SUPER_ADMIN', 'ADMIN', 'CMD'].includes(callerRole);
 
   return {
     visibility: effectiveConfig,
+    sidebarVisibility: effectiveSidebar,
+    sidebarCatalog: SIDEBAR_MENU_CATALOG,
     myVisibility: effectiveConfig[callerRole] || DEFAULT_HIERARCHY_VISIBILITY[callerRole] || DEFAULT_HIERARCHY_VISIBILITY.EMPLOYEE,
-    canConfigure: isSuperAdminOrAdmin,
+    mySidebarVisibility: effectiveSidebar[callerRole] || DEFAULT_SIDEBAR_VISIBILITY[callerRole] || DEFAULT_SIDEBAR_VISIBILITY.EMPLOYEE,
+    canConfigure: isElevatedAdmin,
   };
 }
 
 /**
- * Updates dynamic role hierarchy visibility controls for the tenant.
+ * Updates dynamic role hierarchy and sidebar menu visibility controls for the tenant.
  */
-export async function updateHierarchyVisibility(tenantId, actor, { visibility }) {
+export async function updateHierarchyVisibility(tenantId, actor, { visibility, sidebarVisibility }) {
   const actorRole = String(actor?.role || '').toUpperCase();
-  if (!['SUPER_ADMIN', 'ADMIN'].includes(actorRole)) {
+  if (!['SUPER_ADMIN', 'ADMIN', 'CMD'].includes(actorRole)) {
     const err = new Error('Only administrators can configure role hierarchy visibility.');
     err.status = 403;
     throw err;
   }
 
-  // Ensure SUPER_ADMIN cannot be locked out of essential views
-  const sanitized = { ...visibility };
-  sanitized.SUPER_ADMIN = {
-    canViewTree: true,
-    canViewLadder: true,
-    canViewMatrix: true,
-    canViewStats: true,
-    canViewDirectory: true,
-    canViewDeptFilters: true,
-    canUseActions: true,
-  };
-
   const settings = await getTenantSettingsLazy(tenantId);
-  const beforeSnapshot = JSON.stringify(settings.hierarchyVisibility || DEFAULT_HIERARCHY_VISIBILITY);
+  const dataToUpdate = {};
+  const auditChanges = {};
+
+  if (visibility) {
+    const sanitized = { ...visibility };
+    sanitized.SUPER_ADMIN = {
+      canViewTree: true,
+      canViewLadder: true,
+      canViewMatrix: true,
+      canViewStats: true,
+      canViewDirectory: true,
+      canViewDeptFilters: true,
+      canUseActions: true,
+    };
+    dataToUpdate.hierarchyVisibility = sanitized;
+    auditChanges.hierarchy = {
+      before: settings.hierarchyVisibility || DEFAULT_HIERARCHY_VISIBILITY,
+      after: sanitized,
+    };
+  }
+
+  if (sidebarVisibility) {
+    const sanitizedSidebar = { ...sidebarVisibility };
+    // Root Authority non-revocable guarantee
+    sanitizedSidebar.SUPER_ADMIN = {};
+    for (const item of SIDEBAR_MENU_CATALOG) {
+      sanitizedSidebar.SUPER_ADMIN[item.key] = true;
+    }
+    dataToUpdate.sidebarVisibility = sanitizedSidebar;
+    auditChanges.sidebar = {
+      before: settings.sidebarVisibility || DEFAULT_SIDEBAR_VISIBILITY,
+      after: sanitizedSidebar,
+    };
+  }
+
+  if (Object.keys(dataToUpdate).length > 0) {
+    await prisma.tenantSettings.update({
+      where: { tenantId },
+      data: dataToUpdate,
+    });
+
+    await prisma.permissionAuditLog.create({
+      data: {
+        tenantId,
+        actorId: actor.id,
+        actorRole,
+        action: 'VISIBILITY_UPDATE',
+        targetRole: 'ALL',
+        details: `Updated role hierarchy and sidebar menu visibility settings across roles.`,
+        changes: auditChanges,
+      },
+    });
+  }
+
+  return getHierarchyVisibility(tenantId, actor);
+}
+
+/**
+ * Resets hierarchy and/or sidebar menu visibility back to system enterprise defaults.
+ */
+export async function resetHierarchyVisibility(tenantId, actor, target = 'ALL') {
+  const actorRole = String(actor?.role || '').toUpperCase();
+  if (!['SUPER_ADMIN', 'ADMIN', 'CMD'].includes(actorRole)) {
+    const err = new Error('Only administrators can reset visibility configuration.');
+    err.status = 403;
+    throw err;
+  }
+
+  const dataToUpdate = {};
+  if (target === 'HIERARCHY' || target === 'ALL') {
+    dataToUpdate.hierarchyVisibility = DEFAULT_HIERARCHY_VISIBILITY;
+  }
+  if (target === 'SIDEBAR' || target === 'ALL') {
+    dataToUpdate.sidebarVisibility = DEFAULT_SIDEBAR_VISIBILITY;
+  }
 
   await prisma.tenantSettings.update({
     where: { tenantId },
-    data: { hierarchyVisibility: sanitized },
+    data: dataToUpdate,
   });
 
   await prisma.permissionAuditLog.create({
@@ -1370,17 +1960,35 @@ export async function updateHierarchyVisibility(tenantId, actor, { visibility })
       tenantId,
       actorId: actor.id,
       actorRole,
-      action: 'VISIBILITY_UPDATE',
+      action: 'VISIBILITY_RESET',
       targetRole: 'ALL',
-      details: `Updated role hierarchy visibility settings across roles.`,
-      changes: {
-        before: JSON.parse(beforeSnapshot),
-        after: sanitized,
-      },
+      details: `Reset visibility settings to system enterprise defaults (${target}).`,
+      changes: { resetTarget: target },
     },
   });
 
   return getHierarchyVisibility(tenantId, actor);
+}
+
+/**
+ * Helper: resolves effective sidebar visibility for caller's role.
+ */
+export async function getCallerSidebarVisibility(tenantId, user) {
+  if (!user) return null;
+  const role = String(user.role || 'EMPLOYEE').toUpperCase();
+  if (role === 'SUPER_ADMIN') {
+    return DEFAULT_SIDEBAR_VISIBILITY.SUPER_ADMIN;
+  }
+  const settings = await prisma.tenantSettings.findUnique({
+    where: { tenantId },
+    select: { sidebarVisibility: true },
+  });
+  const stored = settings?.sidebarVisibility?.[role];
+  const defaults = DEFAULT_SIDEBAR_VISIBILITY[role] || DEFAULT_SIDEBAR_VISIBILITY.EMPLOYEE;
+  return {
+    ...defaults,
+    ...(stored || {}),
+  };
 }
 
 /**

@@ -20,8 +20,14 @@ import {
 } from '../controllers/taskDependency.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
+import { checkModuleVisibility } from '../middleware/moduleVisibility.js';
 
 const router = Router();
+
+// Dynamic role-based module visibility check: blocks task board and dependencies if disabled
+router.use('/tasks', requireAuth, requireTenant, checkModuleVisibility('tasks'));
+router.use('/dependencies', requireAuth, requireTenant, checkModuleVisibility('tasks'));
+router.use('/milestones', requireAuth, requireTenant, checkModuleVisibility('tasks'));
 
 router.post('/tasks', requireAuth, requireTenant, createTask);
 router.get('/tasks', requireAuth, requireTenant, listTasks);

@@ -3,11 +3,12 @@ import { getSettings, patchSettings, getTopLevelEmployees, getWatcherCandidates 
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
 import { authorize } from '../middleware/rbac.js';
+import { checkModuleVisibility } from '../middleware/moduleVisibility.js';
 
 const router = Router();
 
 router.get('/company/settings', requireAuth, requireTenant, getSettings);
-router.patch('/company/settings', requireAuth, requireTenant, authorize('HR', 'SUPER_ADMIN', 'CMD', 'ADMIN'), patchSettings);
+router.patch('/company/settings', requireAuth, requireTenant, authorize('HR', 'SUPER_ADMIN', 'CMD', 'ADMIN'), checkModuleVisibility('company_settings'), patchSettings);
 router.get('/company/top-level-employees', requireAuth, requireTenant, getTopLevelEmployees);
 router.get('/company/watcher-candidates', requireAuth, requireTenant, getWatcherCandidates);
 

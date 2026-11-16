@@ -39,18 +39,26 @@ export const resetPermissionsSchema = z.object({
 });
 
 export const updateVisibilitySchema = z.object({
-  visibility: z.record(
-    z.string(),
-    z.object({
-      canViewTree: z.boolean().default(true),
-      canViewLadder: z.boolean().default(true),
-      canViewMatrix: z.boolean().default(false),
-      canViewStats: z.boolean().default(false),
-      canViewDirectory: z.boolean().default(false),
-      canViewDeptFilters: z.boolean().default(false),
-      canUseActions: z.boolean().default(false),
-    })
-  ),
+  visibility: z
+    .record(
+      z.string(),
+      z.object({
+        canViewTree: z.boolean().default(true),
+        canViewLadder: z.boolean().default(true),
+        canViewMatrix: z.boolean().default(false),
+        canViewStats: z.boolean().default(false),
+        canViewDirectory: z.boolean().default(false),
+        canViewDeptFilters: z.boolean().default(false),
+        canUseActions: z.boolean().default(false),
+      })
+    )
+    .optional(),
+  sidebarVisibility: z
+    .record(
+      z.string(),
+      z.record(z.string(), z.boolean())
+    )
+    .optional(),
 });
 
 export const updateDashboardConfigSchema = z.object({

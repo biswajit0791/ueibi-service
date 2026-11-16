@@ -8,6 +8,7 @@ import {
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
 import { authorize } from '../middleware/rbac.js';
+import { checkModuleVisibility } from '../middleware/moduleVisibility.js';
 
 const router = Router();
 
@@ -24,6 +25,7 @@ router.post(
   '/departments',
   requireAuth,
   requireTenant,
+  checkModuleVisibility('departments'),
   authorize('SUPER_ADMIN', 'ADMIN', 'HR'),
   createDepartment
 );
@@ -33,6 +35,7 @@ router.patch(
   '/departments/:id',
   requireAuth,
   requireTenant,
+  checkModuleVisibility('departments'),
   authorize('SUPER_ADMIN', 'ADMIN', 'HR'),
   updateDepartment
 );
@@ -42,6 +45,7 @@ router.delete(
   '/departments/:id',
   requireAuth,
   requireTenant,
+  checkModuleVisibility('departments'),
   authorize('SUPER_ADMIN', 'ADMIN'),
   deactivateDepartment
 );

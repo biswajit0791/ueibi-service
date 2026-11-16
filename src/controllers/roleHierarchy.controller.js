@@ -8,11 +8,13 @@ import {
   resetRolePermissions,
   getHierarchyVisibility,
   updateHierarchyVisibility,
+  resetHierarchyVisibility,
   getRoleDashboardConfig,
   updateRoleDashboardConfig,
   resetRoleDashboardConfig,
   getPermissionAuditLogs,
 } from '../services/roleHierarchy.service.js';
+import { getIO } from '../lib/socket.js';
 import {
   assignManagerSchema,
   hierarchyQuerySchema,
@@ -223,9 +225,50 @@ export async function updateVisibility(req, res, next) {
     }
 
     const result = await updateHierarchyVisibility(tenantId, req.user, parsed.data);
+    try {
+      const io = getIO();
+      if (io) {
+        io.to(`tenant_${tenantId}`).emit('visibility:updated', { tenantId });
+        io.emit('visibility:updated', { tenantId });
+      }
+    } catch (sockErr) {
+      console.warn('[SOCKET] Could not broadcast visibility:updated:', sockErr.message);
+    }
     return res.json({
       success: true,
-      message: 'Role hierarchy visibility settings updated successfully.',
+      message: 'Role hierarchy and sidebar visibility settings updated successfully.',
+      data: result,
+    });
+  } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    next(err);
+  }
+}
+
+/**
+ * POST /api/hierarchy/visibility/reset
+ * Resets hierarchy and/or sidebar visibility to enterprise defaults.
+ * Gated to SUPER_ADMIN, ADMIN, CMD.
+ */
+export async function resetVisibility(req, res, next) {
+  try {
+    const tenantId = req.tenantId;
+    const target = req.body?.target || 'ALL'; // 'ALL' | 'SIDEBAR' | 'HIERARCHY'
+    const result = await resetHierarchyVisibility(tenantId, req.user, target);
+    try {
+      const io = getIO();
+      if (io) {
+        io.to(`tenant_${tenantId}`).emit('visibility:updated', { tenantId });
+        io.emit('visibility:updated', { tenantId });
+      }
+    } catch (sockErr) {
+      console.warn('[SOCKET] Could not broadcast visibility:updated:', sockErr.message);
+    }
+    return res.json({
+      success: true,
+      message: `Visibility settings reset to enterprise defaults (${target}).`,
       data: result,
     });
   } catch (err) {

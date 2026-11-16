@@ -9,6 +9,7 @@ import {
   resetPermissions,
   getVisibility,
   updateVisibility,
+  resetVisibility,
   getDashboardConfig,
   updateDashboardConfig,
   resetDashboardConfig,
@@ -94,13 +95,22 @@ router.get(
   getVisibility
 );
 
-// Update role hierarchy visibility configuration (SUPER_ADMIN, ADMIN only)
+// Update role hierarchy visibility configuration (SUPER_ADMIN, ADMIN, CMD)
 router.patch(
   '/hierarchy/visibility',
   requireAuth,
   requireTenant,
-  authorize('SUPER_ADMIN', 'ADMIN'),
+  authorize('SUPER_ADMIN', 'ADMIN', 'CMD'),
   updateVisibility
+);
+
+// Reset role hierarchy & sidebar visibility configuration (SUPER_ADMIN, ADMIN, CMD)
+router.post(
+  '/hierarchy/visibility/reset',
+  requireAuth,
+  requireTenant,
+  authorize('SUPER_ADMIN', 'ADMIN', 'CMD'),
+  resetVisibility
 );
 
 // Read role dashboard widget configuration

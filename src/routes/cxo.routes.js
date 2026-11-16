@@ -2,12 +2,13 @@ import { Router } from 'express';
 import cxoController from '../controllers/cxo.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
+import { checkModuleVisibility } from '../middleware/moduleVisibility.js';
 
 const router = Router();
 
 // Everything here is authenticated and tenant-scoped. Leadership access is
 // checked per-operation in the service via hasCapability, not by role alone.
-router.use('/cxo', requireAuth, requireTenant);
+router.use('/cxo', requireAuth, requireTenant, checkModuleVisibility('cxo_connect'));
 
 router.get('/cxo/leaders', (req, res) => cxoController.listLeaders(req, res));
 router.get('/cxo/stats', (req, res) => cxoController.getStats(req, res));

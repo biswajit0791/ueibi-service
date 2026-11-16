@@ -7,6 +7,7 @@ import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
 import { authorize } from '../middleware/rbac.js';
+import { checkModuleVisibility } from '../middleware/moduleVisibility.js';
 import {
   listTemplates,
   getTemplate,
@@ -30,6 +31,9 @@ const router = Router();
 
 const hrAndAdmin = ['SUPER_ADMIN', 'ADMIN', 'HR'];
 const adminOnly = ['SUPER_ADMIN', 'ADMIN'];
+
+// Dynamic role-based module visibility check: blocks document templates if disabled
+router.use('/doc-templates', requireAuth, requireTenant, checkModuleVisibility('document_templates'));
 
 // ── Templates CRUD ──
 router.get('/doc-templates', requireAuth, requireTenant, authorize(...hrAndAdmin), listTemplates);
