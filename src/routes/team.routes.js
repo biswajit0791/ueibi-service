@@ -18,6 +18,7 @@ import {
 } from '../controllers/team.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
+import { checkModuleVisibility } from '../middleware/moduleVisibility.js';
 
 const router = Router();
 
@@ -26,7 +27,7 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB — enforced again inside storageService.validateFile
 });
 
-router.get('/team/directory', requireAuth, requireTenant, getTeamDirectory);
+router.get('/team/directory', requireAuth, requireTenant, checkModuleVisibility('team'), getTeamDirectory);
 router.get('/team/:employeeId/detail', requireAuth, requireTenant, getTeamMemberDetail);
 router.get('/team/:employeeId/projects', requireAuth, requireTenant, getTeamMemberProjects);
 

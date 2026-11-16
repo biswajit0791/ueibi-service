@@ -16,6 +16,7 @@ import {
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
 import { authorize } from '../middleware/rbac.js';
+import { checkModuleVisibility } from '../middleware/moduleVisibility.js';
 
 const router = Router();
 
@@ -26,7 +27,7 @@ router.get('/exit/pending', requireAuth, requireTenant, authorize('SUPER_ADMIN',
 
 // Exits on which the caller must give a clearance (e.g. a reporting manager).
 // Any role may call it; the controller returns only records the caller can act on.
-router.get('/exit/clearances/inbox', requireAuth, requireTenant, listMyClearanceInbox);
+router.get('/exit/clearances/inbox', requireAuth, requireTenant, checkModuleVisibility('exit_clearances'), listMyClearanceInbox);
 
 // Employee self-service exit status
 router.get('/exit/my-status', requireAuth, requireTenant, getMyExitStatus);

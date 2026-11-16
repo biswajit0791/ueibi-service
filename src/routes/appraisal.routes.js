@@ -46,9 +46,13 @@ import {
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
 import { authorize } from '../middleware/rbac.js';
+import { checkModuleVisibility } from '../middleware/moduleVisibility.js';
 import { listPeriodicSubmissions, hrReviewPeriodicAppraisal } from '../controllers/periodicAppraisal.controller.js';
 
 const router = Router();
+
+// Dynamic role-based module visibility check: blocks appraisal/reviews if disabled
+router.use('/appraisals', requireAuth, requireTenant, checkModuleVisibility('reviews'));
 
 // ── Appraisal Submissions & Reviews ──────────────────────────────────────────
 router.post('/appraisals/submit', requireAuth, requireTenant, submitSelfRating);

@@ -31,8 +31,17 @@ import {
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
 import { authorize } from '../middleware/rbac.js';
+import { checkModuleVisibility } from '../middleware/moduleVisibility.js';
 
 const router = Router();
+
+// Dynamic role-based module visibility check: blocks leave & WFH if disabled
+router.use('/leaves', requireAuth, requireTenant, checkModuleVisibility('leaves'));
+router.use('/leave-types', requireAuth, requireTenant, checkModuleVisibility('leaves'));
+router.use('/leave-balances', requireAuth, requireTenant, checkModuleVisibility('leaves'));
+router.use('/admin/leave', requireAuth, requireTenant, checkModuleVisibility('leaves'));
+router.use('/admin/wfh', requireAuth, requireTenant, checkModuleVisibility('leaves'));
+router.use('/wfh', requireAuth, requireTenant, checkModuleVisibility('leaves'));
 
 const hrRoles = ['SUPER_ADMIN', 'ADMIN', 'HR', 'LEADERSHIP', 'OWNER', 'CMD', 'DIRECTOR'];
 const managerRoles = ['SUPER_ADMIN', 'ADMIN', 'HR', 'MANAGER', 'LEADERSHIP', 'OWNER', 'CMD', 'DIRECTOR'];

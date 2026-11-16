@@ -1432,6 +1432,9 @@ model TenantSettings {
   /// Dynamic role hierarchy visibility configuration: which tabs and actions are allowed per role
   hierarchyVisibility Json?
 
+  /// Dynamic role-wise sidebar menu item visibility configuration
+  sidebarVisibility   Json?
+
   /// Dynamic role-wise feature permission matrix overrides
   rolePermissions     Json?
 

@@ -2,13 +2,14 @@ import { Router } from 'express';
 import messageController from '../controllers/message.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
+import { checkModuleVisibility } from '../middleware/moduleVisibility.js';
 
 const router = Router();
 
 // Chat is authenticated and tenant-scoped end to end. `requireAuth` resolves the
 // caller against the DB on every request, so a de-provisioned account cannot
 // keep reading conversations with a still-valid JWT.
-router.use('/messages', requireAuth, requireTenant);
+router.use('/messages', requireAuth, requireTenant, checkModuleVisibility('messages'));
 
 router.get('/messages', (req, res) => messageController.getMessages(req, res));
 router.post('/messages', (req, res) => messageController.sendMessage(req, res));

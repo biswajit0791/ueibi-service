@@ -9,8 +9,11 @@ import {
 } from "../controllers/hub.controller.js";
 import { requireAuth } from "../middleware/auth.js";
 import { requireTenant } from "../middleware/tenantScope.js";
+import { checkModuleVisibility } from "../middleware/moduleVisibility.js";
 
 const router = Router();
+
+router.use("/hub", requireAuth, requireTenant, checkModuleVisibility("hub"));
 
 // Team directory & user hub profile
 router.get("/hub/team", requireAuth, requireTenant, getTeam);

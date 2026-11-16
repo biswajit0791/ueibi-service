@@ -26,8 +26,12 @@ import {
 } from '../controllers/appraisal.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
+import { checkModuleVisibility } from '../middleware/moduleVisibility.js';
 
 const router = Router();
+
+// Dynamic role-based module visibility check: blocks goals if disabled for caller's role
+router.use('/goals', requireAuth, requireTenant, checkModuleVisibility('goals'));
 
 // ── Metadata & Dynamic Dropdowns ───────────────────────────────────────────
 router.get('/goals/categories', requireAuth, requireTenant, getGoalCategories);

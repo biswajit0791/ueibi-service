@@ -7,7 +7,8 @@ import {
 } from '../controllers/reports.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
-import { authorize, authorizeRoleOrCapability} from '../middleware/rbac.js';
+import { authorize, authorizeRoleOrCapability } from '../middleware/rbac.js';
+import { checkModuleVisibility } from '../middleware/moduleVisibility.js';
 
 const router = Router();
 
@@ -20,11 +21,39 @@ const REPORT_ROLES = ['HR', 'SUPER_ADMIN', 'CMD', 'ADMIN'];
 
 // REGISTRY_ANALYTICS backs the "Can view verification analytics & billing
 // history reports" credential on the sub-login invite.
-router.get('/reports/analytics', requireAuth, requireTenant, authorizeRoleOrCapability(REPORT_ROLES, ['REGISTRY_ANALYTICS']), getAnalyticsSummary);
-router.get('/reports/trend', requireAuth, requireTenant, authorizeRoleOrCapability(REPORT_ROLES, ['REGISTRY_ANALYTICS']), getPerformanceTrend);
-router.get('/reports/catalog', requireAuth, requireTenant, authorizeRoleOrCapability(REPORT_ROLES, ['REGISTRY_ANALYTICS']), getReportCatalog);
+router.get(
+  '/reports/analytics',
+  requireAuth,
+  requireTenant,
+  checkModuleVisibility('reports'),
+  authorizeRoleOrCapability(REPORT_ROLES, ['REGISTRY_ANALYTICS']),
+  getAnalyticsSummary
+);
+router.get(
+  '/reports/trend',
+  requireAuth,
+  requireTenant,
+  checkModuleVisibility('reports'),
+  authorizeRoleOrCapability(REPORT_ROLES, ['REGISTRY_ANALYTICS']),
+  getPerformanceTrend
+);
+router.get(
+  '/reports/catalog',
+  requireAuth,
+  requireTenant,
+  checkModuleVisibility('reports'),
+  authorizeRoleOrCapability(REPORT_ROLES, ['REGISTRY_ANALYTICS']),
+  getReportCatalog
+);
 // Export is its own credential: a Viewer may read but must not take the data
 // away, which is what separates Viewer from Recruiter.
-router.get('/reports/export/:reportKey', requireAuth, requireTenant, authorizeRoleOrCapability(REPORT_ROLES, ['REGISTRY_EXPORT']), exportReport);
+router.get(
+  '/reports/export/:reportKey',
+  requireAuth,
+  requireTenant,
+  checkModuleVisibility('reports'),
+  authorizeRoleOrCapability(REPORT_ROLES, ['REGISTRY_EXPORT']),
+  exportReport
+);
 
 export default router;
