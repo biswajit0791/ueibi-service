@@ -28,6 +28,11 @@ import {
 import { tenantIdParamSchema } from '../validations/platform.schema.js';
 import { recordPlatformAction, PLATFORM_ACTIONS } from '../services/platformAudit.service.js';
 import { isPlatformSales } from '../lib/roles.js';
+import {
+  findEligiblePromotion,
+  calculateSubscriptionExtension,
+  recordPromotionRedemption,
+} from '../services/promotion.service.js';
 
 /**
  * Platform Sales/BD sells at the package price and discounts only through a
@@ -51,13 +56,15 @@ const SUBSCRIPTION_SELECT = {
   id: true, tenantId: true, packageId: true, packageName: true, seatCount: true,
   state: true, startsAt: true, endsAt: true, renewedFromId: true, salesRepId: true,
   registrationId: true, cancelledAt: true, cancelReason: true, createdAt: true,
+  promotionId: true, paidDurationMonths: true, freeDurationMonths: true, totalDurationMonths: true, paidEndsAt: true,
+  promotion: { select: { id: true, name: true, code: true, paidMonths: true, freeMonths: true, description: true } },
   tenant: { select: { id: true, companyName: true, tenantCode: true, status: true, creditBalance: true } },
   package: { select: { id: true, name: true, interval: true, termMonths: true, unitPrice: true } },
   salesRep: { select: { id: true, name: true, email: true } },
   renewedTo: { select: { id: true, startsAt: true, state: true } },
   invoices: {
     select: {
-      id: true, invoiceNumber: true, totalAmount: true, discountAmount: true, couponCode: true,
+      id: true, invoiceNumber: true, totalAmount: true, discountAmount: true, couponCode: true, unitPrice: true, quantity: true,
     },
     take: 1,
     orderBy: { createdAt: 'desc' },
@@ -82,14 +89,28 @@ const determineUrgency = (endsAt, state) => {
 
 const decorate = (s) => {
   const days = daysUntil(s.endsAt);
-  const unitPrice = s.package?.unitPrice ? num(s.package.unitPrice) : 3999;
+  const unitPrice = s.package?.unitPrice
+    ? num(s.package.unitPrice)
+    : (s.invoices?.[0]?.unitPrice ? num(s.invoices[0].unitPrice) : 3999);
   const estimatedAnnualValue = round2(s.seatCount * unitPrice * 1.18);
   const latestInvoice = s.invoices?.[0] || null;
+
+  const paidDuration = s.paidDurationMonths || s.package?.termMonths || 12;
+  const freeDuration = s.freeDurationMonths || 0;
+  const totalDuration = s.totalDurationMonths || (paidDuration + freeDuration);
+  const amountPaid = latestInvoice ? num(latestInvoice.totalAmount) : estimatedAnnualValue;
 
   return {
     ...s,
     daysRemaining: days,
     perpetual: s.endsAt == null,
+    unitPrice,
+    amountPaid,
+    paidDurationMonths: paidDuration,
+    freeDurationMonths: freeDuration,
+    totalDurationMonths: totalDuration,
+    paidEndsAt: s.paidEndsAt,
+    promotion: s.promotion || null,
     renewalExperience: {
       isRenewal: Boolean(s.renewedFromId),
       hasRenewed: Boolean(s.renewedTo?.id),
@@ -119,6 +140,10 @@ async function raiseInvoiceFor(tx, {
     gstRate: Number(env.gstRate ?? 0.18),
   });
 
+  const tenantCredit = Number(tenant.creditBalance || 0);
+  const creditRedeemed = round2(Math.min(tenantCredit, priced.totalAmount));
+  const finalTotal = round2(priced.totalAmount - creditRedeemed);
+
   const billToEmail = tenant.registration?.email
     || tenant.users?.[0]?.email
     || null;
@@ -128,6 +153,10 @@ async function raiseInvoiceFor(tx, {
     err.code = 'NO_BILLING_CONTACT';
     throw err;
   }
+
+  const promoNote = subscription.freeDurationMonths > 0
+    ? `Promotional Extension Applied: ${subscription.paidDurationMonths || 12} Months Paid + ${subscription.freeDurationMonths} Months Free (Total ${subscription.totalDurationMonths} Months access).`
+    : null;
 
   const invoice = await tx.invoice.create({
     data: {
@@ -142,6 +171,7 @@ async function raiseInvoiceFor(tx, {
       ...priced,
       creditRedeemed,
       totalAmount: finalTotal,
+      notes: promoNote,
     },
   });
 
@@ -289,7 +319,7 @@ export async function getSubscription(req, res, next) {
         invoices: {
           select: {
             id: true, invoiceNumber: true, state: true, totalAmount: true,
-            amountPaid: true, issuedAt: true,
+            amountPaid: true, issuedAt: true, unitPrice: true, quantity: true,
           },
           orderBy: { createdAt: 'desc' },
         },
@@ -390,6 +420,20 @@ export async function startSubscription(req, res, next) {
     }
 
     const endsAt = pkg.termMonths ? addMonths(startsAt, pkg.termMonths) : null;
+    const promo = await findEligiblePromotion({
+      packageId: pkg.id,
+      termMonths: pkg.termMonths || 12,
+      context: 'NEW_REGISTRATIONS',
+      code: data.promoCode,
+      promotionId: data.promotionId,
+    });
+    const ext = calculateSubscriptionExtension({
+      startsAt,
+      termMonths: pkg.termMonths || 12,
+      promotion: promo,
+    });
+
+    const endsAt = pkg.termMonths ? ext.endsAt : null;
     const state = subscriptionStateOf({ startsAt, endsAt, cancelledAt: null });
 
     const effectiveSalesRepId = data.salesRepId || (req.user?.role === 'PLATFORM_SALES' ? req.user.id : null);
@@ -404,6 +448,11 @@ export async function startSubscription(req, res, next) {
           state,
           startsAt,
           endsAt,
+          promotionId: promo?.id || null,
+          paidDurationMonths: ext.paidDurationMonths,
+          freeDurationMonths: ext.freeDurationMonths,
+          totalDurationMonths: ext.totalDurationMonths,
+          paidEndsAt: ext.paidEndsAt,
         },
         select: SUBSCRIPTION_SELECT,
       });
@@ -418,6 +467,19 @@ export async function startSubscription(req, res, next) {
       const invoice = createInvoice
         ? await raiseInvoiceFor(tx, { tenant, subscription, quantity: seats, unitPrice: price, coupon, req, invoiceNumber })
         : null;
+
+      if (promo) {
+        await recordPromotionRedemption(tx, {
+          promotionId: promo.id,
+          subscriptionId: subscription.id,
+          tenantId: tenant.id,
+          salesRepId: effectiveSalesRepId,
+          paidMonths: ext.paidDurationMonths,
+          freeMonths: ext.freeDurationMonths,
+          totalMonths: ext.totalDurationMonths,
+          paidRevenue: invoice ? num(invoice.totalAmount) : round2(seats * price * 1.18),
+        });
+      }
 
       await recordPlatformAction({
         tx,
@@ -474,8 +536,14 @@ export async function renewSubscription(req, res, next) {
       where: { id: parsedParams.data.id },
       select: {
         id: true, tenantId: true, packageId: true, packageName: true, seatCount: true,
-        state: true, endsAt: true, cancelledAt: true,
+        state: true, startsAt: true, endsAt: true, cancelledAt: true, salesRepId: true,
         package: { select: { id: true, name: true, active: true, seatCount: true, unitPrice: true, termMonths: true } },
+        invoices: {
+          where: { state: { in: ['PAID', 'ISSUED'] } },
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: { unitPrice: true, quantity: true },
+        },
       },
     });
     if (!current) return res.status(404).json({ error: 'Subscription not found' });
@@ -499,7 +567,8 @@ export async function renewSubscription(req, res, next) {
     if (!tenant) return null;
 
     // Renewing onto a different package is allowed — an upgrade is a renewal
-    // with a different package.
+    // with a different package. If keeping current tier specification (no packageId),
+    // retain the existing package or grandfathered tier.
     const pkg = data.packageId
       ? await prisma.package.findUnique({ where: { id: data.packageId } })
       : current.package;
@@ -511,10 +580,17 @@ export async function renewSubscription(req, res, next) {
     // An explicit override wins. Otherwise, renewing onto a DIFFERENT package
     // takes that package's seats — choosing a smaller package and silently
     // keeping the old seat count would mean the customer is billed for one
-    // thing and given another.
+    // thing and given another. If keeping current tier, retain current.seatCount.
     const seats = data.seatCount
       ?? (data.packageId && pkg ? pkg.seatCount : current.seatCount);
-    const price = data.unitPrice ?? (pkg ? num(pkg.unitPrice) : null);
+
+    // Resolve unit price:
+    // 1. Explicit override if provided
+    // 2. Package unitPrice if package selected or exists
+    // 3. Last invoice unitPrice from current subscription
+    // 4. Default fallback tier unit price (3999)
+    const lastInvoicePrice = current.invoices?.[0]?.unitPrice ? num(current.invoices[0].unitPrice) : null;
+    const price = data.unitPrice ?? (pkg ? num(pkg.unitPrice) : (lastInvoicePrice ?? 3999));
     if (price == null) {
       return res.status(400).json({
         error: 'This term has no package to take a price from. Give a unit price or choose a package.',
@@ -535,29 +611,78 @@ export async function renewSubscription(req, res, next) {
     // Default to the day the current term ends, so renewals leave no gap. A
     // perpetual term has no end, so a renewal of one starts today.
     const startsAt = data.startsAt ?? (current.endsAt ? new Date(current.endsAt) : new Date());
-    const months = pkg?.termMonths ?? null;
+    let months = pkg?.termMonths ?? null;
+    if (!months && current.startsAt && current.endsAt) {
+      const diffMs = new Date(current.endsAt).getTime() - new Date(current.startsAt).getTime();
+      const approxMonths = Math.round(diffMs / (30.44 * 24 * 60 * 60 * 1000));
+      if (approxMonths > 0) months = approxMonths;
+    }
     const endsAt = months ? addMonths(startsAt, months) : null;
+    const termMonths = months || 12;
+
+    const isPerpetual = !current.endsAt && !data.packageId && !data.promoCode && !pkg?.termMonths;
+
+    let promo = null;
+    if (!isPerpetual) {
+      promo = await findEligiblePromotion({
+        packageId: data.packageId ? pkg?.id : (current.packageId ?? null),
+        termMonths,
+        context: 'RENEWALS',
+        code: data.promoCode,
+        promotionId: data.promotionId,
+      });
+    }
+
+    const ext = calculateSubscriptionExtension({
+      startsAt,
+      termMonths,
+      promotion: promo,
+    });
+
+    const endsAt = isPerpetual ? null : ext.endsAt;
     const state = subscriptionStateOf({ startsAt, endsAt, cancelledAt: null });
 
     let coupon = null;
     if (data.couponCode) {
-      coupon = await prisma.coupon.findUnique({ where: { code: data.couponCode.toUpperCase() } });
+      coupon = await prisma.coupon.findUnique({
+        where: { code: data.couponCode.toUpperCase() },
+        include: {
+          salesRep: { select: { id: true, name: true, email: true, status: true, isDeleted: true } },
+        },
+      });
       const problem = couponValidationError(coupon);
       if (problem) return res.status(400).json({ error: problem, code: 'COUPON_INVALID' });
+    }
+
+    // Automatic BDM Attribution:
+    // If renewal uses an assigned coupon, automatically attribute renewal to that BDM.
+    const couponBdmId = coupon?.salesRepId || null;
+    let effectiveSalesRepId = couponBdmId
+      || data.salesRepId
+      || (req.user?.role === 'PLATFORM_SALES' ? req.user.id : (current.salesRepId || null));
+
+    if (effectiveSalesRepId) {
+      const repExists = await prisma.tenantUser.findUnique({ where: { id: effectiveSalesRepId }, select: { id: true } });
+      if (!repExists) effectiveSalesRepId = null;
     }
 
     const result = await withInvoiceNumber((invoiceNumber) => prisma.$transaction(async (tx) => {
       const renewed = await tx.subscription.create({
         data: {
           tenantId: tenant.id,
-          packageId: pkg?.id ?? null,
-          packageName: pkg?.name ?? current.packageName,
+          packageId: data.packageId ? pkg?.id : (current.packageId ?? null),
+          packageName: (data.packageId && pkg?.name) ? pkg.name : current.packageName,
           seatCount: seats,
           state,
           startsAt,
           endsAt,
           renewedFromId: current.id,
           salesRepId: effectiveSalesRepId,
+          promotionId: promo?.id || null,
+          paidDurationMonths: ext.paidDurationMonths,
+          freeDurationMonths: ext.freeDurationMonths,
+          totalDurationMonths: ext.totalDurationMonths,
+          paidEndsAt: ext.paidEndsAt,
         },
         select: SUBSCRIPTION_SELECT,
       });
@@ -573,11 +698,29 @@ export async function renewSubscription(req, res, next) {
           where: { id: tenant.id },
           data: { licenseLimit: seats, planEndsAt: endsAt },
         });
+      } else if (endsAt && (!tenant.planEndsAt || new Date(endsAt) > new Date(tenant.planEndsAt))) {
+        await tx.tenant.update({
+          where: { id: tenant.id },
+          data: { planEndsAt: endsAt },
+        });
       }
 
       const invoice = data.createInvoice
         ? await raiseInvoiceFor(tx, { tenant, subscription: renewed, quantity: seats, unitPrice: price, coupon, req, invoiceNumber })
         : null;
+
+      if (promo) {
+        await recordPromotionRedemption(tx, {
+          promotionId: promo.id,
+          subscriptionId: renewed.id,
+          tenantId: tenant.id,
+          salesRepId: effectiveSalesRepId,
+          paidMonths: ext.paidDurationMonths,
+          freeMonths: ext.freeDurationMonths,
+          totalMonths: ext.totalDurationMonths,
+          paidRevenue: invoice ? num(invoice.totalAmount) : round2(seats * price * 1.18),
+        });
+      }
 
       await recordPlatformAction({
         tx,
@@ -745,10 +888,12 @@ export async function getRenewalExperience(req, res, next) {
           id: true,
           code: true,
           bdmName: true,
+          salesRepId: true,
           discountType: true,
           discountValue: true,
           active: true,
           timesUsed: true,
+          salesRep: { select: { id: true, name: true, email: true, designation: true } },
         },
       }),
       prisma.couponRedemption.findMany({
@@ -760,6 +905,9 @@ export async function getRenewalExperience(req, res, next) {
               totalAmount: true,
               amountPaid: true,
               subscriptionId: true,
+              subscription: {
+                select: { salesRepId: true },
+              },
             },
           },
           coupon: {
@@ -767,13 +915,14 @@ export async function getRenewalExperience(req, res, next) {
               id: true,
               code: true,
               bdmName: true,
+              salesRepId: true,
             },
           },
         },
       }),
       prisma.tenantUser.findMany({
         where: { role: 'PLATFORM_SALES', isDeleted: false },
-        select: { id: true, name: true, email: true },
+        select: { id: true, name: true, email: true, designation: true, status: true },
       }),
     ]);
 
@@ -809,49 +958,42 @@ export async function getRenewalExperience(req, res, next) {
       ? round2((renewedCount / totalResolved) * 100)
       : 100;
 
-    // Aggregate BDM Performance on renewals and coupons
+    // Aggregate BDM Performance on renewals and coupons using relational Sales Team records
     const bdmMap = new Map();
 
-    // Initialize from sales reps
+    // Initialize from actual sales reps
     for (const rep of salesReps) {
-      bdmMap.set(rep.name.trim(), {
+      bdmMap.set(rep.id, {
+        salesRepId: rep.id,
         bdmName: rep.name.trim(),
         email: rep.email,
-        salesRepId: rep.id,
+        designation: rep.designation || 'Sales Representative',
+        status: rep.status,
         renewalsClosed: 0,
+        seatsRenewed: 0,
         discountsGranted: 0,
         revenueInfluenced: 0,
         revenueCollected: 0,
-        coupons: [],
+        activeCoupons: [],
       });
     }
 
-    // Include BDM names from coupons
+    // Map coupons to their assigned BDM
     for (const c of bdmCoupons) {
-      const name = (c.bdmName || 'Unassigned BDM').trim();
-      if (!bdmMap.has(name)) {
-        bdmMap.set(name, {
-          bdmName: name,
-          email: null,
-          salesRepId: null,
-          renewalsClosed: 0,
-          discountsGranted: 0,
-          revenueInfluenced: 0,
-          revenueCollected: 0,
-          coupons: [],
-        });
+      if (c.salesRepId && bdmMap.has(c.salesRepId)) {
+        const entry = bdmMap.get(c.salesRepId);
+        if (c.active && !entry.activeCoupons.includes(c.code)) {
+          entry.activeCoupons.push(c.code);
+        }
       }
-      const entry = bdmMap.get(name);
-      if (!entry.coupons.includes(c.code)) entry.coupons.push(c.code);
     }
 
-    // Count renewals attributed directly to sales reps
+    // Count renewals and seats attributed directly to sales reps
     for (const t of allTerms) {
-      if (t.renewedFromId && t.salesRep?.name) {
-        const name = t.salesRep.name.trim();
-        if (bdmMap.has(name)) {
-          bdmMap.get(name).renewalsClosed += 1;
-        }
+      if (t.renewedFromId && t.salesRepId && bdmMap.has(t.salesRepId)) {
+        const entry = bdmMap.get(t.salesRepId);
+        entry.renewalsClosed += 1;
+        entry.seatsRenewed += (t.seatCount || 0);
       }
     }
 
@@ -860,7 +1002,6 @@ export async function getRenewalExperience(req, res, next) {
     let totalRenewalRevenue = 0;
 
     for (const red of couponRedemptions) {
-      const bdmName = (red.coupon?.bdmName || 'Unassigned BDM').trim();
       const disc = num(red.discountAmount);
       const totalAmt = red.invoice ? num(red.invoice.totalAmount) : 0;
       const paidAmt = red.invoice ? num(red.invoice.amountPaid) : 0;
@@ -868,8 +1009,9 @@ export async function getRenewalExperience(req, res, next) {
       totalBdmDiscounts += disc;
       totalRenewalRevenue += totalAmt;
 
-      if (bdmMap.has(bdmName)) {
-        const b = bdmMap.get(bdmName);
+      const repId = red.coupon?.salesRepId || red.invoice?.subscription?.salesRepId;
+      if (repId && bdmMap.has(repId)) {
+        const b = bdmMap.get(repId);
         b.discountsGranted = round2(b.discountsGranted + disc);
         b.revenueInfluenced = round2(b.revenueInfluenced + totalAmt);
         b.revenueCollected = round2(b.revenueCollected + paidAmt);
@@ -908,7 +1050,9 @@ export async function getRenewalExperience(req, res, next) {
       activeBdmCoupons: bdmCoupons.filter(c => c.active).map(c => ({
         id: c.id,
         code: c.code,
-        bdmName: c.bdmName,
+        bdmName: c.salesRep?.name || c.bdmName || 'Sales Team',
+        salesRepId: c.salesRepId || null,
+        salesRepEmail: c.salesRep?.email || null,
         discountType: c.discountType,
         discountValue: num(c.discountValue),
       })),
@@ -950,6 +1094,7 @@ export async function calculateRenewal(req, res, next) {
     if (!current) return res.status(404).json({ error: 'Subscription not found' });
 
     const { packageId, seatCount, unitPrice, couponCode } = req.body || {};
+    const { packageId, seatCount, unitPrice, couponCode, promoCode, promotionId } = req.body || {};
 
     const pkg = packageId
       ? await prisma.package.findUnique({ where: { id: packageId } })
@@ -961,7 +1106,12 @@ export async function calculateRenewal(req, res, next) {
     let coupon = null;
     let couponError = null;
     if (couponCode && String(couponCode).trim()) {
-      coupon = await prisma.coupon.findUnique({ where: { code: String(couponCode).trim().toUpperCase() } });
+      coupon = await prisma.coupon.findUnique({
+        where: { code: String(couponCode).trim().toUpperCase() },
+        include: {
+          salesRep: { select: { id: true, name: true, email: true, designation: true } },
+        },
+      });
       if (!coupon) {
         couponError = 'Coupon not found';
       } else if (!coupon.active) {
@@ -985,9 +1135,29 @@ export async function calculateRenewal(req, res, next) {
     const creditApplied = Math.min(tenantCredit, pricing.total);
     const netPayable = round2(Math.max(0, pricing.total - creditApplied));
 
+    const isPerpetual = !current.endsAt && !packageId && !promoCode && !pkg?.termMonths;
     const startsAt = current.endsAt ? new Date(current.endsAt) : new Date();
     const months = pkg?.termMonths ?? 12;
     const endsAt = addMonths(startsAt, months);
+
+    // Promotional Extension Resolution
+    let promo = null;
+    if (!isPerpetual) {
+      promo = await findEligiblePromotion({
+        packageId: pkg?.id || null,
+        termMonths: months,
+        context: 'RENEWALS',
+        code: promoCode,
+        promotionId,
+      });
+    }
+    const ext = calculateSubscriptionExtension({
+      startsAt,
+      termMonths: months,
+      promotion: promo,
+    });
+
+    const endsAt = isPerpetual ? null : ext.endsAt;
 
     res.json({
       subscriptionId: current.id,
@@ -1010,8 +1180,20 @@ export async function calculateRenewal(req, res, next) {
         walletCreditApplied: creditApplied,
         netPayable,
       },
+      duration: {
+        paidMonths: ext.paidDurationMonths,
+        freeMonths: ext.freeDurationMonths,
+        totalMonths: ext.totalDurationMonths,
+        startsAt,
+        paidEndsAt: ext.paidEndsAt,
+        endsAt: ext.endsAt,
+      },
+      promotion: ext.promotion,
       bdm: {
-        bdmName: validCoupon?.bdmName || null,
+        bdmName: validCoupon?.salesRep?.name || validCoupon?.bdmName || null,
+        salesRepId: validCoupon?.salesRepId || null,
+        salesRepEmail: validCoupon?.salesRep?.email || null,
+        salesRepDesignation: validCoupon?.salesRep?.designation || null,
         couponCode: validCoupon?.code || (couponCode ? String(couponCode).toUpperCase() : null),
         discountType: validCoupon?.discountType || null,
         discountValue: validCoupon ? num(validCoupon.discountValue) : null,
@@ -1020,6 +1202,7 @@ export async function calculateRenewal(req, res, next) {
       },
       schedule: {
         startsAt,
+        paidEndsAt: ext.paidEndsAt,
         endsAt,
       },
     });

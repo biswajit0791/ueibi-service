@@ -14,7 +14,15 @@ export async function list(req, res, next) {
     if (active === 'false') where.active = false;
     if (search) where.code = { contains: String(search).toUpperCase() };
 
-    const items = await prisma.coupon.findMany({ where, orderBy: { createdAt: 'desc' } });
+    const items = await prisma.coupon.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      include: {
+        salesRep: {
+          select: { id: true, name: true, email: true, designation: true, status: true, isDeleted: true },
+        },
+      },
+    });
     res.json({ items });
   } catch (err) {
     next(err);
@@ -27,14 +35,46 @@ export async function create(req, res, next) {
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
-    const coupon = await prisma.coupon.create({ data: parsed.data });
+    const data = { ...parsed.data };
+
+    if (data.salesRepId) {
+      const rep = await prisma.tenantUser.findUnique({
+        where: { id: data.salesRepId },
+        select: { id: true, name: true, email: true, role: true, status: true, isDeleted: true },
+      });
+      if (!rep || rep.role !== 'PLATFORM_SALES') {
+        return res.status(400).json({ error: 'Assigned user must be an active Sales Team member', code: 'INVALID_SALES_REP' });
+      }
+      if (rep.status !== 'ACTIVE' || rep.isDeleted) {
+        return res.status(400).json({ error: 'Inactive Sales Team members cannot receive coupon assignments', code: 'STAFF_INACTIVE' });
+      }
+      data.bdmName = rep.name;
+    } else if (data.salesRepId === null) {
+      data.bdmName = null;
+    }
+
+    const coupon = await prisma.coupon.create({
+      data,
+      include: {
+        salesRep: {
+          select: { id: true, name: true, email: true, designation: true, status: true, isDeleted: true },
+        },
+      },
+    });
+
     // Coupons move money, so who issued one and when is worth recording.
     await recordPlatformAction({
       req,
       action: PLATFORM_ACTIONS.COUPON_CREATED,
       targetType: 'COUPON',
       targetId: coupon.id,
-      afterValue: { code: coupon.code, discountType: coupon.discountType, discountValue: String(coupon.discountValue) },
+      afterValue: {
+        code: coupon.code,
+        discountType: coupon.discountType,
+        discountValue: String(coupon.discountValue),
+        salesRepId: coupon.salesRepId,
+        bdmName: coupon.bdmName,
+      },
     }).catch((err) => console.warn('[Coupon] audit write failed:', err.message));
     res.status(201).json(coupon);
   } catch (err) {
@@ -49,7 +89,14 @@ export async function get(req, res, next) {
     if (!parsedParams.success) {
       return res.status(400).json({ error: 'Invalid coupon ID parameter', details: parsedParams.error.issues });
     }
-    const coupon = await prisma.coupon.findUnique({ where: { id: parsedParams.data.id } });
+    const coupon = await prisma.coupon.findUnique({
+      where: { id: parsedParams.data.id },
+      include: {
+        salesRep: {
+          select: { id: true, name: true, email: true, designation: true, status: true, isDeleted: true },
+        },
+      },
+    });
     if (!coupon) return res.status(404).json({ error: 'Coupon not found' });
     res.json(coupon);
   } catch (err) {
@@ -67,15 +114,57 @@ export async function update(req, res, next) {
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
+    const data = { ...parsed.data };
+
+    if (data.salesRepId !== undefined) {
+      if (data.salesRepId) {
+        const rep = await prisma.tenantUser.findUnique({
+          where: { id: data.salesRepId },
+          select: { id: true, name: true, email: true, role: true, status: true, isDeleted: true },
+        });
+        if (!rep || rep.role !== 'PLATFORM_SALES') {
+          return res.status(400).json({ error: 'Assigned user must be an active Sales Team member', code: 'INVALID_SALES_REP' });
+        }
+        if (rep.status !== 'ACTIVE' || rep.isDeleted) {
+          return res.status(400).json({ error: 'Inactive Sales Team members cannot receive coupon assignments', code: 'STAFF_INACTIVE' });
+        }
+        data.bdmName = rep.name;
+      } else {
+        data.salesRepId = null;
+        data.bdmName = null;
+      }
+    }
+
     const before = await prisma.coupon.findUnique({ where: { id: parsedParams.data.id } });
-    const coupon = await prisma.coupon.update({ where: { id: parsedParams.data.id }, data: parsed.data });
+    const coupon = await prisma.coupon.update({
+      where: { id: parsedParams.data.id },
+      data,
+      include: {
+        salesRep: {
+          select: { id: true, name: true, email: true, designation: true, status: true, isDeleted: true },
+        },
+      },
+    });
+
     await recordPlatformAction({
       req,
       action: PLATFORM_ACTIONS.COUPON_UPDATED,
       targetType: 'COUPON',
       targetId: coupon.id,
-      beforeValue: before ? { code: before.code, discountValue: String(before.discountValue), active: before.active } : null,
-      afterValue: { code: coupon.code, discountValue: String(coupon.discountValue), active: coupon.active },
+      beforeValue: before ? {
+        code: before.code,
+        discountValue: String(before.discountValue),
+        active: before.active,
+        salesRepId: before.salesRepId,
+        bdmName: before.bdmName,
+      } : null,
+      afterValue: {
+        code: coupon.code,
+        discountValue: String(coupon.discountValue),
+        active: coupon.active,
+        salesRepId: coupon.salesRepId,
+        bdmName: coupon.bdmName,
+      },
     }).catch((err) => console.warn('[Coupon] audit write failed:', err.message));
     res.json(coupon);
   } catch (err) {

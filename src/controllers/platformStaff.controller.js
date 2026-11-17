@@ -24,7 +24,7 @@ const createStaffSchema = z.object({
 });
 
 const STAFF_SELECT = {
-  id: true, name: true, email: true, role: true, status: true,
+  id: true, name: true, email: true, role: true, designation: true, status: true,
   isDeleted: true, lastLoginAt: true, createdAt: true,
 };
 
@@ -36,14 +36,61 @@ async function getStaffRenewalStats(staffIds) {
       renewalsCount: 0,
       renewedSeatsCount: 0,
       renewedRevenue: 0,
+      totalCouponsAssigned: 0,
+      totalCouponUsage: 0,
+      totalDiscountsProvided: 0,
       lastRenewalAt: null,
+      coupons: [],
       renewals: [],
     });
   }
 
   if (staffIds.length === 0) return statsMap;
 
-  // 1. Direct renewals tagged with salesRepId
+  // 1. Coupons assigned to these staff members
+  const assignedCoupons = await prisma.coupon.findMany({
+    where: { salesRepId: { in: staffIds } },
+    select: {
+      id: true,
+      code: true,
+      discountType: true,
+      discountValue: true,
+      salesRepId: true,
+      timesUsed: true,
+      usageLimit: true,
+      active: true,
+      expiresAt: true,
+      createdAt: true,
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  for (const c of assignedCoupons) {
+    if (c.salesRepId && statsMap.has(c.salesRepId)) {
+      const entry = statsMap.get(c.salesRepId);
+      entry.totalCouponsAssigned += 1;
+      entry.totalCouponUsage += (c.timesUsed || 0);
+      entry.coupons.push(c);
+    }
+  }
+
+  // 2. Coupon redemptions for coupons assigned to these staff members
+  const redemptions = await prisma.couponRedemption.findMany({
+    where: { coupon: { salesRepId: { in: staffIds } } },
+    select: {
+      discountAmount: true,
+      coupon: { select: { salesRepId: true } },
+    },
+  });
+
+  for (const r of redemptions) {
+    const sId = r.coupon?.salesRepId;
+    if (sId && statsMap.has(sId)) {
+      statsMap.get(sId).totalDiscountsProvided += Number(r.discountAmount || 0);
+    }
+  }
+
+  // 3. Direct renewals tagged with salesRepId
   const directSubs = await prisma.subscription.findMany({
     where: {
       salesRepId: { in: staffIds },
@@ -51,13 +98,13 @@ async function getStaffRenewalStats(staffIds) {
     },
     include: {
       tenant: { select: { id: true, companyName: true, domainName: true, tenantCode: true } },
-      invoices: { select: { id: true, invoiceNumber: true, totalAmount: true, state: true, issuedAt: true } },
+      invoices: { select: { id: true, invoiceNumber: true, totalAmount: true, discountAmount: true, state: true, issuedAt: true } },
       renewedFrom: { select: { id: true, packageName: true, seatCount: true, endsAt: true } },
     },
     orderBy: { createdAt: 'desc' },
   });
 
-  // 2. Audit logs where action = SUBSCRIPTION_RENEWED and actorId in staffIds
+  // 4. Audit logs where action = SUBSCRIPTION_RENEWED and actorId in staffIds
   const auditLogs = await prisma.platformAuditLog.findMany({
     where: {
       action: 'SUBSCRIPTION_RENEWED',
@@ -78,7 +125,7 @@ async function getStaffRenewalStats(staffIds) {
         },
         include: {
           tenant: { select: { id: true, companyName: true, domainName: true, tenantCode: true } },
-          invoices: { select: { id: true, invoiceNumber: true, totalAmount: true, state: true, issuedAt: true } },
+          invoices: { select: { id: true, invoiceNumber: true, totalAmount: true, discountAmount: true, state: true, issuedAt: true } },
           renewedFrom: { select: { id: true, packageName: true, seatCount: true, endsAt: true } },
         },
       })
@@ -107,6 +154,11 @@ async function getStaffRenewalStats(staffIds) {
 
     const invTotal = (sub.invoices || []).reduce((sum, inv) => sum + Number(inv.totalAmount || 0), 0);
     entry.renewedRevenue += invTotal;
+
+    const invDiscount = (sub.invoices || []).reduce((sum, inv) => sum + Number(inv.discountAmount || 0), 0);
+    if (invDiscount > 0 && entry.totalDiscountsProvided === 0) {
+      entry.totalDiscountsProvided += invDiscount;
+    }
 
     if (!entry.lastRenewalAt || new Date(sub.createdAt) > new Date(entry.lastRenewalAt)) {
       entry.lastRenewalAt = sub.createdAt;
@@ -142,12 +194,23 @@ export async function listPlatformStaff(req, res, next) {
     const statsMap = await getStaffRenewalStats(staffIds);
 
     const items = staffMembers.map((s) => {
-      const perf = statsMap.get(s.id) || { renewalsCount: 0, renewedSeatsCount: 0, renewedRevenue: 0, lastRenewalAt: null };
+      const perf = statsMap.get(s.id) || {
+        renewalsCount: 0,
+        renewedSeatsCount: 0,
+        renewedRevenue: 0,
+        totalCouponsAssigned: 0,
+        totalCouponUsage: 0,
+        totalDiscountsProvided: 0,
+        lastRenewalAt: null,
+      };
       return {
         ...s,
         renewalsCount: perf.renewalsCount,
         renewedSeatsCount: perf.renewedSeatsCount,
         renewedRevenue: perf.renewedRevenue,
+        totalCouponsAssigned: perf.totalCouponsAssigned,
+        totalCouponUsage: perf.totalCouponUsage,
+        totalDiscountsProvided: perf.totalDiscountsProvided,
         lastRenewalAt: perf.lastRenewalAt,
       };
     });
@@ -172,23 +235,39 @@ export async function getSalesPerformanceSummary(req, res, next) {
     let totalRenewals = 0;
     let totalSeats = 0;
     let totalRevenue = 0;
+    let totalDiscounts = 0;
+    let totalCoupons = 0;
     let topPerformer = null;
 
     const leaderboard = staffMembers.map((s) => {
-      const perf = statsMap.get(s.id) || { renewalsCount: 0, renewedSeatsCount: 0, renewedRevenue: 0, lastRenewalAt: null };
+      const perf = statsMap.get(s.id) || {
+        renewalsCount: 0,
+        renewedSeatsCount: 0,
+        renewedRevenue: 0,
+        totalCouponsAssigned: 0,
+        totalCouponUsage: 0,
+        totalDiscountsProvided: 0,
+        lastRenewalAt: null,
+      };
       totalRenewals += perf.renewalsCount;
       totalSeats += perf.renewedSeatsCount;
       totalRevenue += perf.renewedRevenue;
+      totalDiscounts += perf.totalDiscountsProvided;
+      totalCoupons += perf.totalCouponsAssigned;
 
       return {
         id: s.id,
         name: s.name,
         email: s.email,
+        designation: s.designation,
         status: s.status,
         isDeleted: s.isDeleted,
         renewalsCount: perf.renewalsCount,
         renewedSeatsCount: perf.renewedSeatsCount,
         renewedRevenue: perf.renewedRevenue,
+        totalCouponsAssigned: perf.totalCouponsAssigned,
+        totalCouponUsage: perf.totalCouponUsage,
+        totalDiscountsProvided: perf.totalDiscountsProvided,
         lastRenewalAt: perf.lastRenewalAt,
       };
     });
@@ -209,6 +288,8 @@ export async function getSalesPerformanceSummary(req, res, next) {
         totalRenewals,
         totalSeats,
         totalRevenue,
+        totalDiscounts,
+        totalCoupons,
         topPerformer,
       },
       leaderboard,
@@ -236,7 +317,11 @@ export async function getStaffRenewalHistory(req, res, next) {
       renewalsCount: 0,
       renewedSeatsCount: 0,
       renewedRevenue: 0,
+      totalCouponsAssigned: 0,
+      totalCouponUsage: 0,
+      totalDiscountsProvided: 0,
       lastRenewalAt: null,
+      coupons: [],
       renewals: [],
     };
 
@@ -246,8 +331,12 @@ export async function getStaffRenewalHistory(req, res, next) {
         renewalsCount: staffStats.renewalsCount,
         renewedSeatsCount: staffStats.renewedSeatsCount,
         renewedRevenue: staffStats.renewedRevenue,
+        totalCouponsAssigned: staffStats.totalCouponsAssigned,
+        totalCouponUsage: staffStats.totalCouponUsage,
+        totalDiscountsProvided: staffStats.totalDiscountsProvided,
         lastRenewalAt: staffStats.lastRenewalAt,
       },
+      coupons: staffStats.coupons,
       renewals: staffStats.renewals,
     });
   } catch (err) {

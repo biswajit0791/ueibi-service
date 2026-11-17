@@ -2,7 +2,12 @@ import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { prisma } from '../lib/prisma.js';
 import { env } from '../config/env.js';
-import { addMonths } from './billing.service.js';
+import { addMonths, num } from './billing.service.js';
+import {
+  findEligiblePromotion,
+  calculateSubscriptionExtension,
+  recordPromotionRedemption,
+} from './promotion.service.js';
 import { issuePasswordResetLink } from './passwordReset.service.js';
 import { notifyStakeholders } from '../lib/notify.js';
 import { sendMail } from '../lib/mailer.js';
@@ -65,7 +70,17 @@ export async function activateTenantFromRegistration({
   }
 
   const startsAt = new Date();
-  const endsAt = addMonths(startsAt, 12);
+  const promo = await findEligiblePromotion({
+    packageId: null,
+    termMonths: 12,
+    context: 'NEW_REGISTRATIONS',
+  });
+  const ext = calculateSubscriptionExtension({
+    startsAt,
+    termMonths: 12,
+    promotion: promo,
+  });
+  const endsAt = ext.endsAt;
   const licenseLimit = registration.licenseQuantity && registration.licenseQuantity > 0
     ? registration.licenseQuantity
     : 10;
@@ -99,18 +114,36 @@ export async function activateTenantFromRegistration({
         },
       });
 
-      // 3. Create Annual Subscription
-      await tx.subscription.create({
+      // 3. Create Subscription with Promotional Extension
+      const createdSub = await tx.subscription.create({
         data: {
           tenantId: createdTenant.id,
-          packageName: `${licenseLimit} Licenses (Annual)`,
+          packageName: `${licenseLimit} Licenses (${ext.totalDurationMonths} Months${ext.freeDurationMonths ? ` incl. ${ext.freeDurationMonths} Mo Free` : ' Annual'})`,
           seatCount: licenseLimit,
           state: 'ACTIVE',
           startsAt,
           endsAt,
           registrationId: registration.id,
+          promotionId: promo?.id || null,
+          paidDurationMonths: ext.paidDurationMonths,
+          freeDurationMonths: ext.freeDurationMonths,
+          totalDurationMonths: ext.totalDurationMonths,
+          paidEndsAt: ext.paidEndsAt,
         },
       });
+
+      if (promo) {
+        await recordPromotionRedemption(tx, {
+          promotionId: promo.id,
+          subscriptionId: createdSub.id,
+          tenantId: createdTenant.id,
+          salesRepId: null,
+          paidMonths: ext.paidDurationMonths,
+          freeMonths: ext.freeDurationMonths,
+          totalMonths: ext.totalDurationMonths,
+          paidRevenue: num(registration.totalAmount) || 0,
+        });
+      }
 
       // 4. Create CMD User (SUPER_ADMIN)
       await tx.tenantUser.create({
