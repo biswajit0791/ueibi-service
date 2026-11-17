@@ -137,6 +137,7 @@ model Tenant {
   platformTickets      PlatformTicket[]
   salesLeads           SalesLead[]
   exitDocDispatches    ExitDocumentDispatch[]
+  promotionRedemptions PromotionRedemption[]
 
   @@index([isPlatform])
   @@index([status])
@@ -414,6 +415,8 @@ model TenantUser {
   ticketMessages            PlatformTicketMessage[]
   assignedSalesLeads        SalesLead[]         @relation("AssignedSalesLeads")
   closedSubscriptionRenewals Subscription[]     @relation("SubscriptionSalesRep")
+  assignedCoupons           Coupon[]            @relation("CouponSalesRep")
+  promotionsInfluenced      PromotionRedemption[] @relation("PromotionSalesRep")
   dispatchedExitDocuments   ExitDocumentDispatch[] @relation("DispatchedExitDocuments")
   permissionAuditsActed PermissionAuditLog[] @relation("PermissionAuditActor")
 
@@ -695,6 +698,8 @@ model Coupon {
   discountType  DiscountType
   discountValue Decimal      @db.Decimal(10, 2)
   bdmName       String?
+  salesRepId    String?
+  salesRep      TenantUser?  @relation("CouponSalesRep", fields: [salesRepId], references: [id], onDelete: SetNull)
   expiresAt     DateTime?
   usageLimit    Int?
   timesUsed     Int          @default(0)
@@ -705,6 +710,7 @@ model Coupon {
   registrations CompanyRegistration[]
   redemptions   CouponRedemption[]
 
+  @@index([salesRepId])
   @@map("coupons")
 }
 
@@ -799,6 +805,16 @@ model Subscription {
   registrationId String?
   cancelledAt    DateTime?
   cancelReason   String?           @db.Text
+
+  // Promotional extension (Buy X Get Y Free)
+  promotionId         String?
+  promotion           SubscriptionPromotion? @relation(fields: [promotionId], references: [id], onDelete: SetNull)
+  promotionRedemption PromotionRedemption?
+  paidDurationMonths  Int?
+  freeDurationMonths  Int?              @default(0)
+  totalDurationMonths Int?
+  paidEndsAt          DateTime?
+
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt
 
@@ -808,7 +824,55 @@ model Subscription {
   @@index([state])
   @@index([endsAt])
   @@index([salesRepId])
+  @@index([promotionId])
   @@map("subscriptions")
+}
+
+model SubscriptionPromotion {
+  id                 String                @id @default(cuid())
+  name               String
+  description        String?               @db.Text
+  code               String?               @unique
+  paidMonths         Int                   @default(12)
+  freeMonths         Int                   @default(2)
+  active             Boolean               @default(true)
+  startsAt           DateTime              @default(now())
+  expiresAt          DateTime?
+  applyToAllPackages Boolean               @default(true)
+  packageIds         String[]              @default([])
+  eligibility        String                @default("ALL") // "ALL" | "NEW_REGISTRATIONS" | "RENEWALS"
+  usageLimit         Int?
+  timesUsed          Int                   @default(0)
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+
+  subscriptions      Subscription[]
+  redemptions        PromotionRedemption[]
+
+  @@index([active, startsAt, expiresAt])
+  @@map("subscription_promotions")
+}
+
+model PromotionRedemption {
+  id             String                @id @default(cuid())
+  promotionId    String
+  promotion      SubscriptionPromotion @relation(fields: [promotionId], references: [id], onDelete: Cascade)
+  subscriptionId String                @unique
+  subscription   Subscription          @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  tenantId       String
+  tenant         Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  salesRepId     String?
+  salesRep       TenantUser?           @relation("PromotionSalesRep", fields: [salesRepId], references: [id], onDelete: SetNull)
+  paidMonths     Int
+  freeMonths     Int
+  totalMonths    Int
+  paidRevenue    Decimal               @default(0) @db.Decimal(10, 2)
+  appliedAt      DateTime              @default(now())
+
+  @@index([promotionId])
+  @@index([tenantId])
+  @@index([salesRepId])
+  @@map("promotion_redemptions")
 }
 
 model Invoice {

@@ -132,6 +132,8 @@ export const subscriptionCreateSchema = z.object({
   seatCount: z.coerce.number().int().min(1).max(100000).nullish(),
   unitPrice: z.coerce.number().positive().max(10000000).nullish(),
   couponCode: z.string().max(60).nullish(),
+  promoCode: z.string().max(60).nullish(),
+  promotionId: z.string().nullish(),
   /// False raises the term without billing for it — for a migration or a gift.
   createInvoice: z.boolean().default(true),
   salesRepId: z.string().nullish(),
@@ -144,6 +146,9 @@ export const subscriptionRenewSchema = z.object({
   seatCount: z.coerce.number().int().min(1).max(100000).nullish(),
   unitPrice: z.coerce.number().positive().max(10000000).nullish(),
   couponCode: z.string().max(60).nullish(),
+  promoCode: z.string().max(60).nullish(),
+  promotionId: z.string().nullish(),
+  salesRepId: z.string().nullish(),
   /// Defaults to the day the current term ends, so renewals do not leave a gap.
   startsAt: z.coerce.date().nullish(),
   createInvoice: z.boolean().default(true),

@@ -40,6 +40,15 @@ import {
   previewTemplate,
 } from '../controllers/invoiceTemplate.controller.js';
 import { getSettings, updateSettings } from '../controllers/invoiceSettings.controller.js';
+import {
+  listPromotions,
+  getAnalytics as getPromotionAnalytics,
+  getEligible as getEligiblePromotion,
+  getPromotion,
+  createPromotion,
+  updatePromotion,
+  deletePromotion,
+} from '../controllers/promotion.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requirePlatformOwner, requirePlatformStaff } from '../middleware/rbac.js';
 
@@ -132,5 +141,14 @@ router.post('/platform/invoice-templates/:slug/versions/:versionId/publish', req
 // allocation computes it, so the screen cannot disagree with reality.
 router.get('/platform/invoice-settings', requireAuth, requirePlatformOwner, getSettings);
 router.put('/platform/invoice-settings', requireAuth, requirePlatformOwner, updateSettings);
+
+// ── Promotional Extensions (Buy X Get Y Months Free) ───────────────────────
+router.get('/platform/promotions/analytics', requireAuth, requirePlatformStaff, getPromotionAnalytics);
+router.get('/platform/promotions/eligible', requireAuth, requirePlatformStaff, getEligiblePromotion);
+router.get('/platform/promotions', requireAuth, requirePlatformStaff, listPromotions);
+router.get('/platform/promotions/:id', requireAuth, requirePlatformStaff, getPromotion);
+router.post('/platform/promotions', requireAuth, requirePlatformOwner, createPromotion);
+router.patch('/platform/promotions/:id', requireAuth, requirePlatformOwner, updatePromotion);
+router.delete('/platform/promotions/:id', requireAuth, requirePlatformOwner, deletePromotion);
 
 export default router;

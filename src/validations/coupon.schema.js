@@ -8,6 +8,7 @@ export const couponSchema = z.object({
   // alone" while null means "clear it". Without null these three could be set
   // but never unset — a coupon given a BDM or an expiry was stuck with it.
   bdmName: z.string().nullish(),
+  salesRepId: z.string().nullish(),
   expiresAt: z.coerce.date().nullish(),
   usageLimit: z.number().int().positive().nullish(),
   active: z.boolean().optional(),
