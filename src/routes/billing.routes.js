@@ -44,10 +44,13 @@ import {
   listPromotions,
   getAnalytics as getPromotionAnalytics,
   getEligible as getEligiblePromotion,
+  getEligibleOffers,
   getPromotion,
   createPromotion,
   updatePromotion,
   deletePromotion,
+  duplicatePromotion,
+  archivePromotion,
 } from '../controllers/promotion.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requirePlatformOwner, requirePlatformStaff } from '../middleware/rbac.js';
@@ -144,10 +147,13 @@ router.put('/platform/invoice-settings', requireAuth, requirePlatformOwner, upda
 
 // ── Promotional Extensions (Buy X Get Y Months Free) ───────────────────────
 router.get('/platform/promotions/analytics', requireAuth, requirePlatformStaff, getPromotionAnalytics);
+router.get('/platform/promotions/eligible-offers', requireAuth, requirePlatformStaff, getEligibleOffers);
 router.get('/platform/promotions/eligible', requireAuth, requirePlatformStaff, getEligiblePromotion);
 router.get('/platform/promotions', requireAuth, requirePlatformStaff, listPromotions);
 router.get('/platform/promotions/:id', requireAuth, requirePlatformStaff, getPromotion);
 router.post('/platform/promotions', requireAuth, requirePlatformOwner, createPromotion);
+router.post('/platform/promotions/:id/duplicate', requireAuth, requirePlatformOwner, duplicatePromotion);
+router.patch('/platform/promotions/:id/archive', requireAuth, requirePlatformOwner, archivePromotion);
 router.patch('/platform/promotions/:id', requireAuth, requirePlatformOwner, updatePromotion);
 router.delete('/platform/promotions/:id', requireAuth, requirePlatformOwner, deletePromotion);
 

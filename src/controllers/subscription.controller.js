@@ -422,10 +422,22 @@ export async function startSubscription(req, res, next) {
     const promo = await findEligiblePromotion({
       packageId: pkg.id,
       termMonths: pkg.termMonths || 12,
+      seatCount: seats,
       context: 'NEW_REGISTRATIONS',
       code: data.promoCode,
       promotionId: data.promotionId,
+      couponId: coupon?.id || null,
+      couponCode: coupon?.code || couponCode || null,
+      coupon,
     });
+
+    if (promo && promo.allowCoupons === false && couponCode) {
+      return res.status(400).json({
+        error: `Coupons cannot be stacked with promotion '${promo.name}'.`,
+        code: 'PROMOTION_NO_COUPON_STACKING',
+      });
+    }
+
     const ext = calculateSubscriptionExtension({
       startsAt,
       termMonths: pkg.termMonths || 12,
@@ -473,6 +485,16 @@ export async function startSubscription(req, res, next) {
           subscriptionId: subscription.id,
           tenantId: tenant.id,
           salesRepId: effectiveSalesRepId,
+          promotionName: promo.name,
+          promoCode: promo.code,
+          originalEndsAt: startsAt,
+          finalEndsAt: endsAt,
+          seatCount: seats,
+          unitPrice: price,
+          couponCode: coupon?.code || null,
+          couponDiscount: invoice ? num(invoice.discountAmount || 0) : 0,
+          gstAmount: invoice ? num(invoice.gstAmount || 0) : round2(seats * price * 0.18),
+          netPayable: invoice ? num(invoice.totalAmount || 0) : round2(seats * price * 1.18),
           paidMonths: ext.paidDurationMonths,
           freeMonths: ext.freeDurationMonths,
           totalMonths: ext.totalDurationMonths,
@@ -610,7 +632,7 @@ export async function renewSubscription(req, res, next) {
     // Default to the day the current term ends, so renewals leave no gap. A
     // perpetual term has no end, so a renewal of one starts today.
     const startsAt = data.startsAt ?? (current.endsAt ? new Date(current.endsAt) : new Date());
-    let months = pkg?.termMonths ?? null;
+    let months = pkg?.termMonths ?? current.paidDurationMonths ?? null;
     if (!months && current.startsAt && current.endsAt) {
       const diffMs = new Date(current.endsAt).getTime() - new Date(current.startsAt).getTime();
       const approxMonths = Math.round(diffMs / (30.44 * 24 * 60 * 60 * 1000));
@@ -619,26 +641,6 @@ export async function renewSubscription(req, res, next) {
     const termMonths = months || 12;
 
     const isPerpetual = !current.endsAt && !data.packageId && !data.promoCode && !pkg?.termMonths;
-
-    let promo = null;
-    if (!isPerpetual) {
-      promo = await findEligiblePromotion({
-        packageId: data.packageId ? pkg?.id : (current.packageId ?? null),
-        termMonths,
-        context: 'RENEWALS',
-        code: data.promoCode,
-        promotionId: data.promotionId,
-      });
-    }
-
-    const ext = calculateSubscriptionExtension({
-      startsAt,
-      termMonths,
-      promotion: promo,
-    });
-
-    const endsAt = isPerpetual ? null : ext.endsAt;
-    const state = subscriptionStateOf({ startsAt, endsAt, cancelledAt: null });
 
     let coupon = null;
     if (data.couponCode) {
@@ -651,6 +653,37 @@ export async function renewSubscription(req, res, next) {
       const problem = couponValidationError(coupon);
       if (problem) return res.status(400).json({ error: problem, code: 'COUPON_INVALID' });
     }
+
+    let promo = null;
+    if (!isPerpetual) {
+      promo = await findEligiblePromotion({
+        packageId: data.packageId ? pkg?.id : (current.packageId ?? null),
+        termMonths,
+        seatCount: seats,
+        context: 'RENEWALS',
+        code: data.promoCode,
+        promotionId: data.promotionId,
+        couponId: coupon?.id || null,
+        couponCode: coupon?.code || data.couponCode || null,
+        coupon,
+      });
+    }
+
+    if (promo && promo.allowCoupons === false && data.couponCode) {
+      return res.status(400).json({
+        error: `Coupons cannot be stacked with promotion '${promo.name}'.`,
+        code: 'PROMOTION_NO_COUPON_STACKING',
+      });
+    }
+
+    const ext = calculateSubscriptionExtension({
+      startsAt,
+      termMonths,
+      promotion: promo,
+    });
+
+    const endsAt = isPerpetual ? null : ext.endsAt;
+    const state = subscriptionStateOf({ startsAt, endsAt, cancelledAt: null });
 
     // Automatic BDM Attribution:
     // If renewal uses an assigned coupon, automatically attribute renewal to that BDM.
@@ -713,6 +746,16 @@ export async function renewSubscription(req, res, next) {
           subscriptionId: renewed.id,
           tenantId: tenant.id,
           salesRepId: effectiveSalesRepId,
+          promotionName: promo.name,
+          promoCode: promo.code,
+          originalEndsAt: current.endsAt,
+          finalEndsAt: endsAt,
+          seatCount: seats,
+          unitPrice: price,
+          couponCode: coupon?.code || null,
+          couponDiscount: invoice ? num(invoice.discountAmount || 0) : 0,
+          gstAmount: invoice ? num(invoice.gstAmount || 0) : round2(seats * price * 0.18),
+          netPayable: invoice ? num(invoice.totalAmount || 0) : round2(seats * price * 1.18),
           paidMonths: ext.paidDurationMonths,
           freeMonths: ext.freeDurationMonths,
           totalMonths: ext.totalDurationMonths,
@@ -1019,6 +1062,8 @@ export async function getRenewalExperience(req, res, next) {
     const bdmPerformanceList = Array.from(bdmMap.values())
       .map(b => ({
         ...b,
+        coupons: b.activeCoupons || [],
+        activeCoupons: b.activeCoupons || [],
         discountsGranted: round2(b.discountsGranted),
         revenueInfluenced: round2(b.revenueInfluenced),
         revenueCollected: round2(b.revenueCollected),
@@ -1120,7 +1165,33 @@ export async function calculateRenewal(req, res, next) {
       }
     }
 
-    const validCoupon = coupon && !couponError ? coupon : null;
+    const isPerpetual = !current.endsAt && !packageId && !promoCode && !pkg?.termMonths;
+    const startsAt = current.endsAt ? new Date(current.endsAt) : new Date();
+    const months = pkg?.termMonths ?? current.paidDurationMonths ?? 12;
+
+    const candidateCoupon = coupon && !couponError ? coupon : null;
+
+    // Promotional Extension Resolution
+    let promo = null;
+    if (!isPerpetual) {
+      promo = await findEligiblePromotion({
+        packageId: pkg?.id || null,
+        termMonths: months,
+        seatCount: seats,
+        context: 'RENEWALS',
+        code: promoCode,
+        promotionId,
+        couponId: candidateCoupon?.id || null,
+        couponCode: candidateCoupon?.code || couponCode || null,
+        coupon: candidateCoupon,
+      });
+    }
+
+    if (promo && promo.allowCoupons === false && candidateCoupon) {
+      couponError = `Coupons cannot be stacked with promotion '${promo.name}'`;
+    }
+
+    const validCoupon = candidateCoupon && !couponError ? candidateCoupon : null;
     const pricing = computePricing({
       quantity: seats,
       unitPrice: price,
@@ -1132,21 +1203,6 @@ export async function calculateRenewal(req, res, next) {
     const creditApplied = Math.min(tenantCredit, pricing.total);
     const netPayable = round2(Math.max(0, pricing.total - creditApplied));
 
-    const isPerpetual = !current.endsAt && !packageId && !promoCode && !pkg?.termMonths;
-    const startsAt = current.endsAt ? new Date(current.endsAt) : new Date();
-    const months = pkg?.termMonths ?? 12;
-
-    // Promotional Extension Resolution
-    let promo = null;
-    if (!isPerpetual) {
-      promo = await findEligiblePromotion({
-        packageId: pkg?.id || null,
-        termMonths: months,
-        context: 'RENEWALS',
-        code: promoCode,
-        promotionId,
-      });
-    }
     const ext = calculateSubscriptionExtension({
       startsAt,
       termMonths: months,
