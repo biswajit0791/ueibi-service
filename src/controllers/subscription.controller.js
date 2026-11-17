@@ -419,7 +419,6 @@ export async function startSubscription(req, res, next) {
       if (problem) return res.status(400).json({ error: problem, code: 'COUPON_INVALID' });
     }
 
-    const endsAt = pkg.termMonths ? addMonths(startsAt, pkg.termMonths) : null;
     const promo = await findEligiblePromotion({
       packageId: pkg.id,
       termMonths: pkg.termMonths || 12,
@@ -617,7 +616,6 @@ export async function renewSubscription(req, res, next) {
       const approxMonths = Math.round(diffMs / (30.44 * 24 * 60 * 60 * 1000));
       if (approxMonths > 0) months = approxMonths;
     }
-    const endsAt = months ? addMonths(startsAt, months) : null;
     const termMonths = months || 12;
 
     const isPerpetual = !current.endsAt && !data.packageId && !data.promoCode && !pkg?.termMonths;
@@ -1093,7 +1091,6 @@ export async function calculateRenewal(req, res, next) {
 
     if (!current) return res.status(404).json({ error: 'Subscription not found' });
 
-    const { packageId, seatCount, unitPrice, couponCode } = req.body || {};
     const { packageId, seatCount, unitPrice, couponCode, promoCode, promotionId } = req.body || {};
 
     const pkg = packageId
@@ -1138,7 +1135,6 @@ export async function calculateRenewal(req, res, next) {
     const isPerpetual = !current.endsAt && !packageId && !promoCode && !pkg?.termMonths;
     const startsAt = current.endsAt ? new Date(current.endsAt) : new Date();
     const months = pkg?.termMonths ?? 12;
-    const endsAt = addMonths(startsAt, months);
 
     // Promotional Extension Resolution
     let promo = null;
