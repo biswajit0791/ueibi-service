@@ -9,6 +9,9 @@ import {
   findEligiblePromotion,
   getPromotionStatus,
   getPromotionAnalytics,
+  listEligiblePromotions,
+  duplicatePromotion as duplicatePromoService,
+  archivePromotion as archivePromoService,
 } from '../services/promotion.service.js';
 import { recordPlatformAction, PLATFORM_ACTIONS } from '../services/platformAudit.service.js';
 
@@ -18,11 +21,27 @@ import { recordPlatformAction, PLATFORM_ACTIONS } from '../services/platformAudi
  */
 export async function listPromotions(req, res, next) {
   try {
-    const { status, eligibility } = req.query || {};
+    const { status, eligibility, includeArchived } = req.query || {};
     const promotions = await prisma.subscriptionPromotion.findMany({
-      orderBy: { createdAt: 'desc' },
+      orderBy: [
+        { priority: 'desc' },
+        { createdAt: 'desc' },
+      ],
       include: {
         _count: { select: { redemptions: true } },
+        coupons: {
+          include: {
+            coupon: {
+              select: {
+                id: true,
+                code: true,
+                discountType: true,
+                discountValue: true,
+                salesRep: { select: { id: true, name: true, email: true } },
+              },
+            },
+          },
+        },
       },
     });
 
@@ -38,12 +57,36 @@ export async function listPromotions(req, res, next) {
 
     if (status && status !== 'ALL') {
       items = items.filter((p) => p.status === status.toUpperCase());
+    } else if (includeArchived !== 'true') {
+      // By default when viewing ALL without explicit ARCHIVED status, exclude archived
+      items = items.filter((p) => !p.isArchived);
     }
 
     if (eligibility && eligibility !== 'ALL') {
       items = items.filter((p) => p.eligibility === eligibility.toUpperCase());
     }
 
+    res.json({ items });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /platform/promotions/eligible-offers
+ * Returns all active matching promotional offers for live renewal calculator.
+ */
+export async function getEligibleOffers(req, res, next) {
+  try {
+    const { packageId, termMonths, seatCount, context, couponId, couponCode } = req.query || {};
+    const items = await listEligiblePromotions({
+      packageId: packageId || null,
+      termMonths: termMonths ? Number(termMonths) : undefined,
+      seatCount: seatCount ? Number(seatCount) : undefined,
+      context: context || 'ALL',
+      couponId: couponId || null,
+      couponCode: couponCode || null,
+    });
     res.json({ items });
   } catch (err) {
     next(err);
@@ -117,6 +160,19 @@ export async function getPromotion(req, res, next) {
     const promo = await prisma.subscriptionPromotion.findUnique({
       where: { id: parsedParams.data.id },
       include: {
+        coupons: {
+          include: {
+            coupon: {
+              select: {
+                id: true,
+                code: true,
+                discountType: true,
+                discountValue: true,
+                salesRep: { select: { id: true, name: true, email: true } },
+              },
+            },
+          },
+        },
         redemptions: {
           take: 20,
           orderBy: { appliedAt: 'desc' },
@@ -150,7 +206,7 @@ export async function createPromotion(req, res, next) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
 
-    const data = parsed.data;
+    const { couponIds = [], ...data } = parsed.data;
 
     // Check duplicate code
     if (data.code) {
@@ -163,7 +219,27 @@ export async function createPromotion(req, res, next) {
     }
 
     const created = await prisma.subscriptionPromotion.create({
-      data,
+      data: {
+        ...data,
+        coupons: couponIds.length > 0 ? {
+          create: couponIds.map((cid) => ({ couponId: cid })),
+        } : undefined,
+      },
+      include: {
+        coupons: {
+          include: {
+            coupon: {
+              select: {
+                id: true,
+                code: true,
+                discountType: true,
+                discountValue: true,
+                salesRep: { select: { id: true, name: true, email: true } },
+              },
+            },
+          },
+        },
+      },
     });
 
     await recordPlatformAction({
@@ -177,6 +253,7 @@ export async function createPromotion(req, res, next) {
         paidMonths: created.paidMonths,
         freeMonths: created.freeMonths,
         active: created.active,
+        assignedCouponsCount: couponIds.length,
       },
     }).catch((err) => console.warn('[Promotion] audit log failed:', err.message));
 
@@ -210,7 +287,7 @@ export async function updatePromotion(req, res, next) {
     });
     if (!promo) return res.status(404).json({ error: 'Promotion not found' });
 
-    const data = parsed.data;
+    const { couponIds, ...data } = parsed.data;
     if (data.code && data.code !== promo.code) {
       const existing = await prisma.subscriptionPromotion.findUnique({
         where: { code: data.code },
@@ -220,9 +297,38 @@ export async function updatePromotion(req, res, next) {
       }
     }
 
+    if (Array.isArray(couponIds)) {
+      await prisma.promotionCoupon.deleteMany({
+        where: { promotionId: promo.id },
+      });
+      if (couponIds.length > 0) {
+        await prisma.promotionCoupon.createMany({
+          data: couponIds.map((cid) => ({
+            promotionId: promo.id,
+            couponId: cid,
+          })),
+        });
+      }
+    }
+
     const updated = await prisma.subscriptionPromotion.update({
       where: { id: promo.id },
       data,
+      include: {
+        coupons: {
+          include: {
+            coupon: {
+              select: {
+                id: true,
+                code: true,
+                discountType: true,
+                discountValue: true,
+                salesRep: { select: { id: true, name: true, email: true } },
+              },
+            },
+          },
+        },
+      },
     });
 
     await recordPlatformAction({
@@ -283,6 +389,70 @@ export async function deletePromotion(req, res, next) {
     });
 
     res.json({ message: 'Promotion deleted successfully' });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /platform/promotions/:id/duplicate
+ * Duplicates a promotion with cloned settings and a clean name/code.
+ */
+export async function duplicatePromotion(req, res, next) {
+  try {
+    const parsedParams = promotionIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid promotion ID' });
+    }
+
+    const duplicated = await duplicatePromoService(parsedParams.data.id, req.user);
+
+    await recordPlatformAction({
+      req,
+      action: 'PROMOTION_CREATED',
+      targetType: 'PROMOTION',
+      targetId: duplicated.id,
+      afterValue: {
+        name: duplicated.name,
+        code: duplicated.code,
+        sourceId: parsedParams.data.id,
+      },
+    }).catch(() => {});
+
+    res.status(201).json({
+      ...duplicated,
+      status: getPromotionStatus(duplicated),
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * PATCH /platform/promotions/:id/archive
+ * Archives a promotion and deactivates it.
+ */
+export async function archivePromotion(req, res, next) {
+  try {
+    const parsedParams = promotionIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid promotion ID' });
+    }
+
+    const archived = await archivePromoService(parsedParams.data.id, req.user);
+
+    await recordPlatformAction({
+      req,
+      action: 'PROMOTION_UPDATED',
+      targetType: 'PROMOTION',
+      targetId: archived.id,
+      afterValue: { isArchived: true, active: false },
+    }).catch(() => {});
+
+    res.json({
+      ...archived,
+      status: getPromotionStatus(archived),
+    });
   } catch (err) {
     next(err);
   }

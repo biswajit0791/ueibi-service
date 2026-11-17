@@ -709,6 +709,7 @@ model Coupon {
 
   registrations CompanyRegistration[]
   redemptions   CouponRedemption[]
+  promotions    PromotionCoupon[]
 
   @@index([salesRepId])
   @@map("coupons")
@@ -832,10 +833,16 @@ model SubscriptionPromotion {
   id                 String                @id @default(cuid())
   name               String
   description        String?               @db.Text
+  badgeText          String?
   code               String?               @unique
   paidMonths         Int                   @default(12)
   freeMonths         Int                   @default(2)
+  minSeats           Int                   @default(1)
+  priority           Int                   @default(0)
+  allowCoupons       Boolean               @default(true)
+  allowNoCoupon      Boolean               @default(false)
   active             Boolean               @default(true)
+  isArchived         Boolean               @default(false)
   startsAt           DateTime              @default(now())
   expiresAt          DateTime?
   applyToAllPackages Boolean               @default(true)
@@ -843,14 +850,33 @@ model SubscriptionPromotion {
   eligibility        String                @default("ALL") // "ALL" | "NEW_REGISTRATIONS" | "RENEWALS"
   usageLimit         Int?
   timesUsed          Int                   @default(0)
+  createdById        String?
+  updatedById        String?
   createdAt          DateTime              @default(now())
   updatedAt          DateTime              @updatedAt
 
   subscriptions      Subscription[]
   redemptions        PromotionRedemption[]
+  coupons            PromotionCoupon[]
 
-  @@index([active, startsAt, expiresAt])
+  @@index([active, isArchived, startsAt, expiresAt])
+  @@index([priority, isArchived, active])
   @@map("subscription_promotions")
+}
+
+model PromotionCoupon {
+  id           String                @id @default(cuid())
+  promotionId  String
+  couponId     String
+  createdAt    DateTime              @default(now())
+
+  promotion    SubscriptionPromotion @relation(fields: [promotionId], references: [id], onDelete: Cascade)
+  coupon       Coupon                @relation(fields: [couponId], references: [id], onDelete: Cascade)
+
+  @@unique([promotionId, couponId])
+  @@index([promotionId])
+  @@index([couponId])
+  @@map("promotion_coupons")
 }
 
 model PromotionRedemption {
@@ -863,6 +889,16 @@ model PromotionRedemption {
   tenant         Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   salesRepId     String?
   salesRep       TenantUser?           @relation("PromotionSalesRep", fields: [salesRepId], references: [id], onDelete: SetNull)
+  promotionName  String?
+  promoCode      String?
+  originalEndsAt DateTime?
+  finalEndsAt    DateTime?
+  seatCount      Int                   @default(1)
+  unitPrice      Decimal               @default(0) @db.Decimal(10, 2)
+  couponCode     String?
+  couponDiscount Decimal               @default(0) @db.Decimal(10, 2)
+  gstAmount      Decimal               @default(0) @db.Decimal(10, 2)
+  netPayable     Decimal               @default(0) @db.Decimal(10, 2)
   paidMonths     Int
   freeMonths     Int
   totalMonths    Int
