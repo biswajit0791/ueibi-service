@@ -62,17 +62,17 @@ export const createLeaveRequestSchema = z.object({
 });
 
 export const approvalActionSchema = z.object({
-  action: z.enum(['APPROVE', 'REJECT']),
+  action: z.enum(['APPROVE', 'REJECT', 'REVOKE']),
   comment: z.string().max(1000, 'Comment cannot exceed 1000 characters').optional().nullable(),
   reason: z.string().max(1000, 'Reason cannot exceed 1000 characters').optional().nullable(),
 }).refine((data) => {
   const remark = (data.comment || data.reason || '').trim();
-  if (data.action === 'REJECT' && remark.length === 0) {
+  if ((data.action === 'REJECT' || data.action === 'REVOKE') && remark.length === 0) {
     return false;
   }
   return true;
 }, {
-  message: 'Rejection reason / comment is required when rejecting or revoking a request',
+  message: 'Rejection or revocation reason / comment is required',
   path: ['comment'],
 });
 

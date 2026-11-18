@@ -1,4 +1,5 @@
 import { prisma } from './prisma.js';
+import { reconcileLegacyHalfDayRecords } from '../services/leaveCalculation.service.js';
 import { execSync } from 'node:child_process';
 import path from 'node:path';
 
@@ -662,6 +663,13 @@ export async function ensureDynamicLeaveSystem() {
           ) ON CONFLICT ("tenantId", "employeeId", "year") DO NOTHING;
         `);
       }
+    }
+
+    // 5. Audit & reconcile legacy half-day requests and balances
+    try {
+      await reconcileLegacyHalfDayRecords(prisma);
+    } catch (recErr) {
+      console.warn('[dbInit] Notice on half-day reconciliation:', recErr?.message || recErr);
     }
 
     console.log('[dbInit] Dynamic Leave & WFH system initialized and verified successfully.');
