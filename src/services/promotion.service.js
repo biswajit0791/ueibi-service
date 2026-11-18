@@ -111,6 +111,7 @@ export async function findEligiblePromotion({
   seatCount = 1,
   context = 'ALL',
   code = null,
+  coupon = null,
   couponId = null,
   couponCode = null,
   promotionId = null,
@@ -123,11 +124,16 @@ export async function findEligiblePromotion({
   const now = new Date();
 
   // Resolve coupon if provided
-  let coupon = null;
-  if (couponId) {
-    coupon = await prisma.coupon.findUnique({ where: { id: couponId } });
-  } else if (couponCode && String(couponCode).trim()) {
-    coupon = await prisma.coupon.findUnique({ where: { code: String(couponCode).trim().toUpperCase() } });
+  let resolvedCoupon = coupon || null;
+  if (!resolvedCoupon) {
+    if (couponId) {
+      resolvedCoupon = await prisma.coupon.findUnique({ where: { id: couponId } });
+    } else if (couponCode && String(couponCode).trim()) {
+      const cleanCode = String(couponCode).trim();
+      resolvedCoupon = await prisma.coupon.findFirst({
+        where: { code: { equals: cleanCode, mode: 'insensitive' } },
+      });
+    }
   }
 
   // 1. Direct lookup by ID
@@ -153,7 +159,7 @@ export async function findEligiblePromotion({
           termMonths,
           seatCount,
           context,
-          coupon,
+          coupon: resolvedCoupon,
           code,
         });
         if (eligible) return promo;
@@ -186,7 +192,7 @@ export async function findEligiblePromotion({
           termMonths,
           seatCount,
           context,
-          coupon,
+          coupon: resolvedCoupon,
           code: cleanCode,
         });
         if (eligible) return promo;
@@ -232,7 +238,7 @@ export async function findEligiblePromotion({
         termMonths,
         seatCount,
         context,
-        coupon,
+        coupon: resolvedCoupon,
       })
     ) {
       return promo;

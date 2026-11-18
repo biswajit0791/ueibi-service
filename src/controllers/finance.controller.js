@@ -7,6 +7,7 @@ import { computePricing, couponValidationError } from '../lib/pricing.js';
 import { generateRawToken, hashToken } from '../lib/tokens.js';
 import { notifyStakeholders } from '../lib/notify.js';
 import { activateTenantFromRegistration } from '../services/tenantActivation.service.js';
+import { getRegistrationConfig } from '../services/registrationConfig.service.js';
 import {
   pricingPreviewSchema,
   approveSchema,
@@ -65,7 +66,16 @@ async function resolveFinanceToken(req, res, { allowActive = false } = {}) {
 
 async function lookupCoupon(couponCode) {
   if (!couponCode) return { coupon: null, error: null };
-  const coupon = await prisma.coupon.findUnique({ where: { code: couponCode } });
+  const cleanCode = String(couponCode).trim();
+  if (!cleanCode) return { coupon: null, error: null };
+  const coupon = await prisma.coupon.findFirst({
+    where: { code: { equals: cleanCode, mode: 'insensitive' } },
+    include: {
+      salesRep: {
+        select: { id: true, name: true, email: true, designation: true },
+      },
+    },
+  });
   const error = couponValidationError(coupon);
   return { coupon: error ? null : coupon, error };
 }
@@ -76,14 +86,23 @@ export async function getFinanceSummary(req, res, next) {
     if (!actionToken) return;
     const { registration } = actionToken;
 
+    const defaultUnitPrice = await getRegistrationConfig('LICENSE_UNIT_PRICE', env.licenseUnitPrice || 5000);
+    const defaultGstRate = await getRegistrationConfig('GST_RATE', env.gstRate || 0.18);
+
     const licenseQuantity = registration.licenseQuantity && registration.licenseQuantity > 0 ? registration.licenseQuantity : 10;
-    const unitPrice = registration.unitPrice ? Number(registration.unitPrice) : env.licenseUnitPrice;
+    const unitPrice = registration.unitPrice ? Number(registration.unitPrice) : defaultUnitPrice;
     const subtotal = registration.subtotalAmount ? Number(registration.subtotalAmount) : licenseQuantity * unitPrice;
     const discountAmount = registration.discountAmount ? Number(registration.discountAmount) : 0;
-    const gstRate = registration.gstRate ? Number(registration.gstRate) : env.gstRate;
+    const gstRate = registration.gstRate ? Number(registration.gstRate) : defaultGstRate;
     const gstAmount = registration.gstAmount ? Number(registration.gstAmount) : Math.round((subtotal - discountAmount) * gstRate * 100) / 100;
     const totalAmount = registration.totalAmount ? Number(registration.totalAmount) : (subtotal - discountAmount + gstAmount);
     const onlinePaymentMode = env.razorpayKeyId.startsWith('rzp_test_') ? 'test' : 'live';
+
+    const paidDurationMonths = registration.paidDurationMonths || 12;
+    const freeDurationMonths = registration.freeDurationMonths || 0;
+    const totalDurationMonths = registration.totalDurationMonths || (paidDurationMonths + freeDurationMonths);
+    const subscriptionStartsAt = registration.subscriptionStartsAt || registration.createdAt;
+    const subscriptionEndsAt = registration.subscriptionEndsAt || (totalDurationMonths ? new Date(new Date(subscriptionStartsAt).setMonth(new Date(subscriptionStartsAt).getMonth() + totalDurationMonths)) : null);
 
     if (registration.status === 'ACTIVE') {
       return res.json({
@@ -98,6 +117,14 @@ export async function getFinanceSummary(req, res, next) {
         licenseQuantity,
         totalAmount,
         total: totalAmount,
+        paidDurationMonths,
+        freeDurationMonths,
+        totalDurationMonths,
+        subscriptionStartsAt,
+        subscriptionEndsAt,
+        expectedExpiryDate: subscriptionEndsAt,
+        promotionName: registration.promotionName || null,
+        promoCode: registration.promoCode || null,
         paymentMethod: registration.paymentMethod || 'ONLINE',
         paymentReference: registration.paymentReference,
         transactionId: registration.transactionId,
@@ -134,6 +161,14 @@ export async function getFinanceSummary(req, res, next) {
       gstAmount,
       totalAmount,
       total: totalAmount,
+      paidDurationMonths,
+      freeDurationMonths,
+      totalDurationMonths,
+      subscriptionStartsAt,
+      subscriptionEndsAt,
+      expectedExpiryDate: subscriptionEndsAt,
+      promotionName: registration.promotionName || null,
+      promoCode: registration.promoCode || null,
       onlinePaymentAvailable: onlinePaymentConfigured(),
       onlinePaymentMode,
       onlinePaymentKeyId: env.razorpayKeyId || null,
@@ -287,11 +322,13 @@ export async function createOrder(req, res, next) {
 
     // Server-authoritative pricing based on CMD registration choices
     const quantity = registration.licenseQuantity && registration.licenseQuantity > 0 ? registration.licenseQuantity : 10;
+    const defaultUnitPrice = await getRegistrationConfig('LICENSE_UNIT_PRICE', env.licenseUnitPrice || 5000);
+    const defaultGstRate = await getRegistrationConfig('GST_RATE', env.gstRate || 0.18);
     const pricing = computePricing({
       quantity,
-      unitPrice: registration.unitPrice ? Number(registration.unitPrice) : env.licenseUnitPrice,
+      unitPrice: registration.unitPrice ? Number(registration.unitPrice) : defaultUnitPrice,
       coupon: registration.coupon,
-      gstRate: registration.gstRate ? Number(registration.gstRate) : env.gstRate,
+      gstRate: registration.gstRate ? Number(registration.gstRate) : defaultGstRate,
     });
 
     const amountInPaise = Math.round(pricing.total * 100);
@@ -395,11 +432,13 @@ export async function verifyPayment(req, res, next) {
 
     // ── 2. Server-authoritative pricing based on CMD choices ──
     const quantity = registration.licenseQuantity && registration.licenseQuantity > 0 ? registration.licenseQuantity : 10;
+    const defaultUnitPrice = await getRegistrationConfig('LICENSE_UNIT_PRICE', env.licenseUnitPrice || 5000);
+    const defaultGstRate = await getRegistrationConfig('GST_RATE', env.gstRate || 0.18);
     const pricing = computePricing({
       quantity,
-      unitPrice: registration.unitPrice ? Number(registration.unitPrice) : env.licenseUnitPrice,
+      unitPrice: registration.unitPrice ? Number(registration.unitPrice) : defaultUnitPrice,
       coupon: registration.coupon,
-      gstRate: registration.gstRate ? Number(registration.gstRate) : env.gstRate,
+      gstRate: registration.gstRate ? Number(registration.gstRate) : defaultGstRate,
     });
 
     // ── 3. Cross-check Razorpay order amount & registration ownership ──

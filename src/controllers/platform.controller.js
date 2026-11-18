@@ -95,6 +95,149 @@ export async function getPlatformOverview(req, res, next) {
 }
 
 /**
+ * Formats a Date object or ISO string as DD/MM/YYYY.
+ */
+export function formatDateDDMMYYYY(dateInput) {
+  if (!dateInput) return '—';
+  const d = new Date(dateInput);
+  if (Number.isNaN(d.getTime())) return '—';
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const year = d.getFullYear();
+  return `${day}/${month}/${year}`;
+}
+
+/**
+ * Resolves payment status and subscription expiry date for Company Management.
+ *
+ * Rules:
+ * Payment Status:
+ * - PAID: Verified payment exists for current active term or registration approved with payment
+ * - PENDING: Onboarding in finance review / cheque confirmation, or issued invoice awaiting payment
+ * - FAILED: Payment rejected or voided
+ * - REFUNDED: Active payment has been refunded
+ * - FREE / PROMOTIONAL: 100% discount, zero-amount contract, or free trial
+ *
+ * Expiry Date:
+ * - Active subscription term end date (supporting paid months + promotional free extension)
+ * - 'Never / Perpetual' for perpetual subscriptions
+ * - 'Not Activated' if onboarding or subscription has not started
+ * - '—' only when no expiry genuinely exists
+ */
+export function resolveTenantBillingDetails(t) {
+  const reg = t.registration;
+  const subs = t.subscriptions || [];
+  const tenantInvoices = t.invoices || [];
+
+  // Pick active subscription, or pending subscription, or most recent subscription
+  const activeSub = subs.find((s) => s.state === 'ACTIVE' || s.status === 'ACTIVE') ||
+                    subs.find((s) => s.state === 'PENDING' || s.status === 'PENDING') ||
+                    subs[0] ||
+                    null;
+
+  // Prefer invoices tied to the active/selected subscription; fallback to tenant invoices
+  const subInvoices = (activeSub?.invoices && activeSub.invoices.length > 0)
+    ? activeSub.invoices
+    : tenantInvoices;
+  const latestInvoice = subInvoices[0] || null;
+
+  // 1. PAYMENT STATUS
+  let paymentStatus = 'PENDING';
+
+  // If the company's onboarding registration is still pending review or rejected
+  if (reg && reg.status !== 'ACTIVE') {
+    if (reg.status === 'PENDING_FINANCE_REVIEW' || reg.status === 'PENDING_CHEQUE_CONFIRMATION') {
+      paymentStatus = 'PENDING';
+    } else if (reg.status === 'REJECTED') {
+      paymentStatus = 'FAILED';
+    } else if (reg.status === 'PENDING_HR_ACTIVATION') {
+      paymentStatus = 'PAID';
+    }
+  } else {
+    // Company is ACTIVE or has subscription/invoices
+    if (latestInvoice) {
+      const invTotal = Number(latestInvoice.totalAmount || 0);
+      const paid = Number(latestInvoice.amountPaid || 0);
+      const refundsList = Array.isArray(latestInvoice.refunds) ? latestInvoice.refunds : [];
+      const totalRefundsFromList = refundsList.reduce((sum, r) => sum + Number(r.amount || 0), 0);
+      const refunded = Math.max(Number(latestInvoice.amountRefunded || 0), totalRefundsFromList);
+      const payments = Array.isArray(latestInvoice.payments) ? latestInvoice.payments : [];
+      const hasFailedPayment = payments.some((p) => p.status === 'FAILED');
+      const hasSuccessfulPayment = payments.some((p) => p.status === 'SUCCESS' || p.status === 'COMPLETED');
+
+      if (refunded > 0) {
+        paymentStatus = 'REFUNDED';
+      } else if (hasFailedPayment && !hasSuccessfulPayment && latestInvoice.state !== 'PAID') {
+        paymentStatus = 'FAILED';
+      } else if (latestInvoice.state === 'PAID' || hasSuccessfulPayment || (paid > 0 && paid >= invTotal)) {
+        if (invTotal === 0 && paid === 0 && !hasSuccessfulPayment && !(Number(t.contractedValue || 0) > 0)) {
+          paymentStatus = 'FREE / PROMOTIONAL';
+        } else {
+          paymentStatus = 'PAID';
+        }
+      } else if (latestInvoice.state === 'VOID') {
+        paymentStatus = 'FAILED';
+      } else if (invTotal === 0 && paid === 0 && !hasSuccessfulPayment) {
+        paymentStatus = 'FREE / PROMOTIONAL';
+      } else if (paid > 0 && paid < invTotal) {
+        paymentStatus = 'PENDING';
+      } else {
+        paymentStatus = 'PENDING';
+      }
+    } else if (reg) {
+      const regTotal = reg.totalAmount != null ? Number(reg.totalAmount) : null;
+      if (regTotal === 0) {
+        paymentStatus = 'FREE / PROMOTIONAL';
+      } else if (reg.financeApprovedAt || reg.paymentVerifiedAt || reg.activatedAt || reg.status === 'ACTIVE') {
+        paymentStatus = 'PAID';
+      } else {
+        paymentStatus = 'PENDING';
+      }
+    } else {
+      // Legacy seed tenant without registration or invoices
+      paymentStatus = 'FREE / PROMOTIONAL';
+    }
+  }
+
+  // 2. EXPIRY DATE
+  let subscriptionExpiryDate = null;
+  let expiryDisplay = '—';
+  let isPerpetual = false;
+
+  const now = new Date();
+
+  if (reg && reg.status !== 'ACTIVE') {
+    // If onboarding is incomplete, subscription has not started
+    expiryDisplay = 'Not Activated';
+  } else if (activeSub) {
+    if ((activeSub.state === 'PENDING' || activeSub.status === 'PENDING') && new Date(activeSub.startsAt) > now) {
+      expiryDisplay = 'Not Activated';
+    } else if (activeSub.isPerpetual || activeSub.endsAt === null) {
+      isPerpetual = true;
+      expiryDisplay = 'Never / Perpetual';
+    } else if (activeSub.endsAt) {
+      subscriptionExpiryDate = activeSub.endsAt;
+      expiryDisplay = formatDateDDMMYYYY(activeSub.endsAt);
+    }
+  } else if (t.planEndsAt) {
+    subscriptionExpiryDate = t.planEndsAt;
+    expiryDisplay = formatDateDDMMYYYY(t.planEndsAt);
+  } else if (reg?.subscriptionEndsAt) {
+    subscriptionExpiryDate = reg.subscriptionEndsAt;
+    expiryDisplay = formatDateDDMMYYYY(reg.subscriptionEndsAt);
+  } else {
+    expiryDisplay = '—';
+  }
+
+  return {
+    paymentStatus,
+    subscriptionExpiryDate: subscriptionExpiryDate ? new Date(subscriptionExpiryDate).toISOString() : null,
+    expiryDisplay,
+    isPerpetual,
+  };
+}
+
+/**
  * GET /platform/tenants — one row per customer company.
  *
  * Company metadata plus a seat count. Deliberately no drill-down into the
@@ -135,9 +278,75 @@ export async function listPlatformTenants(req, res, next) {
           suspendedReason: true,
           planEndsAt: true,
           // Onboarding record: carries the legal entity type, the approval
-          // status and what was actually invoiced.
+          // status, payment snapshot, and what was actually invoiced.
           registration: {
-            select: { companyType: true, status: true, licenseQuantity: true, totalAmount: true },
+            select: {
+              id: true,
+              companyType: true,
+              status: true,
+              licenseQuantity: true,
+              totalAmount: true,
+              paymentMethod: true,
+              paymentReference: true,
+              transactionId: true,
+              financeApprovedAt: true,
+              paymentVerifiedAt: true,
+              activatedAt: true,
+              paidDurationMonths: true,
+              freeDurationMonths: true,
+              totalDurationMonths: true,
+              subscriptionStartsAt: true,
+              subscriptionEndsAt: true,
+            },
+          },
+          subscriptions: {
+            orderBy: [{ startsAt: 'desc' }, { createdAt: 'desc' }],
+            take: 5,
+            select: {
+              id: true,
+              packageName: true,
+              state: true,
+              startsAt: true,
+              endsAt: true,
+              paidDurationMonths: true,
+              freeDurationMonths: true,
+              totalDurationMonths: true,
+              paidEndsAt: true,
+              invoices: {
+                orderBy: { createdAt: 'desc' },
+                take: 3,
+                select: {
+                  id: true,
+                  state: true,
+                  totalAmount: true,
+                  amountPaid: true,
+                  amountRefunded: true,
+                  payments: {
+                    select: { id: true, amount: true, receivedAt: true, method: true, reference: true },
+                  },
+                  refunds: {
+                    select: { id: true, amount: true, refundedAt: true },
+                  },
+                },
+              },
+            },
+          },
+          invoices: {
+            orderBy: { createdAt: 'desc' },
+            take: 3,
+            select: {
+              id: true,
+              state: true,
+              totalAmount: true,
+              amountPaid: true,
+              amountRefunded: true,
+              payments: {
+                select: { id: true, amount: true, receivedAt: true, method: true, reference: true },
+              },
+              refunds: {
+                select: { id: true, amount: true, refundedAt: true },
+              },
+            },
           },
           // Same predicate as activeUsers in getPlatformOverview, so the table
           // rows sum to the headline figure rather than disagreeing with it.
@@ -150,33 +359,41 @@ export async function listPlatformTenants(req, res, next) {
     ]);
 
     res.json({
-      items: tenants.map((t) => ({
-        id: t.id,
-        companyName: t.companyName,
-        tenantCode: t.tenantCode,
-        domainName: t.domainName,
-        licenseLimit: t.licenseLimit,
-        userCount: t._count.users,
-        createdAt: t.createdAt,
-        // `companyType` is the legal entity type ("Private Limited"), not an
-        // industry — the frontend labels it accordingly rather than inventing
-        // a sector the schema does not record.
-        companyType: t.registration?.companyType || null,
-        // Two different things, kept apart because they answer different
-        // questions: `status` is whether we let them in, `onboardingStatus` is
-        // how far their signup got. A fully onboarded company can be suspended,
-        // and a half-onboarded one is not suspended.
-        status: t.status,
-        suspendedAt: t.suspendedAt,
-        suspendedReason: t.suspendedReason,
-        planEndsAt: t.planEndsAt,
-        // Tenants that predate the registration flow have no record; they exist,
-        // so their onboarding is complete.
-        onboardingStatus: t.registration?.status || 'ACTIVE',
-        contractedValue: t.registration?.totalAmount != null
-          ? Number(t.registration.totalAmount)
-          : null,
-      })),
+      items: tenants.map((t) => {
+        const billing = resolveTenantBillingDetails(t);
+        return {
+          id: t.id,
+          companyName: t.companyName,
+          tenantCode: t.tenantCode,
+          domainName: t.domainName,
+          licenseLimit: t.licenseLimit,
+          userCount: t._count.users,
+          createdAt: t.createdAt,
+          // `companyType` is the legal entity type ("Private Limited"), not an
+          // industry — the frontend labels it accordingly rather than inventing
+          // a sector the schema does not record.
+          companyType: t.registration?.companyType || null,
+          // Two different things, kept apart because they answer different
+          // questions: `status` is whether we let them in, `onboardingStatus` is
+          // how far their signup got. A fully onboarded company can be suspended,
+          // and a half-onboarded one is not suspended.
+          status: t.status,
+          suspendedAt: t.suspendedAt,
+          suspendedReason: t.suspendedReason,
+          planEndsAt: t.planEndsAt,
+          // Tenants that predate the registration flow have no record; they exist,
+          // so their onboarding is complete.
+          onboardingStatus: t.registration?.status || 'ACTIVE',
+          contractedValue: t.registration?.totalAmount != null
+            ? Number(t.registration.totalAmount)
+            : null,
+          // Payment Status & Expiry Date visibility
+          paymentStatus: billing.paymentStatus,
+          subscriptionExpiryDate: billing.subscriptionExpiryDate,
+          expiryDisplay: billing.expiryDisplay,
+          isPerpetual: billing.isPerpetual,
+        };
+      }),
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) || 1 },
     });
   } catch (err) {
@@ -351,6 +568,57 @@ export async function getPlatformTenant(req, res, next) {
             paymentMethod: true, paymentReference: true, transactionId: true,
             chequeNumber: true, chequeDate: true,
             financeApprovedAt: true, activatedAt: true, createdAt: true,
+            subscriptionStartsAt: true, subscriptionEndsAt: true,
+            paidDurationMonths: true, freeDurationMonths: true, totalDurationMonths: true,
+          },
+        },
+        subscriptions: {
+          orderBy: [{ startsAt: 'desc' }, { createdAt: 'desc' }],
+          take: 5,
+          select: {
+            id: true,
+            packageName: true,
+            state: true,
+            startsAt: true,
+            endsAt: true,
+            paidDurationMonths: true,
+            freeDurationMonths: true,
+            totalDurationMonths: true,
+            paidEndsAt: true,
+            invoices: {
+              orderBy: { createdAt: 'desc' },
+              take: 3,
+              select: {
+                id: true,
+                state: true,
+                totalAmount: true,
+                amountPaid: true,
+                amountRefunded: true,
+                payments: {
+                  select: { id: true, amount: true, receivedAt: true, method: true, reference: true },
+                },
+                refunds: {
+                  select: { id: true, amount: true, refundedAt: true },
+                },
+              },
+            },
+          },
+        },
+        invoices: {
+          orderBy: { createdAt: 'desc' },
+          take: 3,
+          select: {
+            id: true,
+            state: true,
+            totalAmount: true,
+            amountPaid: true,
+            amountRefunded: true,
+            payments: {
+              select: { id: true, amount: true, receivedAt: true, method: true, reference: true },
+            },
+            refunds: {
+              select: { id: true, amount: true, refundedAt: true },
+            },
           },
         },
       },
@@ -376,6 +644,7 @@ export async function getPlatformTenant(req, res, next) {
 
     const reg = tenant.registration;
     const num = (v) => (v == null ? null : Number(v));
+    const billing = resolveTenantBillingDetails(tenant);
 
     res.json({
       tenant: {
@@ -393,6 +662,10 @@ export async function getPlatformTenant(req, res, next) {
         gstin: reg?.gstin || null,
         onboardingStatus: reg?.status || 'ACTIVE',
         activatedAt: reg?.activatedAt || null,
+        paymentStatus: billing.paymentStatus,
+        subscriptionExpiryDate: billing.subscriptionExpiryDate,
+        expiryDisplay: billing.expiryDisplay,
+        isPerpetual: billing.isPerpetual,
       },
       licences: {
         limit: tenant.licenseLimit,

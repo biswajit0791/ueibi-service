@@ -29,6 +29,7 @@ export const publicPricingPreviewSchema = z.object({
   additionalLicenses: z.coerce.number().int().min(0).optional().default(0),
   licenseQuantity: z.coerce.number().int().min(1, 'License quantity must be at least 1').default(10),
   couponCode: z.string().trim().optional().nullable(),
+  promoCode: z.string().trim().optional().nullable(),
 });
 
 export const otpRequestSchema = z
@@ -121,6 +122,7 @@ export const registrationSchema = z
         message: 'Invalid 15-character GSTIN format (e.g. 27ABCDE1234F1Z5)',
       }),
     couponCode: z.string().trim().optional().nullable(),
+    promoCode: z.string().trim().optional().nullable(),
 
     acceptedTerms: z.literal(true, {
       errorMap: () => ({ message: 'You must accept the terms to proceed' }),

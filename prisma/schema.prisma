@@ -625,6 +625,16 @@ model CompanyRegistration {
   // Level 3 — HR
   activatedAt DateTime?
 
+  // Subscription & Duration Snapshot (Immutable purchase snapshot)
+  paidDurationMonths      Int?                   @default(12)
+  freeDurationMonths      Int?                   @default(0)
+  totalDurationMonths     Int?                   @default(12)
+  subscriptionStartsAt    DateTime?
+  subscriptionEndsAt      DateTime?
+  promotionId             String?
+  promoCode               String?
+  promotionName           String?
+
   status RegistrationStatus @default(PENDING_FINANCE_REVIEW)
 
   createdAt DateTime @default(now())
@@ -954,6 +964,13 @@ model Invoice {
   /// transaction that writes them.
   amountPaid     Decimal @default(0) @db.Decimal(10, 2)
   amountRefunded Decimal @default(0) @db.Decimal(10, 2)
+
+  // Subscription Duration Snapshot
+  paidDurationMonths  Int?      @default(12)
+  freeDurationMonths  Int?      @default(0)
+  totalDurationMonths Int?      @default(12)
+  periodStartsAt      DateTime?
+  periodEndsAt        DateTime?
 
   notes      String?   @db.Text
   voidedAt   DateTime?
