@@ -354,9 +354,10 @@ export async function managerRejectLeave(req, res, next) {
     }
     const { id } = parsedParams.data;
     const rawRemark = req.body?.comment ?? req.body?.reason;
-    const validated = approvalActionSchema.safeParse({ action: 'REJECT', comment: rawRemark, reason: rawRemark });
+    const action = req.body?.action === 'REVOKE' ? 'REVOKE' : 'REJECT';
+    const validated = approvalActionSchema.safeParse({ action, comment: rawRemark, reason: rawRemark });
     if (!validated.success) {
-      return res.status(400).json({ error: validated.error.errors[0]?.message || 'Rejection reason is required' });
+      return res.status(400).json({ error: validated.error.errors[0]?.message || 'Reason is required' });
     }
 
     const comment = (validated.data.comment || validated.data.reason || '').trim();
@@ -364,7 +365,7 @@ export async function managerRejectLeave(req, res, next) {
       tenantId: req.tenantId,
       requestId: id,
       managerUser: req.user,
-      action: 'REJECT',
+      action,
       comment,
       req,
     });
@@ -374,6 +375,11 @@ export async function managerRejectLeave(req, res, next) {
     if (err.status) return res.status(err.status).json({ error: err.message });
     next(err);
   }
+}
+
+export async function managerRevokeLeave(req, res, next) {
+  req.body = { ...req.body, action: 'REVOKE' };
+  return managerRejectLeave(req, res, next);
 }
 
 export async function hrApproveLeave(req, res, next) {
@@ -414,9 +420,10 @@ export async function hrRejectLeave(req, res, next) {
     }
     const { id } = parsedParams.data;
     const rawRemark = req.body?.comment ?? req.body?.reason;
-    const validated = approvalActionSchema.safeParse({ action: 'REJECT', comment: rawRemark, reason: rawRemark });
+    const action = req.body?.action === 'REVOKE' ? 'REVOKE' : 'REJECT';
+    const validated = approvalActionSchema.safeParse({ action, comment: rawRemark, reason: rawRemark });
     if (!validated.success) {
-      return res.status(400).json({ error: validated.error.errors[0]?.message || 'Rejection reason is required' });
+      return res.status(400).json({ error: validated.error.errors[0]?.message || 'Reason is required' });
     }
 
     const comment = (validated.data.comment || validated.data.reason || '').trim();
@@ -424,7 +431,7 @@ export async function hrRejectLeave(req, res, next) {
       tenantId: req.tenantId,
       requestId: id,
       hrUser: req.user,
-      action: 'REJECT',
+      action,
       comment,
       req,
     });
@@ -434,6 +441,11 @@ export async function hrRejectLeave(req, res, next) {
     if (err.status) return res.status(err.status).json({ error: err.message });
     next(err);
   }
+}
+
+export async function hrRevokeLeave(req, res, next) {
+  req.body = { ...req.body, action: 'REVOKE' };
+  return hrRejectLeave(req, res, next);
 }
 
 export async function adminApproveLeave(req, res, next) {
@@ -474,9 +486,10 @@ export async function adminRejectLeave(req, res, next) {
     }
     const { id } = parsedParams.data;
     const rawRemark = req.body?.comment ?? req.body?.reason;
-    const validated = approvalActionSchema.safeParse({ action: 'REJECT', comment: rawRemark, reason: rawRemark });
+    const action = req.body?.action === 'REVOKE' ? 'REVOKE' : 'REJECT';
+    const validated = approvalActionSchema.safeParse({ action, comment: rawRemark, reason: rawRemark });
     if (!validated.success) {
-      return res.status(400).json({ error: validated.error.errors[0]?.message || 'Rejection reason is required' });
+      return res.status(400).json({ error: validated.error.errors[0]?.message || 'Reason is required' });
     }
 
     const comment = (validated.data.comment || validated.data.reason || '').trim();
@@ -484,7 +497,7 @@ export async function adminRejectLeave(req, res, next) {
       tenantId: req.tenantId,
       requestId: id,
       adminUser: req.user,
-      action: 'REJECT',
+      action,
       comment,
       req,
     });
@@ -494,6 +507,11 @@ export async function adminRejectLeave(req, res, next) {
     if (err.status) return res.status(err.status).json({ error: err.message });
     next(err);
   }
+}
+
+export async function adminRevokeLeave(req, res, next) {
+  req.body = { ...req.body, action: 'REVOKE' };
+  return adminRejectLeave(req, res, next);
 }
 
 export async function approveLeaveRequest(req, res, next) {
@@ -528,6 +546,11 @@ export async function rejectLeaveRequest(req, res, next) {
     if (err.status) return res.status(err.status).json({ error: err.message });
     next(err);
   }
+}
+
+export async function revokeLeaveRequest(req, res, next) {
+  req.body = { ...req.body, action: 'REVOKE' };
+  return rejectLeaveRequest(req, res, next);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

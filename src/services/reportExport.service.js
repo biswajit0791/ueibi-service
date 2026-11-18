@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma.js';
 import { computeCycleRollup, buildEmployeeWhere } from './reportAggregation.service.js';
+import { getAuthoritativeDuration, normalizeDayType } from './leaveCalculation.service.js';
 
 /**
  * @file reportExport.service.js
@@ -345,7 +346,7 @@ async function leaveSummary({ tenantId, fy, department, countOnly }) {
     rows: leaves.map((l) => [
       l.employee?.employeeId || '', l.employee?.name || '', l.employee?.email || '',
       l.employee?.department || 'Unassigned', l.requestType, l.leaveType?.name || l.type,
-      isoDate(l.startDate), isoDate(l.endDate), l.totalDays, l.dayType, l.status, l.managerStatus,
+      isoDate(l.startDate), isoDate(l.endDate), getAuthoritativeDuration(l), normalizeDayType(l.dayType), l.status, l.managerStatus,
       isoDate(l.createdAt),
     ]),
   };

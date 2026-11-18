@@ -15,12 +15,16 @@ import {
   cancelLeaveRequest,
   managerApproveLeave,
   managerRejectLeave,
+  managerRevokeLeave,
   hrApproveLeave,
   hrRejectLeave,
+  hrRevokeLeave,
   adminApproveLeave,
   adminRejectLeave,
+  adminRevokeLeave,
   approveLeaveRequest,
   rejectLeaveRequest,
+  revokeLeaveRequest,
   getWfhPolicy,
   updateWfhPolicy,
   getLeaveOverviewStats,
@@ -74,12 +78,16 @@ router.post('/leaves/:id/cancel', requireAuth, requireTenant, cancelLeaveRequest
 // ── 5. Two-Level & Admin Approvals ──────────────────────────────────────────
 router.patch('/leaves/:id/admin/approve', requireAuth, requireTenant, authorize(...hrRoles), adminApproveLeave);
 router.patch('/leaves/:id/admin/reject', requireAuth, requireTenant, authorize(...hrRoles), adminRejectLeave);
+router.patch('/leaves/:id/admin/revoke', requireAuth, requireTenant, authorize(...hrRoles), adminRevokeLeave);
 router.patch('/leaves/:id/manager/approve', requireAuth, requireTenant, authorize(...managerRoles), managerApproveLeave);
 router.patch('/leaves/:id/manager/reject', requireAuth, requireTenant, authorize(...managerRoles), managerRejectLeave);
+router.patch('/leaves/:id/manager/revoke', requireAuth, requireTenant, authorize(...managerRoles), managerRevokeLeave);
 router.patch('/leaves/:id/hr/approve', requireAuth, requireTenant, authorize(...hrRoles), hrApproveLeave);
 router.patch('/leaves/:id/hr/reject', requireAuth, requireTenant, authorize(...hrRoles), hrRejectLeave);
+router.patch('/leaves/:id/hr/revoke', requireAuth, requireTenant, authorize(...hrRoles), hrRevokeLeave);
 router.patch('/leaves/:id/approve', requireAuth, requireTenant, authorize(...managerRoles), approveLeaveRequest);
 router.patch('/leaves/:id/reject', requireAuth, requireTenant, authorize(...managerRoles), rejectLeaveRequest);
+router.patch('/leaves/:id/revoke', requireAuth, requireTenant, authorize(...managerRoles), revokeLeaveRequest);
 
 // ── 6. Work From Home Policies ──────────────────────────────────────────────
 router.get('/wfh/policy', requireAuth, requireTenant, getWfhPolicy);

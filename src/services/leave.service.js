@@ -1,4 +1,11 @@
 import { validateLeaveRequestTiming, getLeaveTimingPolicy } from './workSchedule.service.js';
+import {
+  calculateLeaveDuration,
+  getAuthoritativeDuration,
+  normalizeDayType,
+  isHalfDay,
+  DAY_TYPES,
+} from './leaveCalculation.service.js';
 /**
  * Leave & Work-From-Home (WFH) Management Service
  * Provides comprehensive dynamic leave types, dynamic employee balance tracking,
@@ -64,27 +71,10 @@ export class LeaveService {
 
   /**
    * Calculates working days between start and end date (inclusive), skipping Saturday and Sunday.
-   * Supports half-day leaves (returns 0.5).
+   * Centralized through calculateLeaveDuration (Half-Day = 0.5, Full Day = 1.0, Multi-day = fractional total).
    */
   calculateWorkingDays(startDate, endDate, dayType = 'FULL') {
-    if (dayType === 'FIRST_HALF' || dayType === 'SECOND_HALF') {
-      return 0.5;
-    }
-
-    const start = new Date(startDate);
-    const end = new Date(endDate);
-    if (isNaN(start.getTime()) || isNaN(end.getTime()) || start > end) return 0;
-
-    let count = 0;
-    const cur = new Date(start);
-    while (cur <= end) {
-      const dayOfWeek = cur.getDay(); // 0 = Sunday, 6 = Saturday
-      if (dayOfWeek !== 0 && dayOfWeek !== 6) {
-        count++;
-      }
-      cur.setDate(cur.getDate() + 1);
-    }
-    return Math.max(1, count);
+    return calculateLeaveDuration({ startDate, endDate, dayType });
   }
 
   /**
@@ -97,7 +87,7 @@ export class LeaveService {
     const existing = await prisma.leaveRequest.findMany({
       where: {
         employeeId,
-        status: { notIn: ['REJECTED', 'CANCELLED'] },
+        status: { notIn: ['REJECTED', 'CANCELLED', 'REVOKED'] },
         ...(excludeId ? { id: { not: excludeId } } : {}),
       },
       include: {
@@ -126,8 +116,8 @@ export class LeaveService {
       if (start <= reqEnd && end >= reqStart) {
         // If it's a single day overlap, check if both are complementary half-days (e.g. FIRST_HALF + SECOND_HALF)
         if (targetStartStr === targetEndStr && reqStartStr === reqEndStr && targetStartStr === reqStartStr) {
-          const reqDayType = req.dayType || 'FULL';
-          const newDayType = dayType || 'FULL';
+          const reqDayType = normalizeDayType(req.dayType);
+          const newDayType = normalizeDayType(dayType);
           if (
             (reqDayType === 'FIRST_HALF' && newDayType === 'SECOND_HALF') ||
             (reqDayType === 'SECOND_HALF' && newDayType === 'FIRST_HALF')
@@ -137,7 +127,8 @@ export class LeaveService {
         }
 
         const typeName = req.requestType === 'WFH' ? 'Work From Home' : (req.leaveType?.name || req.type || 'Leave');
-        const halfInfo = req.dayType && req.dayType !== 'FULL' ? ` (${req.dayType === 'FIRST_HALF' ? '1st Half' : '2nd Half'})` : '';
+        const reqDayType = normalizeDayType(req.dayType);
+        const halfInfo = isHalfDay(reqDayType) ? ` (${reqDayType === 'FIRST_HALF' ? '1st Half' : '2nd Half'})` : '';
         throw {
           status: 400,
           message: `You already have an active ${typeName}${halfInfo} request from ${reqStartStr} to ${reqEndStr} overlapping with this period. Please choose different dates or cancel the conflicting request.`,
@@ -167,6 +158,9 @@ export class LeaveService {
       } catch {}
     }
 
+    const authoritativeTotalDays = getAuthoritativeDuration(raw);
+    const normalizedDayType = normalizeDayType(raw.dayType);
+
     return {
       id: raw.id,
       tenantId: raw.tenantId,
@@ -186,8 +180,8 @@ export class LeaveService {
       type: leaveTypeName,
       startDate: raw.startDate ? raw.startDate.toISOString().split('T')[0] : null,
       endDate: raw.endDate ? raw.endDate.toISOString().split('T')[0] : null,
-      totalDays: raw.totalDays || 1,
-      dayType: raw.dayType || 'FULL',
+      totalDays: authoritativeTotalDays,
+      dayType: normalizedDayType,
       reason: cleanReason,
       attachmentUrl: raw.attachmentUrl || null,
       attachmentOriginalName: raw.attachmentOriginalName || null,
@@ -596,8 +590,8 @@ export class LeaveService {
         r => r.requestType !== 'WFH' && (r.leaveTypeId === lt.id || (r.type && r.type.toLowerCase().includes(lt.name.toLowerCase())))
       );
 
-      const computedUsed = matching.filter(r => r.status === 'APPROVED').reduce((sum, r) => sum + (r.totalDays || 1), 0);
-      const computedPending = matching.filter(r => r.status === 'PENDING').reduce((sum, r) => sum + (r.totalDays || 1), 0);
+      const computedUsed = matching.filter(r => r.status === 'APPROVED').reduce((sum, r) => sum + getAuthoritativeDuration(r), 0);
+      const computedPending = matching.filter(r => r.status === 'PENDING').reduce((sum, r) => sum + getAuthoritativeDuration(r), 0);
 
       let allocated = lt.defaultDays;
       if (balanceRow) {
@@ -666,8 +660,8 @@ export class LeaveService {
     }
 
     const wfhMatching = yearRequests.filter(r => r.requestType === 'WFH' || (r.type && r.type.toLowerCase().includes('wfh')));
-    const wfhUsed = wfhMatching.filter(r => r.status === 'APPROVED').reduce((sum, r) => sum + (r.totalDays || 1), 0);
-    const wfhPending = wfhMatching.filter(r => r.status === 'PENDING').reduce((sum, r) => sum + (r.totalDays || 1), 0);
+    const wfhUsed = wfhMatching.filter(r => r.status === 'APPROVED').reduce((sum, r) => sum + getAuthoritativeDuration(r), 0);
+    const wfhPending = wfhMatching.filter(r => r.status === 'PENDING').reduce((sum, r) => sum + getAuthoritativeDuration(r), 0);
 
     if (wfhRow && wfhRow.allocated !== wfhPolicy.annualDays) {
       await prisma.wfhBalance.update({
@@ -1008,24 +1002,43 @@ export class LeaveService {
     }
 
     const isApprove = action === 'APPROVE';
+    const isRevoke = action === 'REVOKE' || (action === 'REJECT' && raw.status === 'APPROVED');
+    const wasApproved = raw.status === 'APPROVED';
+
     if (isApprove) {
       if (raw.status !== 'PENDING' || raw.managerStatus === 'Approved') {
         throw { status: 400, message: `Manager approval cannot be updated: request is already ${raw.status}` };
       }
     } else {
-      if (raw.status !== 'PENDING' && raw.status !== 'APPROVED') {
-        throw { status: 400, message: `Manager rejection cannot be processed: request is already ${raw.status}` };
+      if (raw.status !== 'PENDING' && !wasApproved) {
+        throw { status: 400, message: `Manager action cannot be processed: request is already ${raw.status}` };
       }
     }
 
-    const wasApproved = raw.status === 'APPROVED';
-    const newManagerStatus = isApprove ? 'Approved' : 'Rejected';
-    const newOverallStatus = isApprove ? 'PENDING' : 'REJECTED';
-    const newHrStatus = isApprove ? 'Pending' : (wasApproved ? 'Revoked' : 'Rejected');
+    // Check past leave restriction for revoking
+    if (isRevoke && wasApproved) {
+      const endOfLeave = new Date(raw.endDate);
+      endOfLeave.setHours(23, 59, 59, 999);
+      const isPastLeave = endOfLeave.getTime() < Date.now();
+      if (isPastLeave) {
+        const isAdmin = ['SUPER_ADMIN', 'ADMIN'].includes(String(managerUser.role || '').toUpperCase());
+        if (!isAdmin) {
+          throw {
+            status: 400,
+            message: 'Completed past leave requests cannot be revoked. Contact an Administrator for administrative corrections.',
+          };
+        }
+      }
+    }
+
+    const newManagerStatus = isApprove ? 'Approved' : (isRevoke ? 'Revoked' : 'Rejected');
+    const newOverallStatus = isApprove ? 'PENDING' : (isRevoke ? 'REVOKED' : 'REJECTED');
+    const newHrStatus = isApprove ? 'Pending' : (isRevoke ? 'Revoked' : 'Rejected');
     const currentYear = new Date(raw.startDate).getFullYear();
+    const duration = getAuthoritativeDuration(raw);
 
     const updated = await prisma.$transaction(async (tx) => {
-      // If rejecting
+      // If rejecting or revoking
       if (!isApprove) {
         if (wasApproved) {
           // If already approved, deduct from 'used' so days are refunded to available balance
@@ -1038,7 +1051,7 @@ export class LeaveService {
                 year: currentYear,
               },
               data: {
-                used: { decrement: raw.totalDays },
+                used: { decrement: duration },
               },
             });
           } else if (raw.requestType === 'WFH') {
@@ -1049,7 +1062,7 @@ export class LeaveService {
                 year: currentYear,
               },
               data: {
-                used: { decrement: raw.totalDays },
+                used: { decrement: duration },
               },
             });
           }
@@ -1064,7 +1077,7 @@ export class LeaveService {
                 year: currentYear,
               },
               data: {
-                pending: { decrement: raw.totalDays },
+                pending: { decrement: duration },
               },
             });
           } else if (raw.requestType === 'WFH') {
@@ -1075,7 +1088,7 @@ export class LeaveService {
                 year: currentYear,
               },
               data: {
-                pending: { decrement: raw.totalDays },
+                pending: { decrement: duration },
               },
             });
           }
@@ -1088,12 +1101,12 @@ export class LeaveService {
           status: newOverallStatus,
           managerStatus: newManagerStatus,
           managerId: managerUser.id,
-          managerComment: comment || (isApprove ? 'Approved by Manager' : (wasApproved ? `Approval revoked by Manager (${managerUser.name})` : 'Rejected by Manager')),
+          managerComment: comment || (isApprove ? 'Approved by Manager' : (isRevoke ? `Approval revoked by Manager (${managerUser.name})` : 'Rejected by Manager')),
           managerActedAt: new Date(),
           hrStatus: newHrStatus,
           rejectedById: isApprove ? null : managerUser.id,
           rejectedAt: isApprove ? null : new Date(),
-          rejectionReason: isApprove ? null : (comment || (wasApproved ? 'Approval revoked by manager' : 'Rejected by manager')),
+          rejectionReason: isApprove ? null : (comment || (isRevoke ? 'Approval revoked by manager' : 'Rejected by manager')),
         },
         include: { employee: true, leaveType: true },
       });
@@ -1106,9 +1119,9 @@ export class LeaveService {
       actorUserId: managerUser.id,
       action: isApprove
         ? (raw.requestType === 'WFH' ? 'WFH_REQUEST_APPROVED' : 'LEAVE_REQUEST_APPROVED')
-        : (wasApproved ? (raw.requestType === 'WFH' ? 'WFH_APPROVAL_REVOKED' : 'LEAVE_APPROVAL_REVOKED') : (raw.requestType === 'WFH' ? 'WFH_REQUEST_REJECTED' : 'LEAVE_REQUEST_REJECTED')),
-      details: wasApproved
-        ? `Manager ${managerUser.name} revoked approved ${raw.requestType} request of ${raw.employee.name}. ${raw.totalDays} day(s) refunded to balance. Remarks: "${comment || 'None'}"`
+        : (isRevoke ? (raw.requestType === 'WFH' ? 'WFH_APPROVAL_REVOKED' : 'LEAVE_APPROVAL_REVOKED') : (raw.requestType === 'WFH' ? 'WFH_REQUEST_REJECTED' : 'LEAVE_REQUEST_REJECTED')),
+      details: isRevoke
+        ? `Manager ${managerUser.name} revoked approved ${raw.requestType} request of ${raw.employee.name}. ${duration} day(s) refunded to balance. Remarks: "${comment || 'None'}"`
         : `Manager ${managerUser.name} ${newManagerStatus.toLowerCase()} ${raw.requestType} request of ${raw.employee.name}. Remarks: "${comment || 'None'}"`,
       req,
     });
@@ -1170,24 +1183,43 @@ export class LeaveService {
     }
 
     const isApprove = action === 'APPROVE';
+    const isRevoke = action === 'REVOKE' || (action === 'REJECT' && raw.status === 'APPROVED');
+    const wasApproved = raw.status === 'APPROVED';
+
     if (isApprove) {
       if (raw.status !== 'PENDING' || raw.hrStatus !== 'Pending') {
         throw { status: 400, message: `HR decision cannot be updated: request is already ${raw.status}` };
       }
     } else {
-      if (raw.status !== 'PENDING' && raw.status !== 'APPROVED') {
+      if (raw.status !== 'PENDING' && !wasApproved) {
         throw { status: 400, message: `HR rejection cannot be processed: request is already ${raw.status}` };
       }
     }
 
-    const wasApproved = raw.status === 'APPROVED';
-    const newHrStatus = isApprove ? 'Approved' : 'Rejected';
-    const newOverallStatus = isApprove ? 'APPROVED' : 'REJECTED';
+    // Check past leave restriction for revoking
+    if (isRevoke && wasApproved) {
+      const endOfLeave = new Date(raw.endDate);
+      endOfLeave.setHours(23, 59, 59, 999);
+      const isPastLeave = endOfLeave.getTime() < Date.now();
+      if (isPastLeave) {
+        const isAdmin = ['SUPER_ADMIN', 'ADMIN'].includes(String(hrUser?.role || '').toUpperCase());
+        if (!isAdmin) {
+          throw {
+            status: 400,
+            message: 'Completed past leave requests cannot be revoked. Contact an Administrator for administrative corrections.',
+          };
+        }
+      }
+    }
+
+    const newHrStatus = isApprove ? 'Approved' : (isRevoke ? 'Revoked' : 'Rejected');
+    const newOverallStatus = isApprove ? 'APPROVED' : (isRevoke ? 'REVOKED' : 'REJECTED');
     const currentYear = new Date(raw.startDate).getFullYear();
+    const duration = getAuthoritativeDuration(raw);
 
     const updated = await prisma.$transaction(async (tx) => {
       if (isApprove) {
-        // Move from pending to used
+        // Move from pending to used (safely clamped)
         if (raw.requestType === 'LEAVE' && raw.leaveTypeId) {
           await tx.leaveBalance.updateMany({
             where: {
@@ -1197,8 +1229,8 @@ export class LeaveService {
               year: currentYear,
             },
             data: {
-              pending: { decrement: raw.totalDays },
-              used: { increment: raw.totalDays },
+              pending: { decrement: duration },
+              used: { increment: duration },
             },
           });
         } else if (raw.requestType === 'WFH') {
@@ -1209,13 +1241,13 @@ export class LeaveService {
               year: currentYear,
             },
             data: {
-              pending: { decrement: raw.totalDays },
-              used: { increment: raw.totalDays },
+              pending: { decrement: duration },
+              used: { increment: duration },
             },
           });
         }
       } else {
-        // Rejecting:
+        // Rejecting or revoking:
         if (wasApproved) {
           // If already approved, deduct from 'used' so days are refunded to available balance
           if (raw.requestType === 'LEAVE' && raw.leaveTypeId) {
@@ -1227,7 +1259,7 @@ export class LeaveService {
                 year: currentYear,
               },
               data: {
-                used: { decrement: raw.totalDays },
+                used: { decrement: duration },
               },
             });
           } else if (raw.requestType === 'WFH') {
@@ -1238,7 +1270,7 @@ export class LeaveService {
                 year: currentYear,
               },
               data: {
-                used: { decrement: raw.totalDays },
+                used: { decrement: duration },
               },
             });
           }
@@ -1253,7 +1285,7 @@ export class LeaveService {
                 year: currentYear,
               },
               data: {
-                pending: { decrement: raw.totalDays },
+                pending: { decrement: duration },
               },
             });
           } else if (raw.requestType === 'WFH') {
@@ -1264,7 +1296,7 @@ export class LeaveService {
                 year: currentYear,
               },
               data: {
-                pending: { decrement: raw.totalDays },
+                pending: { decrement: duration },
               },
             });
           }
@@ -1275,17 +1307,17 @@ export class LeaveService {
         where: { id: requestId },
         data: {
           status: newOverallStatus,
-          managerStatus: isApprove ? 'Approved' : (wasApproved ? 'Revoked' : (raw.managerStatus === 'Approved' ? 'Approved' : 'Rejected')),
+          managerStatus: isApprove ? 'Approved' : (isRevoke ? 'Revoked' : (raw.managerStatus === 'Approved' ? 'Approved' : 'Rejected')),
           managerComment: isApprove && raw.managerStatus !== 'Approved' ? (comment || `Approved by ${hrUser.name} (${hrUser.role})`) : raw.managerComment,
           managerActedAt: isApprove && raw.managerStatus !== 'Approved' ? new Date() : raw.managerActedAt,
           hrStatus: newHrStatus,
           hrId: hrUser.id,
-          hrComment: comment || (isApprove ? `Approved by ${hrUser.name} (${hrUser.role})` : (wasApproved ? `Approval revoked by ${hrUser.name} (${hrUser.role})` : `Rejected by ${hrUser.name} (${hrUser.role})`)),
+          hrComment: comment || (isApprove ? `Approved by ${hrUser.name} (${hrUser.role})` : (isRevoke ? `Approval revoked by ${hrUser.name} (${hrUser.role})` : `Rejected by ${hrUser.name} (${hrUser.role})`)),
           hrActedAt: new Date(),
           approvedById: isApprove ? hrUser.id : null,
           rejectedById: isApprove ? null : hrUser.id,
           rejectedAt: isApprove ? null : new Date(),
-          rejectionReason: isApprove ? null : (comment || (wasApproved ? 'Approval revoked by HR' : 'Rejected by HR')),
+          rejectionReason: isApprove ? null : (comment || (isRevoke ? 'Approval revoked by HR' : 'Rejected by HR')),
         },
         include: { employee: true, leaveType: true },
       });
@@ -1298,9 +1330,9 @@ export class LeaveService {
       actorUserId: hrUser.id,
       action: isApprove
         ? (raw.requestType === 'WFH' ? 'WFH_REQUEST_APPROVED' : 'LEAVE_REQUEST_APPROVED')
-        : (wasApproved ? (raw.requestType === 'WFH' ? 'WFH_APPROVAL_REVOKED' : 'LEAVE_APPROVAL_REVOKED') : (raw.requestType === 'WFH' ? 'WFH_REQUEST_REJECTED' : 'LEAVE_REQUEST_REJECTED')),
-      details: wasApproved
-        ? `${hrUser.name} (${hrUser.role}) revoked approval and rejected ${raw.requestType} for ${raw.employee.name}. ${raw.totalDays} day(s) refunded to balance. Remarks: "${comment || 'None'}"`
+        : (isRevoke ? (raw.requestType === 'WFH' ? 'WFH_APPROVAL_REVOKED' : 'LEAVE_APPROVAL_REVOKED') : (raw.requestType === 'WFH' ? 'WFH_REQUEST_REJECTED' : 'LEAVE_REQUEST_REJECTED')),
+      details: isRevoke
+        ? `${hrUser.name} (${hrUser.role}) revoked approval for ${raw.requestType} request of ${raw.employee.name}. ${duration} day(s) refunded to balance. Remarks: "${comment || 'None'}"`
         : `${hrUser.name} (${hrUser.role}) signed off ${newHrStatus.toLowerCase()} for ${raw.employee.name}'s ${raw.requestType} request. Remarks: "${comment || 'None'}"`,
       req,
     });
@@ -1343,20 +1375,23 @@ export class LeaveService {
     }
 
     const isApprove = action === 'APPROVE';
+    const isRevoke = action === 'REVOKE' || (action === 'REJECT' && raw.status === 'APPROVED');
+    const wasApproved = raw.status === 'APPROVED';
+
     if (isApprove) {
       if (raw.status !== 'PENDING') {
         throw { status: 400, message: `Request cannot be updated: status is already ${raw.status}` };
       }
     } else {
-      if (raw.status !== 'PENDING' && raw.status !== 'APPROVED') {
-        throw { status: 400, message: `Administrator rejection cannot be processed: status is already ${raw.status}` };
+      if (raw.status !== 'PENDING' && !wasApproved) {
+        throw { status: 400, message: `Administrator action cannot be processed: status is already ${raw.status}` };
       }
     }
 
-    const wasApproved = raw.status === 'APPROVED';
-    const newStatus = isApprove ? 'APPROVED' : 'REJECTED';
-    const newStageStatus = isApprove ? 'Approved' : 'Rejected';
+    const newStatus = isApprove ? 'APPROVED' : (isRevoke ? 'REVOKED' : 'REJECTED');
+    const newStageStatus = isApprove ? 'Approved' : (isRevoke ? 'Revoked' : 'Rejected');
     const currentYear = new Date(raw.startDate).getFullYear();
+    const duration = getAuthoritativeDuration(raw);
 
     const updated = await prisma.$transaction(async (tx) => {
       if (isApprove) {
@@ -1370,8 +1405,8 @@ export class LeaveService {
               year: currentYear,
             },
             data: {
-              pending: { decrement: raw.totalDays },
-              used: { increment: raw.totalDays },
+              pending: { decrement: duration },
+              used: { increment: duration },
             },
           });
         } else if (raw.requestType === 'WFH') {
@@ -1382,13 +1417,13 @@ export class LeaveService {
               year: currentYear,
             },
             data: {
-              pending: { decrement: raw.totalDays },
-              used: { increment: raw.totalDays },
+              pending: { decrement: duration },
+              used: { increment: duration },
             },
           });
         }
       } else {
-        // Rejecting:
+        // Rejecting or revoking:
         if (wasApproved) {
           // If already approved, deduct from 'used' so days are refunded to available balance
           if (raw.requestType === 'LEAVE' && raw.leaveTypeId) {
@@ -1400,7 +1435,7 @@ export class LeaveService {
                 year: currentYear,
               },
               data: {
-                used: { decrement: raw.totalDays },
+                used: { decrement: duration },
               },
             });
           } else if (raw.requestType === 'WFH') {
@@ -1411,7 +1446,7 @@ export class LeaveService {
                 year: currentYear,
               },
               data: {
-                used: { decrement: raw.totalDays },
+                used: { decrement: duration },
               },
             });
           }
@@ -1426,7 +1461,7 @@ export class LeaveService {
                 year: currentYear,
               },
               data: {
-                pending: { decrement: raw.totalDays },
+                pending: { decrement: duration },
               },
             });
           } else if (raw.requestType === 'WFH') {
@@ -1437,7 +1472,7 @@ export class LeaveService {
                 year: currentYear,
               },
               data: {
-                pending: { decrement: raw.totalDays },
+                pending: { decrement: duration },
               },
             });
           }
@@ -1448,18 +1483,18 @@ export class LeaveService {
         where: { id: requestId },
         data: {
           status: newStatus,
-          managerStatus: isApprove ? newStageStatus : (wasApproved ? 'Revoked' : newStageStatus),
+          managerStatus: isApprove ? newStageStatus : (isRevoke ? 'Revoked' : newStageStatus),
           managerId: adminUser.id,
-          managerComment: comment || (isApprove ? `Approved by Administrator (${adminUser.name})` : (wasApproved ? `Approval revoked by Administrator (${adminUser.name})` : `Rejected by Administrator (${adminUser.name})`)),
+          managerComment: comment || (isApprove ? `Approved by Administrator (${adminUser.name})` : (isRevoke ? `Approval revoked by Administrator (${adminUser.name})` : `Rejected by Administrator (${adminUser.name})`)),
           managerActedAt: new Date(),
-          hrStatus: isApprove ? newStageStatus : (wasApproved ? 'Revoked' : newStageStatus),
+          hrStatus: isApprove ? newStageStatus : (isRevoke ? 'Revoked' : newStageStatus),
           hrId: adminUser.id,
-          hrComment: comment || (isApprove ? `Approved by Administrator (${adminUser.name})` : (wasApproved ? `Approval revoked by Administrator (${adminUser.name})` : `Rejected by Administrator (${adminUser.name})`)),
+          hrComment: comment || (isApprove ? `Approved by Administrator (${adminUser.name})` : (isRevoke ? `Approval revoked by Administrator (${adminUser.name})` : `Rejected by Administrator (${adminUser.name})`)),
           hrActedAt: new Date(),
           approvedById: isApprove ? adminUser.id : null,
           rejectedById: isApprove ? null : adminUser.id,
           rejectedAt: isApprove ? null : new Date(),
-          rejectionReason: isApprove ? null : (comment || (wasApproved ? 'Approval revoked by Administrator' : 'Rejected by Administrator')),
+          rejectionReason: isApprove ? null : (comment || (isRevoke ? 'Approval revoked by Administrator' : 'Rejected by Administrator')),
         },
         include: { employee: true, leaveType: true },
       });
@@ -1472,9 +1507,9 @@ export class LeaveService {
       actorUserId: adminUser.id,
       action: isApprove
         ? (raw.requestType === 'WFH' ? 'WFH_REQUEST_APPROVED' : 'LEAVE_REQUEST_APPROVED')
-        : (wasApproved ? (raw.requestType === 'WFH' ? 'WFH_APPROVAL_REVOKED' : 'LEAVE_APPROVAL_REVOKED') : (raw.requestType === 'WFH' ? 'WFH_REQUEST_REJECTED' : 'LEAVE_REQUEST_REJECTED')),
-      details: wasApproved
-        ? `Administrator ${adminUser.name} (${adminUser.role}) revoked approved ${raw.requestType} request for ${raw.employee.name}. ${raw.totalDays} day(s) refunded to balance. Remarks: "${comment || 'None'}"`
+        : (isRevoke ? (raw.requestType === 'WFH' ? 'WFH_APPROVAL_REVOKED' : 'LEAVE_APPROVAL_REVOKED') : (raw.requestType === 'WFH' ? 'WFH_REQUEST_REJECTED' : 'LEAVE_REQUEST_REJECTED')),
+      details: isRevoke
+        ? `Administrator ${adminUser.name} (${adminUser.role}) revoked approved ${raw.requestType} request for ${raw.employee.name}. ${duration} day(s) refunded to balance. Remarks: "${comment || 'None'}"`
         : `Administrator ${adminUser.name} (${adminUser.role}) ${newStatus.toLowerCase()} ${raw.requestType} request for ${raw.employee.name}. Remarks: "${comment || 'None'}"`,
       req,
     });
@@ -1483,13 +1518,13 @@ export class LeaveService {
       tenantId,
       recipientId: raw.employeeId,
       type: 'leave',
-      title: wasApproved
-        ? `Approval Revoked: Administrator rejected your ${raw.leaveType?.name || raw.type}`
+      title: isRevoke
+        ? `Approval Revoked: Administrator revoked your ${raw.leaveType?.name || raw.type}`
         : `Administrator Decision: Your ${raw.leaveType?.name || raw.type} is ${newStatus}`,
       body: isApprove
         ? `Administrator ${adminUser.name} approved your ${raw.leaveType?.name || raw.type} request. Your balance has been updated.`
-        : (wasApproved
-          ? `Administrator ${adminUser.name} revoked approval for your ${raw.leaveType?.name || raw.type} request (${raw.totalDays} day(s) refunded to balance). Remarks: "${comment || 'No comment provided'}"`
+        : (isRevoke
+          ? `Administrator ${adminUser.name} revoked approval for your ${raw.leaveType?.name || raw.type} request (${duration} day(s) refunded to balance). Remarks: "${comment || 'No comment provided'}"`
           : `Administrator ${adminUser.name} rejected your request. Remarks: "${comment || 'No comment provided'}"`),
       entityType: 'leave_request',
       entityId: requestId,
@@ -1523,6 +1558,7 @@ export class LeaveService {
     }
 
     const currentYear = new Date(raw.startDate).getFullYear();
+    const duration = getAuthoritativeDuration(raw);
 
     const updated = await prisma.$transaction(async (tx) => {
       // Restore pending days
@@ -1535,7 +1571,7 @@ export class LeaveService {
             year: currentYear,
           },
           data: {
-            pending: { decrement: raw.totalDays },
+            pending: { decrement: duration },
           },
         });
       } else if (raw.requestType === 'WFH') {
@@ -1546,7 +1582,7 @@ export class LeaveService {
             year: currentYear,
           },
           data: {
-            pending: { decrement: raw.totalDays },
+            pending: { decrement: duration },
           },
         });
       }
