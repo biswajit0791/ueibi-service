@@ -1,0 +1,500 @@
+{
+  "targetDomain": "shraddhaauromira.com",
+  "timestamp": "2026-11-18T07:57:51.684Z",
+  "tenant": {
+    "id": "cmwdgr5pv000il4gh5lehsk2g",
+    "companyName": "shraddha auromira",
+    "domainName": "shraddhaauromira.com",
+    "tenantCode": "shraddha-auromira-c6ca",
+    "licenseLimit": 7,
+    "creditBalance": "0",
+    "isPlatform": false,
+    "status": "ACTIVE",
+    "planEndsAt": "2032-05-12T11:27:26.127Z",
+    "suspendedAt": null,
+    "suspendedReason": null,
+    "createdAt": "2026-11-12T11:27:26.131Z",
+    "updatedAt": "2026-11-17T12:53:01.125Z",
+    "registrationId": "cmwdg1nsz0004l4gh39mor25q",
+    "registration": {
+      "id": "cmwdg1nsz0004l4gh39mor25q",
+      "companyName": "shraddha auromira",
+      "companyType": "Private Limited",
+      "organizationStructureId": "cmwaqlyb10000uudohpmul5v0",
+      "domainName": "shraddhaauromira.com",
+      "tenantCode": "shraddha-auromira-c6ca",
+      "fullName": "Chandra S Biswal",
+      "designation": "CMD",
+      "email": "chandra@shraddhaauromira.com",
+      "passwordHash": "$2b$10$XFeunaaXwGfUxKVFMgF7Gefhf7RkBz03hdqQDvioKYOimnFZCIY92",
+      "financeEmail": "pratik@shraddhaauromira.com",
+      "financeName": null,
+      "financeNotRequired": false,
+      "hrEmail": "pratik@shraddhaauromira.com",
+      "hrName": null,
+      "hrNotRequired": false,
+      "additionalLicenses": 5,
+      "acceptedTermsAt": "2026-11-12T11:07:36.514Z",
+      "gstin": null,
+      "licenseQuantity": 7,
+      "unitPrice": "3999",
+      "couponId": null,
+      "discountAmount": "0",
+      "subtotalAmount": "27993",
+      "gstRate": "0.18",
+      "gstAmount": "5038.74",
+      "totalAmount": "33031.74",
+      "paymentMethod": "ONLINE",
+      "paymentReference": "order_TzF3kWd0Dvu4Sw",
+      "chequeNumber": null,
+      "chequeDate": null,
+      "transactionId": "pay_TzFNg5NUdiIG73",
+      "financeApprovedAt": "2026-11-12T11:27:26.119Z",
+      "razorpayOrderId": "order_TzF3kWd0Dvu4Sw",
+      "razorpayPaymentId": "pay_TzFNg5NUdiIG73",
+      "razorpaySignature": "347895a2b522c169d79a5364dc56ee1f2bcf002226cdd30151395f7104785c19",
+      "paymentVerifiedAt": "2026-11-12T11:27:26.119Z",
+      "activatedAt": "2026-11-12T11:27:26.128Z",
+      "paidDurationMonths": 12,
+      "freeDurationMonths": 0,
+      "totalDurationMonths": 12,
+      "subscriptionStartsAt": null,
+      "subscriptionEndsAt": null,
+      "promotionId": null,
+      "promoCode": null,
+      "promotionName": null,
+      "status": "ACTIVE",
+      "createdAt": "2026-11-12T11:07:36.515Z",
+      "updatedAt": "2026-11-12T11:27:26.129Z"
+    }
+  },
+  "registration": {
+    "id": "cmwdg1nsz0004l4gh39mor25q",
+    "companyName": "shraddha auromira",
+    "companyType": "Private Limited",
+    "organizationStructureId": "cmwaqlyb10000uudohpmul5v0",
+    "domainName": "shraddhaauromira.com",
+    "tenantCode": "shraddha-auromira-c6ca",
+    "fullName": "Chandra S Biswal",
+    "designation": "CMD",
+    "email": "chandra@shraddhaauromira.com",
+    "passwordHash": "$2b$10$XFeunaaXwGfUxKVFMgF7Gefhf7RkBz03hdqQDvioKYOimnFZCIY92",
+    "financeEmail": "pratik@shraddhaauromira.com",
+    "financeName": null,
+    "financeNotRequired": false,
+    "hrEmail": "pratik@shraddhaauromira.com",
+    "hrName": null,
+    "hrNotRequired": false,
+    "additionalLicenses": 5,
+    "acceptedTermsAt": "2026-11-12T11:07:36.514Z",
+    "gstin": null,
+    "licenseQuantity": 7,
+    "unitPrice": "3999",
+    "couponId": null,
+    "discountAmount": "0",
+    "subtotalAmount": "27993",
+    "gstRate": "0.18",
+    "gstAmount": "5038.74",
+    "totalAmount": "33031.74",
+    "paymentMethod": "ONLINE",
+    "paymentReference": "order_TzF3kWd0Dvu4Sw",
+    "chequeNumber": null,
+    "chequeDate": null,
+    "transactionId": "pay_TzFNg5NUdiIG73",
+    "financeApprovedAt": "2026-11-12T11:27:26.119Z",
+    "razorpayOrderId": "order_TzF3kWd0Dvu4Sw",
+    "razorpayPaymentId": "pay_TzFNg5NUdiIG73",
+    "razorpaySignature": "347895a2b522c169d79a5364dc56ee1f2bcf002226cdd30151395f7104785c19",
+    "paymentVerifiedAt": "2026-11-12T11:27:26.119Z",
+    "activatedAt": "2026-11-12T11:27:26.128Z",
+    "paidDurationMonths": 12,
+    "freeDurationMonths": 0,
+    "totalDurationMonths": 12,
+    "subscriptionStartsAt": null,
+    "subscriptionEndsAt": null,
+    "promotionId": null,
+    "promoCode": null,
+    "promotionName": null,
+    "status": "ACTIVE",
+    "createdAt": "2026-11-12T11:07:36.515Z",
+    "updatedAt": "2026-11-12T11:27:26.129Z"
+  },
+  "users": [
+    {
+      "id": "cmwdgr5rv000ol4ghmsvzzeb5",
+      "email": "pratik@shraddhaauromira.com",
+      "name": "HR Head",
+      "role": "HR",
+      "tenantId": "cmwdgr5pv000il4gh5lehsk2g"
+    },
+    {
+      "id": "cmwdgr5q1000ml4ghs4rrqkv0",
+      "email": "chandra@shraddhaauromira.com",
+      "name": "Chandra S Biswal",
+      "role": "SUPER_ADMIN",
+      "tenantId": "cmwdgr5pv000il4gh5lehsk2g"
+    }
+  ],
+  "identifiedReport": [
+    {
+      "table": "tasks",
+      "count": 0,
+      "description": "Tasks"
+    },
+    {
+      "table": "task_dependencies",
+      "count": 0,
+      "description": "Task dependencies"
+    },
+    {
+      "table": "dependency_audit_logs",
+      "count": 0,
+      "description": "Dependency audit logs"
+    },
+    {
+      "table": "task_milestones",
+      "count": 0,
+      "description": "Task milestones"
+    },
+    {
+      "table": "task_milestone_audits",
+      "count": 0,
+      "description": "Milestone audit logs"
+    },
+    {
+      "table": "task_audit_logs",
+      "count": 0,
+      "description": "Task audit logs"
+    },
+    {
+      "table": "task_comments",
+      "count": 0,
+      "description": "Task comments"
+    },
+    {
+      "table": "task_assignees",
+      "count": 0,
+      "description": "Task assignees"
+    },
+    {
+      "table": "sub_tasks",
+      "count": 0,
+      "description": "Sub tasks"
+    },
+    {
+      "table": "sub_task_audit_logs",
+      "count": 0,
+      "description": "Subtask audit logs"
+    },
+    {
+      "table": "goals",
+      "count": 0,
+      "description": "Goals"
+    },
+    {
+      "table": "goal_assignments",
+      "count": 0,
+      "description": "Goal assignments"
+    },
+    {
+      "table": "goal_audit_logs",
+      "count": 0,
+      "description": "Goal audit logs"
+    },
+    {
+      "table": "goal_comments",
+      "count": 0,
+      "description": "Goal comments"
+    },
+    {
+      "table": "policies",
+      "count": 0,
+      "description": "Policies"
+    },
+    {
+      "table": "policy_versions",
+      "count": 0,
+      "description": "Policy versions"
+    },
+    {
+      "table": "policy_assignments",
+      "count": 0,
+      "description": "Policy assignments"
+    },
+    {
+      "table": "policy_acceptances",
+      "count": 0,
+      "description": "Policy acceptances"
+    },
+    {
+      "table": "policy_audit_logs",
+      "count": 0,
+      "description": "Policy audit logs"
+    },
+    {
+      "table": "leave_requests",
+      "count": 0,
+      "description": "Leave requests"
+    },
+    {
+      "table": "leave_balances",
+      "count": 6,
+      "description": "Leave balances"
+    },
+    {
+      "table": "leave_types",
+      "count": 3,
+      "description": "Leave types"
+    },
+    {
+      "table": "leave_audit_logs",
+      "count": 0,
+      "description": "Leave audit logs"
+    },
+    {
+      "table": "leave_balance_adjustments",
+      "count": 0,
+      "description": "Leave adjustments"
+    },
+    {
+      "table": "wfh_policies",
+      "count": 1,
+      "description": "WFH policies"
+    },
+    {
+      "table": "wfh_balances",
+      "count": 2,
+      "description": "WFH balances"
+    },
+    {
+      "table": "appraisal_cycles",
+      "count": 1,
+      "description": "Appraisal cycles"
+    },
+    {
+      "table": "appraisal_parameters",
+      "count": 5,
+      "description": "Appraisal parameters"
+    },
+    {
+      "table": "performance_reviews",
+      "count": 0,
+      "description": "Performance reviews"
+    },
+    {
+      "table": "peer_nominations",
+      "count": 0,
+      "description": "Peer nominations"
+    },
+    {
+      "table": "peer_feedbacks",
+      "count": 0,
+      "description": "Peer feedbacks"
+    },
+    {
+      "table": "departments",
+      "count": 11,
+      "description": "Departments"
+    },
+    {
+      "table": "subscriptions",
+      "count": 5,
+      "description": "Subscriptions"
+    },
+    {
+      "table": "invoices",
+      "count": 4,
+      "description": "Invoices"
+    },
+    {
+      "table": "payments",
+      "count": 0,
+      "description": "Payments"
+    },
+    {
+      "table": "refunds",
+      "count": 0,
+      "description": "Refunds"
+    },
+    {
+      "table": "coupon_redemptions",
+      "count": 0,
+      "description": "Coupon redemptions"
+    },
+    {
+      "table": "wallet_transactions",
+      "count": 0,
+      "description": "Wallet transactions"
+    },
+    {
+      "table": "cxo_messages",
+      "count": 0,
+      "description": "CXO messages"
+    },
+    {
+      "table": "cxo_message_replies",
+      "count": 0,
+      "description": "CXO replies"
+    },
+    {
+      "table": "disputes",
+      "count": 0,
+      "description": "Disputes"
+    },
+    {
+      "table": "dispute_messages",
+      "count": 0,
+      "description": "Dispute messages"
+    },
+    {
+      "table": "dispute_subjects",
+      "count": 0,
+      "description": "Dispute subjects"
+    },
+    {
+      "table": "hub_events",
+      "count": 0,
+      "description": "Hub events"
+    },
+    {
+      "table": "gallery_posts",
+      "count": 0,
+      "description": "Gallery posts"
+    },
+    {
+      "table": "gallery_comments",
+      "count": 0,
+      "description": "Gallery comments"
+    },
+    {
+      "table": "gallery_likes",
+      "count": 0,
+      "description": "Gallery likes"
+    },
+    {
+      "table": "document_templates",
+      "count": 0,
+      "description": "Document templates"
+    },
+    {
+      "table": "generated_documents",
+      "count": 0,
+      "description": "Generated documents"
+    },
+    {
+      "table": "document_tokens",
+      "count": 0,
+      "description": "Document tokens"
+    },
+    {
+      "table": "tenant_settings",
+      "count": 1,
+      "description": "Tenant settings"
+    },
+    {
+      "table": "blood_groups",
+      "count": 8,
+      "description": "Blood groups"
+    },
+    {
+      "table": "goal_options",
+      "count": 20,
+      "description": "Goal options"
+    },
+    {
+      "table": "user_capabilities",
+      "count": 0,
+      "description": "User capabilities"
+    },
+    {
+      "table": "capability_audit_logs",
+      "count": 0,
+      "description": "Capability audit logs"
+    },
+    {
+      "table": "permission_audit_logs",
+      "count": 1,
+      "description": "Permission audit logs"
+    },
+    {
+      "table": "bank_details",
+      "count": 0,
+      "description": "User bank details"
+    },
+    {
+      "table": "work_histories",
+      "count": 0,
+      "description": "Work histories"
+    },
+    {
+      "table": "employee_educations",
+      "count": 0,
+      "description": "Educations"
+    },
+    {
+      "table": "exit_details",
+      "count": 0,
+      "description": "Exit details"
+    },
+    {
+      "table": "exit_clearances",
+      "count": 0,
+      "description": "Exit clearances"
+    },
+    {
+      "table": "password_reset_tokens",
+      "count": 2,
+      "description": "Password reset tokens"
+    },
+    {
+      "table": "notifications",
+      "count": 0,
+      "description": "Notifications"
+    },
+    {
+      "table": "messages",
+      "count": 0,
+      "description": "Direct chat messages"
+    },
+    {
+      "table": "followers",
+      "count": 0,
+      "description": "Followers"
+    },
+    {
+      "table": "tenant_users",
+      "count": 2,
+      "description": "Tenant User accounts"
+    },
+    {
+      "table": "tenants",
+      "count": 1,
+      "description": "Tenant root record"
+    },
+    {
+      "table": "registration_action_tokens",
+      "count": 1,
+      "description": "Registration tokens"
+    },
+    {
+      "table": "registration_verifications",
+      "count": 0,
+      "description": "Registration verifications"
+    },
+    {
+      "table": "notification_logs",
+      "count": 21,
+      "description": "Notification dispatch logs"
+    },
+    {
+      "table": "company_registrations",
+      "count": 1,
+      "description": "Company registration record"
+    },
+    {
+      "table": "email_verifications",
+      "count": 1,
+      "description": "OTP & Email verification challenges"
+    }
+  ]
+}

@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { prisma } from '../lib/prisma.js';
 import { env } from '../config/env.js';
-import { addMonths, num } from './billing.service.js';
+import { addMonths, num, nextInvoiceNumber } from './billing.service.js';
 import {
   findEligiblePromotion,
   calculateSubscriptionExtension,
@@ -14,14 +14,39 @@ import { sendMail } from '../lib/mailer.js';
 import { renderHrActivatedEmail } from '../lib/emailTemplates.js';
 
 /**
- * Commits single coupon redemption with optimistic concurrency.
+ * Commits single coupon redemption with optimistic concurrency and audit tracking.
  */
-async function commitCouponUsage(tx, coupon) {
+async function commitCouponUsage(tx, coupon, registrationId = null, tenantId = null, invoiceId = null, discountAmount = 0) {
   if (!coupon) return;
-  await tx.coupon.updateMany({
-    where: { id: coupon.id, timesUsed: coupon.timesUsed },
+  const where = {
+    id: coupon.id,
+    active: true,
+  };
+  if (coupon.usageLimit != null) {
+    where.timesUsed = { lt: coupon.usageLimit };
+  }
+  const updated = await tx.coupon.updateMany({
+    where,
     data: { timesUsed: { increment: 1 } },
   });
+
+  if (updated.count === 0) {
+    throw new Error(`Coupon "${coupon.code}" usage limit has already been reached.`);
+  }
+
+  try {
+    await tx.couponRedemption.create({
+      data: {
+        couponId: coupon.id,
+        invoiceId: invoiceId || null,
+        tenantId: tenantId || null,
+        registrationId: registrationId || null,
+        discountAmount: discountAmount || 0,
+      },
+    });
+  } catch (err) {
+    console.warn('[COUPON] Failed to record coupon redemption audit entry:', err.message);
+  }
 }
 
 /**
@@ -70,17 +95,28 @@ export async function activateTenantFromRegistration({
   }
 
   const startsAt = new Date();
-  const promo = await findEligiblePromotion({
-    packageId: null,
-    termMonths: 12,
-    context: 'NEW_REGISTRATIONS',
-  });
-  const ext = calculateSubscriptionExtension({
-    startsAt,
-    termMonths: 12,
-    promotion: promo,
-  });
-  const endsAt = ext.endsAt;
+  let promo = null;
+  if (registration.promotionId) {
+    promo = await prisma.subscriptionPromotion.findUnique({
+      where: { id: registration.promotionId },
+    });
+  }
+  if (!promo) {
+    promo = await findEligiblePromotion({
+      packageId: null,
+      termMonths: registration.paidDurationMonths || 12,
+      seatCount: registration.licenseQuantity || 1,
+      context: 'NEW_REGISTRATIONS',
+      coupon: registration.coupon,
+      code: registration.promoCode,
+    });
+  }
+
+  const paidMonths = registration.paidDurationMonths || (promo ? promo.paidMonths : 12);
+  const freeMonths = registration.freeDurationMonths != null ? registration.freeDurationMonths : (promo ? promo.freeMonths : 0);
+  const totalMonths = registration.totalDurationMonths || (paidMonths + freeMonths);
+  const paidEndsAt = addMonths(startsAt, paidMonths);
+  const endsAt = addMonths(startsAt, totalMonths);
   const licenseLimit = registration.licenseQuantity && registration.licenseQuantity > 0
     ? registration.licenseQuantity
     : 10;
@@ -118,17 +154,17 @@ export async function activateTenantFromRegistration({
       const createdSub = await tx.subscription.create({
         data: {
           tenantId: createdTenant.id,
-          packageName: `${licenseLimit} Licenses (${ext.totalDurationMonths} Months${ext.freeDurationMonths ? ` incl. ${ext.freeDurationMonths} Mo Free` : ' Annual'})`,
+          packageName: `${licenseLimit} Licenses (${totalMonths} Months${freeMonths ? ` incl. ${freeMonths} Mo Free` : ' Annual'})`,
           seatCount: licenseLimit,
           state: 'ACTIVE',
           startsAt,
           endsAt,
           registrationId: registration.id,
-          promotionId: promo?.id || null,
-          paidDurationMonths: ext.paidDurationMonths,
-          freeDurationMonths: ext.freeDurationMonths,
-          totalDurationMonths: ext.totalDurationMonths,
-          paidEndsAt: ext.paidEndsAt,
+          promotionId: promo?.id || registration.promotionId || null,
+          paidDurationMonths: paidMonths,
+          freeDurationMonths: freeMonths,
+          totalDurationMonths: totalMonths,
+          paidEndsAt,
         },
       });
 
@@ -138,12 +174,59 @@ export async function activateTenantFromRegistration({
           subscriptionId: createdSub.id,
           tenantId: createdTenant.id,
           salesRepId: null,
-          paidMonths: ext.paidDurationMonths,
-          freeMonths: ext.freeDurationMonths,
-          totalMonths: ext.totalDurationMonths,
+          paidMonths,
+          freeMonths,
+          totalMonths,
           paidRevenue: num(registration.totalAmount) || 0,
         });
       }
+
+      // 3b. Create Tax Invoice (PAID) and Payment Record
+      const invoiceNumber = await nextInvoiceNumber(tx, startsAt);
+      const createdInvoice = await tx.invoice.create({
+        data: {
+          invoiceNumber,
+          tenantId: createdTenant.id,
+          subscriptionId: createdSub.id,
+          registrationId: registration.id,
+          state: 'PAID',
+          billToName: registration.companyName,
+          billToGstin: registration.gstin || null,
+          billToEmail: registration.email,
+          issuedAt: startsAt,
+          currency: 'INR',
+          quantity: licenseLimit,
+          unitPrice: registration.unitPrice || env.licenseUnitPrice,
+          subtotalAmount: registration.subtotalAmount || (licenseLimit * (registration.unitPrice || env.licenseUnitPrice)),
+          couponId: registration.couponId || null,
+          couponCode: registration.coupon?.code || null,
+          discountAmount: registration.discountAmount || 0,
+          gstRate: registration.gstRate || env.gstRate,
+          gstAmount: registration.gstAmount || 0,
+          totalAmount: registration.totalAmount || 0,
+          amountPaid: registration.totalAmount || 0,
+          amountRefunded: 0,
+          paidDurationMonths: paidMonths,
+          freeDurationMonths: freeMonths,
+          totalDurationMonths: totalMonths,
+          periodStartsAt: startsAt,
+          periodEndsAt: endsAt,
+          notes: `Paid subscription activation for ${licenseLimit} licenses (${paidMonths} Months paid + ${freeMonths} Months promotional free). Reference: ${transactionId || paymentReference || 'ONLINE'}`,
+        },
+      });
+
+      await tx.payment.create({
+        data: {
+          invoiceId: createdInvoice.id,
+          tenantId: createdTenant.id,
+          amount: registration.totalAmount || 0,
+          method: paymentMethod === 'CHEQUE' ? 'CHEQUE' : 'ONLINE',
+          reference: transactionId || paymentReference || 'ONLINE',
+          receivedAt: startsAt,
+          recordedById: performedBy,
+          notes: `Automatic payment recording upon ${paymentMethod} confirmation for registration ${registration.id}`,
+        },
+      });
 
       // 4. Create CMD User (SUPER_ADMIN)
       await tx.tenantUser.create({
@@ -225,7 +308,14 @@ export async function activateTenantFromRegistration({
 
       // 7. Consume Coupon if applied
       if (registration.coupon) {
-        await commitCouponUsage(tx, registration.coupon);
+        await commitCouponUsage(
+          tx,
+          registration.coupon,
+          registration.id,
+          createdTenant.id,
+          createdInvoice.id,
+          Number(registration.discountAmount || 0)
+        );
       }
 
       // 8. Record Platform Audit Log

@@ -35,7 +35,19 @@ import {
 
 async function lookupCoupon(couponCode) {
   if (!couponCode) return { coupon: null, error: null };
-  const coupon = await prisma.coupon.findUnique({ where: { code: couponCode } });
+  const cleanCode = String(couponCode).trim();
+  if (!cleanCode) return { coupon: null, error: null };
+
+  const coupon = await prisma.coupon.findFirst({
+    where: {
+      code: { equals: cleanCode, mode: 'insensitive' },
+    },
+    include: {
+      salesRep: {
+        select: { id: true, name: true, email: true, designation: true },
+      },
+    },
+  });
   const error = couponValidationError(coupon);
   return { coupon: error ? null : coupon, error };
 }
@@ -58,6 +70,7 @@ export async function getPublicPricingPreview(req, res, next) {
       additionalLicenses,
       licenseQuantity,
       couponCode,
+      promoCode,
     } = parsed.data;
 
     const { coupon, error: couponError } = await lookupCoupon(couponCode);
@@ -77,13 +90,27 @@ export async function getPublicPricingPreview(req, res, next) {
         additionalLicenses,
         licenseQuantity,
       },
-      { coupon }
+      { coupon, promoCode }
     );
+
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
 
     res.json({
       ...pricing,
       couponValid: Boolean(coupon),
       couponCode: coupon?.code || null,
+      coupon: coupon
+        ? {
+            id: coupon.id,
+            code: coupon.code,
+            discountType: coupon.discountType,
+            discountValue: Number(coupon.discountValue),
+            bdmName: coupon.bdmName || coupon.salesRep?.name || null,
+            salesRepId: coupon.salesRepId || null,
+          }
+        : null,
       couponError,
       minQuantity: minQty,
       maxQuantity: maxQty,
@@ -244,17 +271,25 @@ export async function getPublicRegistrationSettings(req, res, next) {
       currency,
       gstRate,
       taxEnabled,
+      minQty,
+      maxQty,
     ] = await Promise.all([
       getRegistrationConfig('OTP_TTL_MINUTES', 10),
       getRegistrationConfig('OTP_LENGTH', 6),
       getRegistrationConfig('OTP_MAX_ATTEMPTS', 5),
       getRegistrationConfig('OTP_RESEND_COOLDOWN_SECONDS', 60),
       getRegistrationConfig('OTP_MAX_RESEND_ATTEMPTS', 3),
-      getRegistrationConfig('LICENSE_UNIT_PRICE', 3999),
+      getRegistrationConfig('LICENSE_UNIT_PRICE', 5000),
       getRegistrationConfig('CURRENCY', 'INR'),
       getRegistrationConfig('GST_RATE', 0.18),
       getRegistrationConfig('TAX_ENABLED', true),
+      getRegistrationConfig('MIN_LICENSE_QUANTITY', 1),
+      getRegistrationConfig('MAX_LICENSE_QUANTITY', 10000),
     ]);
+
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
 
     res.json({
       otpTtlMinutes: Number(otpTtlMinutes) || 10,
@@ -262,10 +297,13 @@ export async function getPublicRegistrationSettings(req, res, next) {
       otpMaxAttempts: Number(otpMaxAttempts) || 5,
       otpResendCooldownSeconds: Number(otpCooldownSecs) || 60,
       otpMaxResendAttempts: Number(otpMaxResendAttempts) || 3,
-      licenseUnitPrice: Number(unitPrice) || 3999,
+      unitPrice: Number(unitPrice),
+      licenseUnitPrice: Number(unitPrice),
       currency: currency || 'INR',
       gstRate: Number(gstRate) || 0.18,
       taxEnabled: Boolean(taxEnabled),
+      minQuantity: Number(minQty) || 1,
+      maxQuantity: Number(maxQty) || 10000,
     });
   } catch (err) {
     next(err);
@@ -575,7 +613,7 @@ export async function createRegistration(req, res, next) {
         additionalLicenses: data.additionalLicenses,
         licenseQuantity: data.licenseQuantity,
       },
-      { coupon }
+      { coupon, promoCode: data.promoCode }
     );
 
     const passwordHash = await bcrypt.hash(data.password, 10);
@@ -610,6 +648,14 @@ export async function createRegistration(req, res, next) {
           gstRate: pricing.gstRate,
           gstAmount: pricing.gstAmount,
           totalAmount: pricing.totalAmount,
+          paidDurationMonths: pricing.paidDurationMonths || 12,
+          freeDurationMonths: pricing.freeDurationMonths || 0,
+          totalDurationMonths: pricing.totalDurationMonths || 12,
+          subscriptionStartsAt: pricing.startsAt || new Date(),
+          subscriptionEndsAt: pricing.endsAt,
+          promotionId: pricing.promotion?.id || null,
+          promoCode: pricing.promoCode || data.promoCode || null,
+          promotionName: pricing.promotionName || null,
           acceptedTermsAt: new Date(),
         },
       });

@@ -1,6 +1,7 @@
 import { computePricing } from '../lib/pricing.js';
 import { getRegistrationConfig } from './registrationConfig.service.js';
 import { env } from '../config/env.js';
+import { findEligiblePromotion, calculateSubscriptionExtension } from './promotion.service.js';
 
 /**
  * Calculates billable stakeholder accounts, additional seats, and transparent breakdown.
@@ -137,6 +138,28 @@ export async function computeRegistrationPricing(params = {}, options = {}) {
     gstRate: effectiveGstRate,
   });
 
+  // Resolve promotional extension benefits (Buy X Get Y Free)
+  const startsAt = options.startsAt ? new Date(options.startsAt) : new Date();
+  let promo = null;
+  try {
+    promo = await findEligiblePromotion({
+      packageId: options.packageId || null,
+      termMonths: options.termMonths || 12,
+      seatCount: totalLicenses,
+      context: 'NEW_REGISTRATIONS',
+      coupon: options.coupon || null,
+      code: options.promoCode || null,
+    });
+  } catch (err) {
+    console.warn('[PRICING] Failed to resolve promotion:', err.message);
+  }
+
+  const ext = calculateSubscriptionExtension({
+    startsAt,
+    termMonths: options.termMonths || 12,
+    promotion: promo,
+  });
+
   return {
     ...breakdown,
     unitPrice: pricing.unitPrice,
@@ -148,5 +171,17 @@ export async function computeRegistrationPricing(params = {}, options = {}) {
     totalAmount: pricing.total,
     total: pricing.total,
     currency,
+
+    // Subscription Duration Visibility & Snapshot
+    paidDurationMonths: ext.paidDurationMonths,
+    freeDurationMonths: ext.freeDurationMonths,
+    totalDurationMonths: ext.totalDurationMonths,
+    startsAt: ext.startsAt,
+    paidEndsAt: ext.paidEndsAt,
+    endsAt: ext.endsAt,
+    expectedExpiryDate: ext.endsAt,
+    promotion: ext.promotion,
+    promotionName: ext.promotion?.name || null,
+    promoCode: ext.promotion?.code || null,
   };
 }

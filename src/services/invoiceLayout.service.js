@@ -167,6 +167,8 @@ export function buildTemplateHtml(rawSettings) {
     out.push('<span class="muted term">{{termStart}}'
       + '{{#isPerpetual}} onwards (perpetual){{/isPerpetual}}'
       + '{{^isPerpetual}} &ndash; {{termEnd}}{{/isPerpetual}}</span>');
+    out.push('{{#hasFreeMonths}}<span class="muted term" style="display:block;font-size:11px;color:#059669;margin-top:2px;">Duration: {{paidDurationText}} Paid + {{freeDurationText}} Free = {{totalDurationText}} Total Validity</span>{{/hasFreeMonths}}');
+    out.push('{{^hasFreeMonths}}<span class="muted term" style="display:block;font-size:11px;margin-top:2px;">Duration: {{totalDurationText}} Validity</span>{{/hasFreeMonths}}');
   }
   out.push('</td><td class="right">{{quantity}}</td>'
     + '<td class="right">{{unitPrice}}</td>'
