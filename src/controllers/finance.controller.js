@@ -69,7 +69,12 @@ async function lookupCoupon(couponCode) {
   const cleanCode = String(couponCode).trim();
   if (!cleanCode) return { coupon: null, error: null };
   const coupon = await prisma.coupon.findFirst({
-    where: { code: { equals: cleanCode, mode: 'insensitive' } },
+    where: {
+      OR: [
+        { code: { equals: cleanCode, mode: 'insensitive' } },
+        { offerReference: { equals: cleanCode, mode: 'insensitive' } },
+      ],
+    },
     include: {
       salesRep: {
         select: { id: true, name: true, email: true, designation: true },

@@ -15,6 +15,17 @@ import {
   resetDashboardConfig,
   getAuditLogs,
 } from '../controllers/roleHierarchy.controller.js';
+import {
+  getPermissionsCatalog,
+  listUsersForAccessControl,
+  getUserAccessDetails,
+  updateUserAccess,
+  resetUserAccess,
+  listProfiles,
+  saveProfile,
+  removeProfile,
+  getUserAudit,
+} from '../controllers/userPermission.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
 import { authorize } from '../middleware/rbac.js';
@@ -146,6 +157,90 @@ router.get(
   requireTenant,
   authorize('SUPER_ADMIN', 'ADMIN', 'HR'),
   getAuditLogs
+);
+
+// ============================================================================
+// ENTERPRISE USER-LEVEL PERMISSION & ACCESS CONTROL ROUTES
+// ============================================================================
+
+// Read catalog of permissions across all 8 modules and role ceiling definitions
+router.get(
+  '/hierarchy/permissions-catalog',
+  requireAuth,
+  requireTenant,
+  getPermissionsCatalog
+);
+
+// Search and filter users for the User-Level Access Control table
+router.get(
+  '/hierarchy/user-permissions',
+  requireAuth,
+  requireTenant,
+  authorize('SUPER_ADMIN', 'ADMIN', 'CMD', 'HR', 'MANAGER'),
+  listUsersForAccessControl
+);
+
+// Read detailed access configuration and effective permissions for a user
+router.get(
+  '/hierarchy/user-permissions/:userId',
+  requireAuth,
+  requireTenant,
+  authorize('SUPER_ADMIN', 'ADMIN', 'CMD', 'HR', 'MANAGER'),
+  getUserAccessDetails
+);
+
+// Update user permission overrides, access profile, and data scope
+router.post(
+  '/hierarchy/user-permissions/:userId',
+  requireAuth,
+  requireTenant,
+  authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'MANAGER'),
+  updateUserAccess
+);
+
+// Reset user permissions to role defaults
+router.post(
+  '/hierarchy/user-permissions/:userId/reset',
+  requireAuth,
+  requireTenant,
+  authorize('SUPER_ADMIN', 'ADMIN', 'HR'),
+  resetUserAccess
+);
+
+// List access profile templates
+router.get(
+  '/hierarchy/access-profiles',
+  requireAuth,
+  requireTenant,
+  authorize('SUPER_ADMIN', 'ADMIN', 'CMD', 'HR', 'MANAGER'),
+  listProfiles
+);
+
+// Create or update an access profile template
+router.post(
+  '/hierarchy/access-profiles',
+  requireAuth,
+  requireTenant,
+  authorize('SUPER_ADMIN', 'ADMIN', 'HR'),
+  saveProfile
+);
+
+// Delete an access profile template
+router.delete(
+  '/hierarchy/access-profiles/:profileId',
+  requireAuth,
+  requireTenant,
+  authorize('SUPER_ADMIN', 'ADMIN', 'HR'),
+  removeProfile
+);
+
+// Read permission audit history
+router.get(
+  '/hierarchy/user-permissions/:userId/audit',
+  requireAuth,
+  requireTenant,
+  authorize('SUPER_ADMIN', 'ADMIN', 'HR'),
+  getUserAudit
 );
 
 export default router;

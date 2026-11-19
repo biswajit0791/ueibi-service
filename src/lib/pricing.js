@@ -31,6 +31,7 @@ export function computePricing({ quantity, unitPrice, coupon, gstRate }) {
 export function couponValidationError(coupon) {
   if (!coupon) return 'Coupon not found';
   if (!coupon.active) return 'Coupon is inactive';
+  if (coupon.status === 'USED') return 'Coupon has already been used';
   if (coupon.expiresAt && coupon.expiresAt.getTime() < Date.now()) return 'Coupon has expired';
   if (coupon.usageLimit != null && coupon.timesUsed >= coupon.usageLimit) {
     return 'Coupon usage limit reached';

@@ -1,8 +1,10 @@
+import bcrypt from 'bcryptjs';
 import { prisma } from '../lib/prisma.js';
 import { generateOtp, hashOtp, verifyOtpHash } from '../lib/otp.js';
 import { sendMail } from '../lib/mailer.js';
-import { renderLogin2FAEmail } from '../lib/emailTemplates.js';
+import { renderLogin2FAEmail, render2FASetupEmail } from '../lib/emailTemplates.js';
 import { getRegistrationConfig } from './registrationConfig.service.js';
+import { recordPlatformAction, PLATFORM_ACTIONS } from './platformAudit.service.js';
 import { loadCapabilities } from '../lib/capabilities.js';
 import { signToken } from '../lib/jwt.js';
 import { ACCOUNT_EXITED } from '../lib/accountAccess.js';
@@ -26,6 +28,9 @@ export function formatAuthUser(user, capabilities = []) {
     role: user.role,
     capabilities,
     status: user.status,
+    twoFactorEnabled: Boolean(user.twoFactorEnabled),
+    twoFactorEnabledAt: user.twoFactorEnabledAt || null,
+    twoFactorDisabledAt: user.twoFactorDisabledAt || null,
     mustChangePassword: user.mustChangePassword,
     tenantId: user.tenantId,
     companyName: user.tenant?.companyName || '',
@@ -71,27 +76,31 @@ export function formatAuthUser(user, capabilities = []) {
 }
 
 /**
- * Checks whether 2FA is enforced for a given user account based on Platform Owner settings.
+ * Checks whether 2FA is required for a given user account based on:
+ * 1. Global Platform Owner setting: "Allow Users to Enable Two-Factor Authentication"
+ * 2. Individual user's opt-in setting: twoFactorEnabled
+ *
+ * If global setting is DISABLED, 2FA challenges must NOT block login.
+ * If global setting is ENABLED, OTP is required ONLY for users who explicitly opted in.
  */
 export async function is2FAEnforcedForUser(user) {
-  // Temporary exception: bypass email OTP verification exclusively for PLATFORM_OWNER
-  const userRole = (user?.role || '').toUpperCase();
-  if (userRole === 'PLATFORM_OWNER') {
+  // 1. If global setting is disabled, no user is challenged
+  const isGlobalAllowed = await getRegistrationConfig('LOGIN_2FA_ENABLED', true);
+  if (!isGlobalAllowed) {
     return false;
   }
 
-  const isEnabled = await getRegistrationConfig('LOGIN_2FA_ENABLED', true);
-  if (!isEnabled) return false;
-
-  const rolesConfig = await getRegistrationConfig('LOGIN_2FA_ROLES', 'ALL');
-  if (rolesConfig && typeof rolesConfig === 'string' && rolesConfig.trim() !== 'ALL') {
-    const roles = rolesConfig.split(',').map((r) => r.trim().toUpperCase());
-    if (!roles.includes(userRole)) {
-      return false;
-    }
+  // 2. Check the user's individual twoFactorEnabled setting
+  let twoFactorEnabled = user?.twoFactorEnabled;
+  if (twoFactorEnabled === undefined && user?.id) {
+    const fresh = await prisma.tenantUser.findUnique({
+      where: { id: user.id },
+      select: { twoFactorEnabled: true },
+    });
+    twoFactorEnabled = fresh?.twoFactorEnabled;
   }
 
-  return true;
+  return Boolean(twoFactorEnabled);
 }
 
 /**
@@ -469,5 +478,306 @@ export async function resendLoginChallenge({ challengeId, req }) {
     ...(process.env.NODE_ENV !== 'production' || process.env.EXPOSE_OTP === 'true'
       ? { devOtp: newOtp }
       : {}),
+  };
+}
+
+/**
+ * Returns the current 2FA status for an authenticated user,
+ * along with the global platform configuration status.
+ */
+export async function getUser2FAStatus(userId) {
+  const isGlobalAllowed = await getRegistrationConfig('LOGIN_2FA_ENABLED', true);
+  const user = await prisma.tenantUser.findUnique({
+    where: { id: userId },
+    select: {
+      id: true,
+      email: true,
+      twoFactorEnabled: true,
+      twoFactorEnabledAt: true,
+      twoFactorDisabledAt: true,
+    },
+  });
+  if (!user) {
+    const err = new Error('User not found');
+    err.status = 404;
+    throw err;
+  }
+
+  return {
+    global2FAAllowed: isGlobalAllowed,
+    twoFactorEnabled: Boolean(user.twoFactorEnabled),
+    twoFactorEnabledAt: user.twoFactorEnabledAt,
+    twoFactorDisabledAt: user.twoFactorDisabledAt,
+    registeredEmail: user.email,
+    emailVerified: true,
+  };
+}
+
+/**
+ * Initiates the user-level 2FA enablement workflow.
+ * Sends an OTP to the user's verified registered email address.
+ */
+export async function requestEnable2FA({ userId, req }) {
+  const isGlobalAllowed = await getRegistrationConfig('LOGIN_2FA_ENABLED', true);
+  if (!isGlobalAllowed) {
+    const err = new Error('Two-Factor Authentication is currently not available platform-wide.');
+    err.status = 403;
+    throw err;
+  }
+
+  const user = await prisma.tenantUser.findUnique({
+    where: { id: userId },
+    select: { id: true, name: true, email: true, tenantId: true, twoFactorEnabled: true },
+  });
+  if (!user) {
+    const err = new Error('User not found');
+    err.status = 404;
+    throw err;
+  }
+
+  if (user.twoFactorEnabled) {
+    const err = new Error('Two-Factor Authentication is already enabled for your account.');
+    err.status = 400;
+    throw err;
+  }
+
+  const [otpTtlMinutes, otpLength, otpMaxAttempts, otpCooldownSecs] = await Promise.all([
+    getRegistrationConfig('OTP_TTL_MINUTES', 10),
+    getRegistrationConfig('OTP_LENGTH', 6),
+    getRegistrationConfig('OTP_MAX_ATTEMPTS', 5),
+    getRegistrationConfig('OTP_RESEND_COOLDOWN_SECONDS', 60),
+  ]);
+
+  // Invalidate any prior unconsumed ENABLE_2FA challenges for this user
+  await prisma.loginChallenge.updateMany({
+    where: {
+      userId: user.id,
+      purpose: 'ENABLE_2FA',
+      consumedAt: null,
+    },
+    data: {
+      consumedAt: new Date(),
+    },
+  });
+
+  const otp = generateOtp(otpLength);
+  const otpExpiresAt = new Date(Date.now() + otpTtlMinutes * 60 * 1000);
+  const ipAddress = req?.ip || req?.headers?.['x-forwarded-for'] || null;
+  const userAgent = req?.headers?.['user-agent'] || null;
+
+  const challenge = await prisma.loginChallenge.create({
+    data: {
+      userId: user.id,
+      tenantId: user.tenantId,
+      email: user.email.toLowerCase(),
+      otpHash: hashOtp(otp),
+      otpExpiresAt,
+      attempts: 0,
+      maxAttempts: otpMaxAttempts,
+      resendAttempts: 0,
+      maxResendAttempts: 3,
+      isLocked: false,
+      purpose: 'ENABLE_2FA',
+      ipAddress: typeof ipAddress === 'string' ? ipAddress.slice(0, 100) : null,
+      userAgent: typeof userAgent === 'string' ? userAgent.slice(0, 255) : null,
+    },
+  });
+
+  console.log(`\n============================================================`);
+  console.log(`🛡️  [ENABLE 2FA] Challenge Created`);
+  console.log(`👤 User        : ${user.name} (${user.email})`);
+  console.log(`🔑 Challenge ID: ${challenge.id}`);
+  console.log(`🔢 OTP Code    : >>> ${otp} <<< (${otpLength} digits)`);
+  console.log(`⏱️  Expires     : In ${otpTtlMinutes} minutes`);
+  console.log(`============================================================\n`);
+
+  try {
+    await sendMail({
+      to: user.email,
+      subject: 'Confirm Two-Factor Authentication Setup - Karyam',
+      text: `Your 2FA setup verification code is ${otp}. It expires in ${otpTtlMinutes} minutes.`,
+      html: render2FASetupEmail({
+        code: otp,
+        expiresMinutes: otpTtlMinutes,
+        userName: user.name,
+      }),
+      event: 'ENABLE_2FA_OTP',
+    });
+  } catch (mailErr) {
+    console.error(`[AUTH/2FA] Email delivery failed for ${user.email}:`, mailErr.message);
+  }
+
+  return {
+    challengeId: challenge.id,
+    maskedEmail: maskEmail(user.email),
+    otpLength,
+    cooldownSeconds: otpCooldownSecs,
+    expiresInSeconds: otpTtlMinutes * 60,
+    ...(process.env.NODE_ENV !== 'production' || process.env.EXPOSE_OTP === 'true'
+      ? { devOtp: otp }
+      : {}),
+  };
+}
+
+/**
+ * Validates OTP and enables 2FA for the user.
+ */
+export async function verifyAndEnable2FA({ userId, challengeId, otp, req }) {
+  if (!challengeId || typeof challengeId !== 'string') {
+    const err = new Error('Challenge ID is required.');
+    err.status = 400;
+    throw err;
+  }
+  if (!otp || typeof otp !== 'string') {
+    const err = new Error('Verification OTP code is required.');
+    err.status = 400;
+    throw err;
+  }
+
+  const isGlobalAllowed = await getRegistrationConfig('LOGIN_2FA_ENABLED', true);
+  if (!isGlobalAllowed) {
+    const err = new Error('Two-Factor Authentication is currently not available platform-wide.');
+    err.status = 403;
+    throw err;
+  }
+
+  const cleanOtp = otp.trim();
+  const challenge = await prisma.loginChallenge.findUnique({
+    where: { id: challengeId },
+  });
+
+  if (!challenge || challenge.purpose !== 'ENABLE_2FA' || challenge.userId !== userId) {
+    const err = new Error('Invalid or expired verification session.');
+    err.status = 400;
+    throw err;
+  }
+
+  if (challenge.consumedAt) {
+    const err = new Error('This verification code has already been used. Please request a new code.');
+    err.status = 400;
+    throw err;
+  }
+
+  if (challenge.isLocked || challenge.attempts >= challenge.maxAttempts) {
+    const err = new Error('Maximum verification attempts reached. Please request a new setup code.');
+    err.status = 400;
+    throw err;
+  }
+
+  if (challenge.otpExpiresAt.getTime() < Date.now()) {
+    const err = new Error('Your verification code has expired. Please request a new code.');
+    err.status = 400;
+    throw err;
+  }
+
+  const isValidOtp = verifyOtpHash(cleanOtp, challenge.otpHash);
+  if (!isValidOtp) {
+    const newAttempts = challenge.attempts + 1;
+    const remainingAttempts = Math.max(0, challenge.maxAttempts - newAttempts);
+    const willLock = newAttempts >= challenge.maxAttempts;
+
+    await prisma.loginChallenge.update({
+      where: { id: challengeId },
+      data: {
+        attempts: newAttempts,
+        isLocked: willLock,
+      },
+    });
+
+    const err = new Error(
+      willLock
+        ? 'Maximum verification attempts exceeded. Please restart the 2FA setup.'
+        : `Invalid verification code. ${remainingAttempts} attempt(s) remaining.`
+    );
+    err.status = 400;
+    err.remainingAttempts = remainingAttempts;
+    throw err;
+  }
+
+  // Consume challenge
+  await prisma.loginChallenge.update({
+    where: { id: challengeId },
+    data: { consumedAt: new Date() },
+  });
+
+  // Enable 2FA on the user account
+  const enabledAt = new Date();
+  await prisma.tenantUser.update({
+    where: { id: userId },
+    data: {
+      twoFactorEnabled: true,
+      twoFactorEnabledAt: enabledAt,
+    },
+  });
+
+  // Record audit trail
+  if (req?.user) {
+    await recordPlatformAction({
+      req,
+      action: PLATFORM_ACTIONS.USER_2FA_ENABLED,
+      targetType: 'USER',
+      targetId: userId,
+      afterValue: { twoFactorEnabled: true, twoFactorEnabledAt: enabledAt },
+    }).catch((auditErr) => console.warn('[2FA] Audit failed:', auditErr.message));
+  }
+
+  return {
+    success: true,
+    twoFactorEnabled: true,
+    twoFactorEnabledAt: enabledAt,
+  };
+}
+
+/**
+ * Disables 2FA on the user's account after confirming identity via password.
+ */
+export async function disable2FA({ userId, password, req }) {
+  if (!password || typeof password !== 'string') {
+    const err = new Error('Password verification is required to disable Two-Factor Authentication.');
+    err.status = 400;
+    throw err;
+  }
+
+  const user = await prisma.tenantUser.findUnique({
+    where: { id: userId },
+    select: { id: true, email: true, passwordHash: true, twoFactorEnabled: true },
+  });
+  if (!user) {
+    const err = new Error('User not found.');
+    err.status = 404;
+    throw err;
+  }
+
+  const isPasswordCorrect = await bcrypt.compare(password, user.passwordHash);
+  if (!isPasswordCorrect) {
+    const err = new Error('Incorrect password. Identity verification failed.');
+    err.status = 401;
+    throw err;
+  }
+
+  const disabledAt = new Date();
+  await prisma.tenantUser.update({
+    where: { id: userId },
+    data: {
+      twoFactorEnabled: false,
+      twoFactorDisabledAt: disabledAt,
+    },
+  });
+
+  // Record audit trail
+  if (req?.user) {
+    await recordPlatformAction({
+      req,
+      action: PLATFORM_ACTIONS.USER_2FA_DISABLED,
+      targetType: 'USER',
+      targetId: userId,
+      afterValue: { twoFactorEnabled: false, twoFactorDisabledAt: disabledAt },
+    }).catch((auditErr) => console.warn('[2FA] Audit failed:', auditErr.message));
+  }
+
+  return {
+    success: true,
+    twoFactorEnabled: false,
+    twoFactorDisabledAt: disabledAt,
   };
 }

@@ -41,6 +41,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
 import { authorize, authorizeRoleOrCapability } from '../middleware/rbac.js';
 import { checkModuleVisibility } from '../middleware/moduleVisibility.js';
+import { requirePermission } from '../middleware/permission.middleware.js';
 
 const router = Router();
 
@@ -73,8 +74,8 @@ router.get('/employees/:id/handover-status', requireAuth, requireTenant, getEmpl
 router.post('/employees/:id/verify', requireAuth, requireTenant, checkModuleVisibility('employee_records'), authorize('SUPER_ADMIN', 'ADMIN', 'HR'), verifyEmployee);
 router.patch('/employees/:id/verify', requireAuth, requireTenant, checkModuleVisibility('employee_records'), authorize('SUPER_ADMIN', 'ADMIN', 'HR'), verifyEmployee);
 
-router.patch('/employees/:id', requireAuth, requireTenant, checkModuleVisibility('employee_records'), authorize('SUPER_ADMIN', 'ADMIN', 'HR'), updateEmployee);
-router.delete('/employees/:id', requireAuth, requireTenant, checkModuleVisibility('employee_records'), authorize('SUPER_ADMIN', 'ADMIN', 'HR'), deleteEmployee);
+router.patch('/employees/:id', requireAuth, requireTenant, checkModuleVisibility('employee_records'), authorize('SUPER_ADMIN', 'ADMIN', 'HR'), requirePermission('employee.records.edit'), updateEmployee);
+router.delete('/employees/:id', requireAuth, requireTenant, checkModuleVisibility('employee_records'), authorize('SUPER_ADMIN', 'ADMIN', 'HR'), requirePermission('employee.records.delete'), deleteEmployee);
 
 // Invitation resend & Exit/Reactivation workflows
 router.post('/employees/:id/resend-invite', requireAuth, requireTenant, checkModuleVisibility('employee_records'), authorize('SUPER_ADMIN', 'ADMIN', 'HR', 'MANAGER'), resendInvite);

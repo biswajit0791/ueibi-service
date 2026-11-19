@@ -27,7 +27,14 @@ async function commitCouponUsage(tx, coupon, registrationId = null, tenantId = n
   }
   const updated = await tx.coupon.updateMany({
     where,
-    data: { timesUsed: { increment: 1 } },
+    data: {
+      timesUsed: { increment: 1 },
+      status: 'USED',
+      usedAt: new Date(),
+      usedCompanyId: tenantId || registrationId || null,
+      paymentReference: invoiceId || null,
+      activationReference: registrationId || tenantId || null,
+    },
   });
 
   if (updated.count === 0) {
