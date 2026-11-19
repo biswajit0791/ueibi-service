@@ -1852,12 +1852,44 @@ export async function getHierarchyVisibility(tenantId, caller = null) {
   const callerRole = String(caller?.role || 'EMPLOYEE').toUpperCase();
   const isElevatedAdmin = ['SUPER_ADMIN', 'ADMIN', 'CMD'].includes(callerRole);
 
+  let mySidebar = { ...(effectiveSidebar[callerRole] || DEFAULT_SIDEBAR_VISIBILITY[callerRole] || DEFAULT_SIDEBAR_VISIBILITY.EMPLOYEE) };
+  let myVis = { ...(effectiveConfig[callerRole] || DEFAULT_HIERARCHY_VISIBILITY[callerRole] || DEFAULT_HIERARCHY_VISIBILITY.EMPLOYEE) };
+
+  // Overlay individual user-level permissions and access profile overrides onto caller visibility
+  const callerUserId = caller?.userId || caller?.id;
+  if (callerUserId && callerRole !== 'SUPER_ADMIN') {
+    try {
+      const { getEffectiveUserPermissions } = await import('./permission.service.js');
+      const userPerms = await getEffectiveUserPermissions(tenantId, callerUserId);
+      const perms = userPerms.effectivePermissions || {};
+
+      if (perms['employee.records.view']?.allowed === false) mySidebar.employee_records = false;
+      if (perms['task.board.view']?.allowed === false) mySidebar.tasks = false;
+      if (perms['leave.records.view']?.allowed === false) mySidebar.leaves = false;
+      if (perms['goals.records.view']?.allowed === false) mySidebar.goals = false;
+      if (perms['appraisal.cycles.view']?.allowed === false) mySidebar.reviews = false;
+      if (perms['feedback360.view']?.allowed === false) mySidebar.feedback = false;
+      if (perms['reports.analytics.view']?.allowed === false) mySidebar.reports = false;
+      if (perms['role.hierarchy.view']?.allowed === false) mySidebar.role_hierarchy = false;
+      if (perms['department.records.view']?.allowed === false) mySidebar.departments = false;
+      if (perms['company.profile.edit']?.allowed === false && perms['settings.general.view']?.allowed === false) {
+        mySidebar.company_settings = false;
+      }
+
+      // Also overlay action permissions
+      if (perms['employee.records.edit']?.allowed === false) myVis.canEditEmployee = false;
+      if (perms['leave.request.approve']?.allowed === false) myVis.canApproveLeave = false;
+    } catch (e) {
+      // Fallback cleanly to role defaults
+    }
+  }
+
   return {
     visibility: effectiveConfig,
     sidebarVisibility: effectiveSidebar,
     sidebarCatalog: SIDEBAR_MENU_CATALOG,
-    myVisibility: effectiveConfig[callerRole] || DEFAULT_HIERARCHY_VISIBILITY[callerRole] || DEFAULT_HIERARCHY_VISIBILITY.EMPLOYEE,
-    mySidebarVisibility: effectiveSidebar[callerRole] || DEFAULT_SIDEBAR_VISIBILITY[callerRole] || DEFAULT_SIDEBAR_VISIBILITY.EMPLOYEE,
+    myVisibility: myVis,
+    mySidebarVisibility: mySidebar,
     canConfigure: isElevatedAdmin,
   };
 }
@@ -1985,10 +2017,36 @@ export async function getCallerSidebarVisibility(tenantId, user) {
   });
   const stored = settings?.sidebarVisibility?.[role];
   const defaults = DEFAULT_SIDEBAR_VISIBILITY[role] || DEFAULT_SIDEBAR_VISIBILITY.EMPLOYEE;
-  return {
+  const result = {
     ...defaults,
     ...(stored || {}),
   };
+
+  const userId = user.userId || user.id;
+  if (userId) {
+    try {
+      const { getEffectiveUserPermissions } = await import('./permission.service.js');
+      const userPerms = await getEffectiveUserPermissions(tenantId, userId);
+      const perms = userPerms.effectivePermissions || {};
+
+      if (perms['employee.records.view']?.allowed === false) result.employee_records = false;
+      if (perms['task.board.view']?.allowed === false) result.tasks = false;
+      if (perms['leave.records.view']?.allowed === false) result.leaves = false;
+      if (perms['goals.records.view']?.allowed === false) result.goals = false;
+      if (perms['appraisal.cycles.view']?.allowed === false) result.reviews = false;
+      if (perms['feedback360.view']?.allowed === false) result.feedback = false;
+      if (perms['reports.analytics.view']?.allowed === false) result.reports = false;
+      if (perms['role.hierarchy.view']?.allowed === false) result.role_hierarchy = false;
+      if (perms['department.records.view']?.allowed === false) result.departments = false;
+      if (perms['company.profile.edit']?.allowed === false && perms['settings.general.view']?.allowed === false) {
+        result.company_settings = false;
+      }
+    } catch (e) {
+      // Fallback
+    }
+  }
+
+  return result;
 }
 
 /**

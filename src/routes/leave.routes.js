@@ -36,6 +36,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/tenantScope.js';
 import { authorize } from '../middleware/rbac.js';
 import { checkModuleVisibility } from '../middleware/moduleVisibility.js';
+import { requirePermission } from '../middleware/permission.middleware.js';
 
 const router = Router();
 
@@ -76,18 +77,18 @@ router.get('/leaves', requireAuth, requireTenant, listLeaveRequests);
 router.post('/leaves/:id/cancel', requireAuth, requireTenant, cancelLeaveRequest);
 
 // ── 5. Two-Level & Admin Approvals ──────────────────────────────────────────
-router.patch('/leaves/:id/admin/approve', requireAuth, requireTenant, authorize(...hrRoles), adminApproveLeave);
-router.patch('/leaves/:id/admin/reject', requireAuth, requireTenant, authorize(...hrRoles), adminRejectLeave);
-router.patch('/leaves/:id/admin/revoke', requireAuth, requireTenant, authorize(...hrRoles), adminRevokeLeave);
-router.patch('/leaves/:id/manager/approve', requireAuth, requireTenant, authorize(...managerRoles), managerApproveLeave);
-router.patch('/leaves/:id/manager/reject', requireAuth, requireTenant, authorize(...managerRoles), managerRejectLeave);
-router.patch('/leaves/:id/manager/revoke', requireAuth, requireTenant, authorize(...managerRoles), managerRevokeLeave);
-router.patch('/leaves/:id/hr/approve', requireAuth, requireTenant, authorize(...hrRoles), hrApproveLeave);
-router.patch('/leaves/:id/hr/reject', requireAuth, requireTenant, authorize(...hrRoles), hrRejectLeave);
-router.patch('/leaves/:id/hr/revoke', requireAuth, requireTenant, authorize(...hrRoles), hrRevokeLeave);
-router.patch('/leaves/:id/approve', requireAuth, requireTenant, authorize(...managerRoles), approveLeaveRequest);
-router.patch('/leaves/:id/reject', requireAuth, requireTenant, authorize(...managerRoles), rejectLeaveRequest);
-router.patch('/leaves/:id/revoke', requireAuth, requireTenant, authorize(...managerRoles), revokeLeaveRequest);
+router.patch('/leaves/:id/admin/approve', requireAuth, requireTenant, authorize(...hrRoles), requirePermission('leave.request.approve'), adminApproveLeave);
+router.patch('/leaves/:id/admin/reject', requireAuth, requireTenant, authorize(...hrRoles), requirePermission('leave.request.reject'), adminRejectLeave);
+router.patch('/leaves/:id/admin/revoke', requireAuth, requireTenant, authorize(...hrRoles), requirePermission('leave.request.approve'), adminRevokeLeave);
+router.patch('/leaves/:id/manager/approve', requireAuth, requireTenant, authorize(...managerRoles), requirePermission('leave.request.approve'), managerApproveLeave);
+router.patch('/leaves/:id/manager/reject', requireAuth, requireTenant, authorize(...managerRoles), requirePermission('leave.request.reject'), managerRejectLeave);
+router.patch('/leaves/:id/manager/revoke', requireAuth, requireTenant, authorize(...managerRoles), requirePermission('leave.request.approve'), managerRevokeLeave);
+router.patch('/leaves/:id/hr/approve', requireAuth, requireTenant, authorize(...hrRoles), requirePermission('leave.request.approve'), hrApproveLeave);
+router.patch('/leaves/:id/hr/reject', requireAuth, requireTenant, authorize(...hrRoles), requirePermission('leave.request.reject'), hrRejectLeave);
+router.patch('/leaves/:id/hr/revoke', requireAuth, requireTenant, authorize(...hrRoles), requirePermission('leave.request.approve'), hrRevokeLeave);
+router.patch('/leaves/:id/approve', requireAuth, requireTenant, authorize(...managerRoles), requirePermission('leave.request.approve'), approveLeaveRequest);
+router.patch('/leaves/:id/reject', requireAuth, requireTenant, authorize(...managerRoles), requirePermission('leave.request.reject'), rejectLeaveRequest);
+router.patch('/leaves/:id/revoke', requireAuth, requireTenant, authorize(...managerRoles), requirePermission('leave.request.approve'), revokeLeaveRequest);
 
 // ── 6. Work From Home Policies ──────────────────────────────────────────────
 router.get('/wfh/policy', requireAuth, requireTenant, getWfhPolicy);

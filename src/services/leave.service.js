@@ -990,14 +990,41 @@ export class LeaveService {
     }
 
     const isDirectManager = raw.employee.managerId === managerUser.id;
-    const isElevated = ['SUPER_ADMIN', 'HR', 'ADMIN', 'LEADERSHIP', 'OWNER', 'CMD', 'DIRECTOR'].includes(String(managerUser.role || '').toUpperCase());
-    const isFallbackManager = !raw.employee.managerId && String(managerUser.role || '').toUpperCase() === 'MANAGER';
-
-    if (!isDirectManager && !isElevated && !isFallbackManager) {
-      throw { status: 403, message: 'Access forbidden: you are not the assigned manager for this employee' };
+    let isAncestorManager = false;
+    if (!isDirectManager && String(managerUser.role || '').toUpperCase() === 'MANAGER') {
+      try {
+        const { getReportingDownlineUserIds } = await import('./permission.service.js');
+        const downline = await getReportingDownlineUserIds(tenantId, managerUser.id);
+        if (downline.includes(raw.employee.id)) {
+          isAncestorManager = true;
+        }
+      } catch (e) {
+        // Fallback
+      }
     }
 
-    if (isElevated && (raw.hrStatus === 'Pending' || raw.status === 'APPROVED') && (raw.managerStatus === 'Approved' || !isDirectManager)) {
+    let isElevated = ['SUPER_ADMIN', 'HR', 'ADMIN', 'LEADERSHIP', 'OWNER', 'CMD', 'DIRECTOR'].includes(String(managerUser.role || '').toUpperCase());
+    
+    // Validate individual user permission if user is an HR role (e.g. Junior HR with explicit DENY)
+    if (String(managerUser.role || '').toUpperCase() === 'HR') {
+      try {
+        const { getEffectiveUserPermissions } = await import('./permission.service.js');
+        const perms = await getEffectiveUserPermissions(tenantId, managerUser.id);
+        if (perms.effectivePermissions?.['leave.request.approve']?.allowed === false) {
+          isElevated = false;
+        }
+      } catch (e) {
+        // Fallback
+      }
+    }
+
+    const isFallbackManager = !raw.employee.managerId && String(managerUser.role || '').toUpperCase() === 'MANAGER';
+
+    if (!isDirectManager && !isAncestorManager && !isElevated && !isFallbackManager) {
+      throw { status: 403, message: 'Access forbidden: you are not authorized to approve leave for this employee' };
+    }
+
+    if (isElevated && (raw.hrStatus === 'Pending' || raw.status === 'APPROVED') && (raw.managerStatus === 'Approved' || (!isDirectManager && !isAncestorManager))) {
       return this.hrAction({ tenantId, requestId, hrUser: managerUser, action, comment, req });
     }
 
@@ -1631,9 +1658,17 @@ export class LeaveService {
     if (scope === 'my') {
       where.employeeId = user.id;
     } else if (scope === 'team') {
-      // Direct reports for Manager or employees without an assigned manager
+      // Direct reports and full recursive downline for Manager
+      let downlineIds = [];
+      try {
+        const { getReportingDownlineUserIds } = await import('./permission.service.js');
+        downlineIds = await getReportingDownlineUserIds(tenantId, user.id);
+      } catch (e) {
+        // Fallback
+      }
       where.OR = [
         { employee: { tenantId, managerId: user.id } },
+        ...(downlineIds.length > 0 ? [{ employeeId: { in: downlineIds } }] : []),
         { employee: { tenantId, managerId: null, role: 'EMPLOYEE' } },
       ];
     } else if (scope === 'company') {

@@ -1,0 +1,89 @@
+{
+  "targetDomain": "shraddhaauromira.com",
+  "timestamp": "2026-11-18T13:23:37.174Z",
+  "tenant": null,
+  "registration": {
+    "id": "cmwm03lm9000fuuc87x3iparj",
+    "companyName": "sradhauromira",
+    "companyType": "Private Limited",
+    "organizationStructureId": "cmwaqlyb10000uudohpmul5v0",
+    "domainName": "shraddhaauromira.com",
+    "tenantCode": "sradhauromira-4856",
+    "fullName": "csbiswal",
+    "designation": "CMD",
+    "email": "chandra@shraddhaauromira.com",
+    "passwordHash": "$2b$10$x5Uq3SrkCt.Nm5gayvduwepOMeh6ihbrgBUvjVsAShg9PyppR41EW",
+    "financeEmail": null,
+    "financeName": null,
+    "financeNotRequired": true,
+    "hrEmail": null,
+    "hrName": null,
+    "hrNotRequired": true,
+    "additionalLicenses": 10,
+    "acceptedTermsAt": "2026-11-18T10:51:08.716Z",
+    "gstin": null,
+    "licenseQuantity": 11,
+    "unitPrice": "6000",
+    "couponId": "cmwlu8d420008uug0x0fxl1bz",
+    "discountAmount": "13200",
+    "subtotalAmount": "66000",
+    "gstRate": "0.18",
+    "gstAmount": "9504",
+    "totalAmount": "62304",
+    "paymentMethod": null,
+    "paymentReference": "order_U1bz124yxGEvis",
+    "chequeNumber": null,
+    "chequeDate": null,
+    "transactionId": null,
+    "financeApprovedAt": null,
+    "razorpayOrderId": "order_U1bz124yxGEvis",
+    "razorpayPaymentId": null,
+    "razorpaySignature": null,
+    "paymentVerifiedAt": null,
+    "activatedAt": null,
+    "paidDurationMonths": 12,
+    "freeDurationMonths": 2,
+    "totalDurationMonths": 14,
+    "subscriptionStartsAt": "2026-11-18T10:51:08.411Z",
+    "subscriptionEndsAt": "2028-01-18T10:51:08.411Z",
+    "promotionId": "cmwlua91t000auug0fcls5ink",
+    "promoCode": "WINTER200",
+    "promotionName": "winter renual offer",
+    "status": "PENDING_FINANCE_REVIEW",
+    "createdAt": "2026-11-18T10:51:08.721Z",
+    "updatedAt": "2026-11-18T10:51:42.096Z"
+  },
+  "users": [],
+  "identifiedReport": [
+    {
+      "table": "tenant_users",
+      "count": 0,
+      "description": "Tenant User accounts"
+    },
+    {
+      "table": "registration_action_tokens",
+      "count": 1,
+      "description": "Registration tokens"
+    },
+    {
+      "table": "registration_verifications",
+      "count": 0,
+      "description": "Registration verifications"
+    },
+    {
+      "table": "notification_logs",
+      "count": 2,
+      "description": "Notification dispatch logs"
+    },
+    {
+      "table": "company_registrations",
+      "count": 1,
+      "description": "Company registration record"
+    },
+    {
+      "table": "email_verifications",
+      "count": 2,
+      "description": "OTP & Email verification challenges"
+    }
+  ]
+}

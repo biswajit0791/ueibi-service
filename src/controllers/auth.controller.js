@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs';
 import { prisma } from '../lib/prisma.js';
 import { signToken } from '../lib/jwt.js';
 import { loadCapabilities } from '../lib/capabilities.js';
+import { getEffectiveUserPermissions } from '../services/permission.service.js';
 import { env } from '../config/env.js';
 import { hashToken } from '../lib/tokens.js';
 import { sendMail } from '../lib/mailer.js';
@@ -16,7 +17,12 @@ import {
   verifyLoginChallenge,
   resendLoginChallenge,
   formatAuthUser,
+  getUser2FAStatus,
+  requestEnable2FA,
+  verifyAndEnable2FA,
+  disable2FA,
 } from '../services/login2fa.service.js';
+import { getRegistrationConfig } from '../services/registrationConfig.service.js';
 
 export async function login(req, res, next) {
   try {
@@ -109,6 +115,13 @@ export async function login(req, res, next) {
 
     const userCapabilities = await loadCapabilities(user.id);
 
+    let effectiveAccess = null;
+    try {
+      effectiveAccess = await getEffectiveUserPermissions(user.tenantId, user.id);
+    } catch (e) {
+      // Fallback
+    }
+
     const token = signToken({
       userId: user.id,
       email: user.email,
@@ -134,6 +147,9 @@ export async function login(req, res, next) {
         name: user.name,
         role: user.role,
         capabilities: userCapabilities,
+        effectivePermissions: effectiveAccess?.effectivePermissions || null,
+        dataScope: effectiveAccess?.dataScope || null,
+        accessProfile: effectiveAccess?.user?.accessProfile || null,
         status: user.status,
         mustChangePassword: user.mustChangePassword,
         tenantId: user.tenantId,
@@ -206,6 +222,14 @@ export async function me(req, res, next) {
     }
 
     const userCapabilities = await loadCapabilities(user.id);
+    const global2FAAllowed = await getRegistrationConfig('LOGIN_2FA_ENABLED', true);
+
+    let effectiveAccess = null;
+    try {
+      effectiveAccess = await getEffectiveUserPermissions(user.tenantId, user.id);
+    } catch (e) {
+      // Fallback
+    }
 
     res.json({
       user: {
@@ -214,8 +238,15 @@ export async function me(req, res, next) {
         name: user.name,
         role: user.role,
         capabilities: userCapabilities,
+        effectivePermissions: effectiveAccess?.effectivePermissions || null,
+        dataScope: effectiveAccess?.dataScope || null,
+        accessProfile: effectiveAccess?.user?.accessProfile || null,
         status: user.status,
         mustChangePassword: user.mustChangePassword,
+        twoFactorEnabled: Boolean(user.twoFactorEnabled),
+        twoFactorEnabledAt: user.twoFactorEnabledAt || null,
+        twoFactorDisabledAt: user.twoFactorDisabledAt || null,
+        global2FAAllowed: Boolean(global2FAAllowed),
         tenantId: user.tenantId,
         companyName: user.tenant.companyName,
         designation: user.designation,
@@ -490,6 +521,63 @@ export async function resendLoginOtp(req, res, next) {
       remainingSeconds: err.remainingSeconds,
       maxResendAttempts: err.maxResendAttempts,
     });
+  }
+}
+
+/**
+ * GET /api/auth/2fa/status
+ * Get the current user's 2FA status and global availability
+ */
+export async function get2FAStatus(req, res, next) {
+  try {
+    const status = await getUser2FAStatus(req.user.id);
+    res.json(status);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /api/auth/2fa/enable/request
+ * Send OTP to user's registered email to begin 2FA activation
+ */
+export async function requestEnable2FAHandler(req, res, next) {
+  try {
+    const result = await requestEnable2FA({ userId: req.user.id, req });
+    res.json(result);
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message });
+  }
+}
+
+/**
+ * POST /api/auth/2fa/enable/verify
+ * Validate OTP and confirm 2FA enablement
+ */
+export async function verifyEnable2FAHandler(req, res, next) {
+  try {
+    const { challengeId, otp } = req.body || {};
+    const result = await verifyAndEnable2FA({ userId: req.user.id, challengeId, otp, req });
+    res.json(result);
+  } catch (err) {
+    res.status(err.status || 400).json({
+      error: err.message,
+      remainingAttempts: err.remainingAttempts,
+    });
+  }
+}
+
+/**
+ * POST /api/auth/2fa/disable
+ * Disable 2FA with password confirmation
+ */
+export async function disable2FAHandler(req, res, next) {
+  try {
+    const { password } = req.body || {};
+    const result = await disable2FA({ userId: req.user.id, password, req });
+    res.json(result);
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message });
   }
 }
 

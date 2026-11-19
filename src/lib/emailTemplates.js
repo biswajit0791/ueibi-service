@@ -152,6 +152,41 @@ export function renderLogin2FAEmail({ code, expiresMinutes = 10, userName = null
 }
 
 /**
+ * Two-Factor Authentication (2FA) Setup Email Template
+ */
+export function render2FASetupEmail({ code, expiresMinutes = 10, userName = null }) {
+  const greeting = userName ? `Hello ${userName},` : 'Hello,';
+  const contentHtml = `
+    <div style="text-align: center; margin-bottom: 24px;">
+      <div style="display: inline-block; width: 52px; height: 52px; background-color: #ede9fe; border-radius: 50%; margin-bottom: 16px; line-height: 52px; text-align: center;">
+        <span style="font-size: 26px; color: #6366f1;">🛡️</span>
+      </div>
+      <h1 style="margin: 0 0 8px 0; font-size: 22px; font-weight: 700; color: #0f172a;">Enable Two-Factor Authentication</h1>
+      <p style="margin: 0; font-size: 15px; color: #475569; line-height: 1.5;">
+        ${greeting} You requested to enable Two-Factor Authentication on your Karyam account. Please use the verification code below to confirm and activate this security feature.
+      </p>
+    </div>
+
+    <div style="background-color: #f8fafc; border: 2px dashed #818cf8; border-radius: 12px; padding: 24px; text-align: center; margin: 24px 0;">
+      <span style="display: block; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: #64748b; margin-bottom: 8px;">2FA Activation Code</span>
+      <span style="font-family: 'SF Mono', Consolas, Monaco, monospace; font-size: 38px; font-weight: 800; letter-spacing: 10px; color: #4f46e5; margin-left: 10px;">${code}</span>
+    </div>
+
+    <div style="background-color: #fffbe0; border-left: 4px solid #eab308; padding: 12px 16px; border-radius: 4px; margin-bottom: 20px;">
+      <p style="margin: 0; font-size: 13px; color: #854d0e; line-height: 1.5;">
+        ⏱️ This code will expire in <strong>${expiresMinutes} minutes</strong>. If you did not initiate this request, simply ignore this email.
+      </p>
+    </div>
+  `;
+
+  return renderEmailWrapper({
+    title: 'Confirm Two-Factor Authentication Setup',
+    preheader: `Your 2FA setup code is ${code}. Valid for ${expiresMinutes} minutes.`,
+    contentHtml,
+  });
+}
+
+/**
  * Level 1 Signup Submitted Email Template
  */
 export function renderLevel1SubmittedEmail({ registration, actionUrl = null, isActionRecipient = false }) {
