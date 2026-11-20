@@ -154,12 +154,21 @@ export async function uploadCompanyLogo(req, res, next) {
 
     const settings = await getCompanySettings(tenantId);
     const existingTheme = settings.theme && typeof settings.theme === 'object' ? settings.theme : {};
-    await prisma.tenantSettings.update({
+    await prisma.tenantSettings.upsert({
       where: { tenantId },
-      data: {
+      update: {
         logoUrl,
         theme: {
           ...existingTheme,
+          logoUrl,
+          updatedBy: { id: req.user.id, name: req.user.name || req.user.email },
+          updatedAt: new Date().toISOString(),
+        },
+      },
+      create: {
+        tenantId,
+        logoUrl,
+        theme: {
           logoUrl,
           updatedBy: { id: req.user.id, name: req.user.name || req.user.email },
           updatedAt: new Date().toISOString(),
@@ -210,11 +219,15 @@ export async function deleteCompanyLogo(req, res, next) {
       updatedTheme = Object.keys(rest).length > 0 ? rest : null;
     }
 
-    await prisma.tenantSettings.update({
+    await prisma.tenantSettings.upsert({
       where: { tenantId },
-      data: {
+      update: {
         logoUrl: null,
         theme: updatedTheme === null ? Prisma.DbNull : updatedTheme,
+      },
+      create: {
+        tenantId,
+        logoUrl: null,
       },
     });
 
