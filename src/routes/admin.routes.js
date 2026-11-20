@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { list, create, get, update, remove, removePermanently, markUsed } from '../controllers/coupon.controller.js';
+import { list, create, get, update, remove, removePermanently, markUsed, getPricingSettings } from '../controllers/coupon.controller.js';
 import { listRegistrations, getRegistration } from '../controllers/adminRegistrations.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requirePlatformOwner, requirePlatformStaff } from '../middleware/rbac.js';
@@ -24,6 +24,7 @@ router.get('/admin/registrations/:id', requireAuth, requirePlatformOwner, getReg
 
 // Discount coupons & company offers. Every mutation writes a PlatformAuditLog row.
 // Sales/BD can view and create company-based offers; owner retains full management.
+router.get('/admin/coupons/pricing-settings', requireAuth, requirePlatformStaff, getPricingSettings);
 router.get('/admin/coupons', requireAuth, requirePlatformStaff, list);
 router.post('/admin/coupons', requireAuth, requirePlatformStaff, create);
 router.get('/admin/coupons/:id', requireAuth, requirePlatformStaff, get);

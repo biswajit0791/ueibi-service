@@ -34,11 +34,25 @@ export async function updateCompanySettings(tenantId, {
   milestoneAlertSubject,
   milestoneAlertBody,
   theme,
+  logoUrl,
   financialYearStartMonth,
   financialYearStartDay,
   workingHours,
 }) {
   await getCompanySettings(tenantId); // ensure the row exists before updating it
+
+  const shouldResetLogo = theme === null;
+  const effectiveLogoUrl = shouldResetLogo
+    ? null
+    : (logoUrl !== undefined ? logoUrl : (theme?.logoUrl !== undefined ? theme.logoUrl : undefined));
+
+  if (effectiveLogoUrl !== undefined) {
+    await prisma.tenant.update({
+      where: { id: tenantId },
+      data: { logoUrl: effectiveLogoUrl },
+    });
+  }
+
   return prisma.tenantSettings.update({
     where: { tenantId },
     data: {
@@ -55,6 +69,7 @@ export async function updateCompanySettings(tenantId, {
       ...(financialYearStartMonth !== undefined && { financialYearStartMonth }),
       ...(financialYearStartDay !== undefined && { financialYearStartDay }),
       ...(workingHours !== undefined && { workingHours: workingHours === null ? Prisma.DbNull : workingHours }),
+      ...(effectiveLogoUrl !== undefined && { logoUrl: effectiveLogoUrl }),
     },
   });
 }

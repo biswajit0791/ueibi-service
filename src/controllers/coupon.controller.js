@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { prisma } from '../lib/prisma.js';
 import { couponSchema, couponIdParamSchema, listCouponsQuerySchema } from '../validations/coupon.schema.js';
 import { recordPlatformAction, PLATFORM_ACTIONS } from '../services/platformAudit.service.js';
+import { getRegistrationConfig } from '../services/registrationConfig.service.js';
 
 function round2(n) {
   return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
@@ -18,6 +19,29 @@ function addCalendarMonths(date, months) {
     result.setDate(0);
   }
   return result;
+}
+
+export async function getPricingSettings(req, res, next) {
+  try {
+    const [unitPrice, currency, gstRate, taxEnabled, minQuantity, maxQuantity] = await Promise.all([
+      getRegistrationConfig('LICENSE_UNIT_PRICE', 5000),
+      getRegistrationConfig('CURRENCY', 'INR'),
+      getRegistrationConfig('GST_RATE', 0.18),
+      getRegistrationConfig('TAX_ENABLED', true),
+      getRegistrationConfig('MIN_LICENSE_QUANTITY', 1),
+      getRegistrationConfig('MAX_LICENSE_QUANTITY', 10000),
+    ]);
+    res.json({
+      unitPrice: Number(unitPrice),
+      currency,
+      gstRate: Number(gstRate),
+      taxEnabled: Boolean(taxEnabled),
+      minQuantity: Number(minQuantity),
+      maxQuantity: Number(maxQuantity),
+    });
+  } catch (err) {
+    next(err);
+  }
 }
 
 export async function list(req, res, next) {
@@ -154,8 +178,10 @@ export async function create(req, res, next) {
 
     // 2. Company Offer Automatic Calculations:
     if (data.companyName) {
+      // Platform Owner License & Pricing is the single authoritative source of truth for unit price:
+      const authoritativeUnitPrice = await getRegistrationConfig('LICENSE_UNIT_PRICE', 5000);
       const totalLicenses = Math.max(1, parseInt(data.totalLicenses) || 1);
-      const perLicenseCost = Math.max(0, parseFloat(data.perLicenseCost) || 3999);
+      const perLicenseCost = round2(authoritativeUnitPrice);
       const licenseAmount = round2(totalLicenses * perLicenseCost);
       const discountPercent = Math.min(100, Math.max(0, parseFloat(data.discountPercent) || 0));
       const discountAmount = round2((licenseAmount * discountPercent) / 100);
@@ -188,14 +214,23 @@ export async function create(req, res, next) {
         data.code = data.offerReference;
       }
     } else {
-      // Standard generic coupon
+      // Standard generic platform coupon:
+      // Single Source of Truth: Discount percentage is removed from Generic Coupons.
+      // Generic coupons only manage code, usage limit, expiry date, status and assigned BDM.
       if (!data.code) {
         return res.status(400).json({ error: 'Coupon code is required' });
       }
       data.code = data.code.toUpperCase();
-      if (!data.discountValue || data.discountValue <= 0) {
-        return res.status(400).json({ error: 'Discount value must be greater than zero' });
-      }
+      data.discountType = 'PERCENT';
+      data.discountValue = 0;
+      data.discountPercent = 0;
+      data.totalLicenses = null;
+      data.perLicenseCost = null;
+      data.licenseAmount = null;
+      data.finalAmount = null;
+      data.companyName = null;
+      data.industry = null;
+      data.city = null;
     }
 
     const coupon = await prisma.coupon.create({
@@ -318,23 +353,34 @@ export async function update(req, res, next) {
       }
     }
 
-    // Recalculate company offer values if pricing/duration was touched
-    const totalLicenses = data.totalLicenses !== undefined ? Math.max(1, parseInt(data.totalLicenses) || 1) : before.totalLicenses;
-    const perLicenseCost = data.perLicenseCost !== undefined ? Math.max(0, parseFloat(data.perLicenseCost) || 0) : Number(before.perLicenseCost || 3999);
-    const discountPercent = data.discountPercent !== undefined ? Math.min(100, Math.max(0, parseFloat(data.discountPercent) || 0)) : Number(before.discountPercent || 0);
+    if (!before.companyName && !data.companyName) {
+      // Generic coupons do not carry independent discount percentages
+      delete data.discountValue;
+      delete data.discountPercent;
+      delete data.perLicenseCost;
+      delete data.licenseAmount;
+      delete data.finalAmount;
+      delete data.totalLicenses;
+    } else {
+      // Recalculate company offer values if pricing/duration was touched
+      const totalLicenses = data.totalLicenses !== undefined ? Math.max(1, parseInt(data.totalLicenses) || 1) : before.totalLicenses;
+      // Historical pricing snapshot preserved: unit price cannot be manually manipulated
+      const perLicenseCost = Number(before.perLicenseCost || (await getRegistrationConfig('LICENSE_UNIT_PRICE', 5000)));
+      const discountPercent = data.discountPercent !== undefined ? Math.min(100, Math.max(0, parseFloat(data.discountPercent) || 0)) : Number(before.discountPercent || 0);
 
-    if (totalLicenses && perLicenseCost) {
-      const licenseAmount = round2(totalLicenses * perLicenseCost);
-      const discountAmount = round2((licenseAmount * discountPercent) / 100);
-      const finalAmount = round2(licenseAmount - discountAmount);
+      if (totalLicenses && perLicenseCost) {
+        const licenseAmount = round2(totalLicenses * perLicenseCost);
+        const discountAmount = round2((licenseAmount * discountPercent) / 100);
+        const finalAmount = round2(licenseAmount - discountAmount);
 
-      data.totalLicenses = totalLicenses;
-      data.perLicenseCost = perLicenseCost;
-      data.licenseAmount = licenseAmount;
-      data.discountPercent = discountPercent;
-      data.discountValue = discountPercent;
-      data.discountType = 'PERCENT';
-      data.finalAmount = finalAmount;
+        data.totalLicenses = totalLicenses;
+        data.perLicenseCost = perLicenseCost;
+        data.licenseAmount = licenseAmount;
+        data.discountPercent = discountPercent;
+        data.discountValue = discountPercent;
+        data.discountType = 'PERCENT';
+        data.finalAmount = finalAmount;
+      }
     }
 
     if (data.startDate || data.promoMonths !== undefined) {

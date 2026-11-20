@@ -21,6 +21,7 @@ export const validateOfficialEmailSchema = z.object({
 });
 
 export const publicPricingPreviewSchema = z.object({
+  companyName: z.string().trim().optional(),
   cmdEmail: z.string().trim().optional(),
   hrEmail: z.string().trim().optional(),
   hrNotRequired: z.coerce.boolean().optional().default(false),
@@ -77,7 +78,8 @@ export const registrationSchema = z
       .refine((val) => validateFullName(val).valid, {
         message: 'Full name cannot be an email address, URL, or numbers-only',
       }),
-    designation: z.enum(DESIGNATIONS),
+    designationId: z.string().trim().optional().nullable(),
+    designation: z.string().trim().min(1, 'Designation is required').max(100, 'Designation cannot exceed 100 characters'),
     email: z.string().trim().email('Invalid email address'),
     password: z
       .string()
@@ -123,6 +125,7 @@ export const registrationSchema = z
       }),
     couponCode: z.string().trim().optional().nullable(),
     promoCode: z.string().trim().optional().nullable(),
+    logoUrl: z.string().trim().max(1000).optional().nullable().or(z.literal('')),
 
     acceptedTerms: z.literal(true, {
       errorMap: () => ({ message: 'You must accept the terms to proceed' }),
