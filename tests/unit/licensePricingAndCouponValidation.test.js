@@ -58,6 +58,28 @@ test('Dynamic License Pricing & BDM Coupon Validation Suite', async (t) => {
   });
 
   await t.test('3. BDM Coupon Validation (WINTER30) - Case Insensitivity & BDM Attribution', async () => {
+    // Ensure coupon WINTER30 exists
+    await prisma.coupon.upsert({
+      where: { code: 'WINTER30' },
+      update: {
+        active: true,
+        discountType: 'PERCENT',
+        discountValue: 20,
+        discountPercent: 20,
+        bdmName: 'Platform Owner',
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      },
+      create: {
+        code: 'WINTER30',
+        active: true,
+        discountType: 'PERCENT',
+        discountValue: 20,
+        discountPercent: 20,
+        bdmName: 'Platform Owner',
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      },
+    });
+
     // Query coupon WINTER30 case-insensitively
     const inputCode = ' winter30 ';
     const cleanCode = inputCode.trim();

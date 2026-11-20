@@ -67,6 +67,7 @@ model Tenant {
   tenantCode           String                   @unique
   licenseLimit         Int                      @default(0)
   creditBalance        Decimal                  @default(0.00) @db.Decimal(10, 2)
+  logoUrl              String?
   // True only for the single internal tenant that houses PLATFORM_OWNER users.
   // Never set on a customer company.
   isPlatform           Boolean                  @default(false)
@@ -188,6 +189,27 @@ model OrganizationStructure {
   @@index([isActive])
   @@index([displayOrder])
   @@map("organization_structures")
+}
+
+model Designation {
+  id           String   @id @default(cuid())
+  name         String
+  code         String   @unique
+  description  String?
+  displayOrder Int      @default(0)
+  isActive     Boolean  @default(true)
+  isDefault    Boolean  @default(false)
+  createdBy    String?
+  updatedBy    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  companyRegistrations CompanyRegistration[]
+
+  @@index([isActive])
+  @@index([displayOrder])
+  @@index([isDefault])
+  @@map("designations")
 }
 
 model RegistrationConfiguration {
@@ -598,9 +620,12 @@ model CompanyRegistration {
   domainName              String   @unique
   tenantCode      String   @unique
   fullName        String
+  designationId   String?
+  designationRef  Designation? @relation(fields: [designationId], references: [id], onDelete: SetNull)
   designation     String
   email           String   @unique
   passwordHash    String
+  logoUrl         String?
   financeEmail    String?
   financeName     String?
   financeNotRequired Boolean @default(false)
@@ -659,6 +684,7 @@ model CompanyRegistration {
 
   @@index([status])
   @@index([organizationStructureId])
+  @@index([designationId])
   @@map("company_registrations")
 }
 
@@ -1550,6 +1576,7 @@ model TenantSettings {
   id       String @id @default(cuid())
   tenantId String @unique
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  logoUrl  String?
 
   /// Extra domains/subdomains (beyond the tenant's own registered
   /// Tenant.domainName, which is always implicitly allowed) that a milestone

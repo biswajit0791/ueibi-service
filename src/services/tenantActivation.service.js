@@ -154,6 +154,16 @@ export async function activateTenantFromRegistration({
           planEndsAt: endsAt,
           registrationId: registration.id,
           status: 'ACTIVE',
+          logoUrl: registration.logoUrl || null,
+        },
+      });
+
+      // 2b. Initialize TenantSettings with registration company logo
+      await tx.tenantSettings.create({
+        data: {
+          tenantId: createdTenant.id,
+          logoUrl: registration.logoUrl || null,
+          ...(registration.logoUrl ? { theme: { logoUrl: registration.logoUrl } } : {}),
         },
       });
 

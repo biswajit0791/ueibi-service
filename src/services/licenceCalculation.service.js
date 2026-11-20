@@ -154,6 +154,28 @@ export async function computeRegistrationPricing(params = {}, options = {}) {
     console.warn('[PRICING] Failed to resolve promotion:', err.message);
   }
 
+  // Incorporate bonus promotional months from BDM company offer coupon
+  const couponPromoMonths = options.coupon?.promoMonths ? Math.max(0, parseInt(options.coupon.promoMonths, 10) || 0) : 0;
+  if (couponPromoMonths > 0) {
+    if (promo) {
+      promo = {
+        ...promo,
+        freeMonths: (promo.freeMonths || 0) + couponPromoMonths,
+        totalMonths: (promo.paidMonths || 12) + (promo.freeMonths || 0) + couponPromoMonths,
+      };
+    } else {
+      promo = {
+        id: options.coupon.id,
+        name: `BDM Offer Promo (+${couponPromoMonths} Month${couponPromoMonths > 1 ? 's' : ''})`,
+        code: options.coupon.code,
+        paidMonths: 12,
+        freeMonths: couponPromoMonths,
+        totalMonths: 12 + couponPromoMonths,
+        badgeText: `+${couponPromoMonths} MONTHS PROMO FREE`,
+      };
+    }
+  }
+
   const ext = calculateSubscriptionExtension({
     startsAt,
     termMonths: options.termMonths || 12,

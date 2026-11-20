@@ -36,6 +36,7 @@ export const themeSchema = z.object({
   version: z.literal(1).default(1),
   preset: z.enum(THEME_PRESETS).default('custom'),
   accent: hex.optional(),
+  logoUrl: z.string().trim().max(1000).nullable().optional(),
   sidebar: z.object({
     background: hex.optional(),
     text: hex.optional(),
@@ -104,6 +105,7 @@ export const updateCompanySettingsSchema = z.object({
   milestoneAlertBody: z.string().trim().min(1).max(5000).optional(),
   // null resets to the default look.
   theme: themeSchema.nullable().optional(),
+  logoUrl: z.string().trim().max(1000).nullable().optional(),
   financialYearStartMonth: z.number().int().min(1).max(12).optional(),
   financialYearStartDay: z.number().int().min(1).max(31).optional(),
 }).refine((data) => Object.keys(data).length > 0, {

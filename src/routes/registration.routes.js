@@ -7,10 +7,16 @@ import {
   validateOfficialEmail,
   getPublicPricingPreview,
   getPublicRegistrationSettings,
+  uploadRegistrationLogo,
 } from '../controllers/registration.controller.js';
 import { otpRateLimit, mouValidationRateLimit } from '../middleware/rateLimit.js';
+import { logoUploadMiddleware } from '../middleware/logoUpload.js';
 
 const router = Router();
+
+// Public Logo Upload
+router.post('/public/mou/upload-logo', mouValidationRateLimit, logoUploadMiddleware('logo'), uploadRegistrationLogo);
+router.post('/registrations/upload-logo', mouValidationRateLimit, logoUploadMiddleware('logo'), uploadRegistrationLogo);
 
 // Public Configuration Settings for Registration & OTP Security
 router.get('/public/mou/settings', mouValidationRateLimit, getPublicRegistrationSettings);

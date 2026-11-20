@@ -33,7 +33,7 @@ import {
   publicPricingPreviewSchema,
 } from '../validations/registration.schema.js';
 
-async function lookupCoupon(couponCode) {
+async function lookupCoupon(couponCode, context = {}) {
   if (!couponCode) return { coupon: null, error: null };
   const cleanCode = String(couponCode).trim();
   if (!cleanCode) return { coupon: null, error: null };
@@ -51,7 +51,7 @@ async function lookupCoupon(couponCode) {
       },
     },
   });
-  const error = couponValidationError(coupon);
+  const error = couponValidationError(coupon, context);
   return { coupon: error ? null : coupon, error };
 }
 
@@ -65,6 +65,7 @@ export async function getPublicPricingPreview(req, res, next) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
     const {
+      companyName,
       cmdEmail,
       hrEmail,
       hrNotRequired,
@@ -76,7 +77,20 @@ export async function getPublicPricingPreview(req, res, next) {
       promoCode,
     } = parsed.data;
 
-    const { coupon, error: couponError } = await lookupCoupon(couponCode);
+    const breakdown = calculateLicenceBreakdown({
+      cmdEmail,
+      hrEmail,
+      hrNotRequired,
+      financeEmail,
+      financeNotRequired,
+      additionalLicenses,
+      licenseQuantity,
+    });
+
+    const { coupon, error: couponError } = await lookupCoupon(couponCode, {
+      companyName,
+      totalLicenses: breakdown.totalLicenses,
+    });
 
     const [minQty, maxQty] = await Promise.all([
       getRegistrationConfig('MIN_LICENSE_QUANTITY', 1),
@@ -103,7 +117,7 @@ export async function getPublicPricingPreview(req, res, next) {
     res.json({
       ...pricing,
       couponValid: Boolean(coupon),
-      couponCode: coupon?.code || null,
+      couponCode: coupon?.code || (couponCode ? String(couponCode).trim().toUpperCase() : null),
       coupon: coupon
         ? {
             id: coupon.id,
@@ -112,6 +126,9 @@ export async function getPublicPricingPreview(req, res, next) {
             discountValue: Number(coupon.discountValue),
             bdmName: coupon.bdmName || coupon.salesRep?.name || null,
             salesRepId: coupon.salesRepId || null,
+            companyName: coupon.companyName || null,
+            totalLicenses: coupon.totalLicenses || null,
+            promoMonths: coupon.promoMonths || 0,
           }
         : null,
       couponError,
@@ -598,10 +615,57 @@ export async function createRegistration(req, res, next) {
       });
     }
 
+    // Resolve dynamic designation from database
+    let designationRecord = null;
+    if (data.designationId) {
+      designationRecord = await prisma.designation.findFirst({
+        where: { id: data.designationId, isActive: true },
+      });
+    }
+    if (!designationRecord && data.designation) {
+      designationRecord = await prisma.designation.findFirst({
+        where: {
+          OR: [
+            { id: data.designation },
+            { code: { equals: data.designation, mode: 'insensitive' } },
+            { name: { equals: data.designation, mode: 'insensitive' } },
+            ...(data.designation.toUpperCase() === 'CMD' ? [{ code: 'CHAIRMAN_MANAGING_DIRECTOR' }] : []),
+          ],
+          isActive: true,
+        },
+      });
+    }
+
+    if (!designationRecord) {
+      // Fallback to active default designation if available
+      designationRecord = await prisma.designation.findFirst({
+        where: { isDefault: true, isActive: true },
+      });
+    }
+
+    if (!designationRecord) {
+      return res.status(400).json({
+        error: 'Invalid or inactive designation selected. Please refresh and select an active designation.',
+      });
+    }
+
     // Purchase Configuration (CMD Controlled)
     const actionTokenTtlDays = await getRegistrationConfig('ACTION_TOKEN_TTL_DAYS', env.actionTokenTtlDays || 14);
 
-    const { coupon, error: couponError } = await lookupCoupon(data.couponCode);
+    const breakdown = calculateLicenceBreakdown({
+      cmdEmail: data.email,
+      hrEmail: data.hrEmail,
+      hrNotRequired: data.hrNotRequired,
+      financeEmail: data.financeEmail,
+      financeNotRequired: data.financeNotRequired,
+      additionalLicenses: data.additionalLicenses,
+      licenseQuantity: data.licenseQuantity,
+    });
+
+    const { coupon, error: couponError } = await lookupCoupon(data.couponCode, {
+      companyName: data.companyName,
+      totalLicenses: breakdown.totalLicenses,
+    });
     if (data.couponCode && couponError) {
       return res.status(400).json({ error: couponError });
     }
@@ -624,6 +688,17 @@ export async function createRegistration(req, res, next) {
     const rawFinanceToken = generateRawToken();
 
     const registration = await prisma.$transaction(async (tx) => {
+      if (coupon) {
+        const freshCoupon = await tx.coupon.findUnique({ where: { id: coupon.id } });
+        const concurrentError = couponValidationError(freshCoupon, {
+          companyName: data.companyName,
+          totalLicenses: breakdown.totalLicenses,
+        });
+        if (concurrentError) {
+          throw new Error(concurrentError);
+        }
+      }
+
       const created = await tx.companyRegistration.create({
         data: {
           companyName: data.companyName,
@@ -632,9 +707,11 @@ export async function createRegistration(req, res, next) {
           domainName: normalizeDomain(data.domainName),
           tenantCode,
           fullName: data.fullName,
-          designation: data.designation,
+          designation: designationRecord.name,
+          designationId: designationRecord.id,
           email: data.email,
           passwordHash,
+          logoUrl: data.logoUrl ? data.logoUrl.trim() : null,
           financeEmail: data.financeNotRequired ? null : (data.financeEmail ? data.financeEmail.trim() : null),
           financeName: data.financeNotRequired ? null : (data.financeName ? data.financeName.trim() : null),
           financeNotRequired: Boolean(data.financeNotRequired),
@@ -721,6 +798,24 @@ export async function createRegistration(req, res, next) {
       directPayment: Boolean(data.financeNotRequired),
       paymentToken: rawFinanceToken,
       paymentUrl: `/finance/registrations/${rawFinanceToken}`,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ─── POST /api/public/mou/upload-logo ──────────────────────────────────────
+export async function uploadRegistrationLogo(req, res, next) {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No logo file provided' });
+    }
+
+    const fileUrl = `/api/uploads/${req.file.filename}`;
+    res.json({
+      message: 'Logo uploaded successfully',
+      url: fileUrl,
+      fileName: req.file.filename,
     });
   } catch (err) {
     next(err);
