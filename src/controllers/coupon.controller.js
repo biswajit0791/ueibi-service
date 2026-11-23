@@ -24,7 +24,7 @@ function addCalendarMonths(date, months) {
 export async function getPricingSettings(req, res, next) {
   try {
     const [unitPrice, currency, gstRate, taxEnabled, minQuantity, maxQuantity] = await Promise.all([
-      getRegistrationConfig('LICENSE_UNIT_PRICE', 5000),
+      getRegistrationConfig('LICENSE_UNIT_PRICE', 4999),
       getRegistrationConfig('CURRENCY', 'INR'),
       getRegistrationConfig('GST_RATE', 0.18),
       getRegistrationConfig('TAX_ENABLED', true),
@@ -179,13 +179,13 @@ export async function create(req, res, next) {
     // 2. Company Offer Automatic Calculations:
     if (data.companyName) {
       // Platform Owner License & Pricing is the single authoritative source of truth for unit price:
-      const authoritativeUnitPrice = await getRegistrationConfig('LICENSE_UNIT_PRICE', 5000);
-      const totalLicenses = Math.max(1, parseInt(data.totalLicenses) || 1);
+      const authoritativeUnitPrice = Number(await getRegistrationConfig('LICENSE_UNIT_PRICE', 4999));
+      const totalLicenses = Math.max(0, parseInt(data.totalLicenses, 10) || 0);
       const perLicenseCost = round2(authoritativeUnitPrice);
-      const licenseAmount = round2(totalLicenses * perLicenseCost);
+      const licenseAmount = totalLicenses > 0 ? round2(totalLicenses * perLicenseCost) : 0;
       const discountPercent = Math.min(100, Math.max(0, parseFloat(data.discountPercent) || 0));
-      const discountAmount = round2((licenseAmount * discountPercent) / 100);
-      const finalAmount = round2(licenseAmount - discountAmount);
+      const discountAmount = totalLicenses > 0 ? round2((licenseAmount * discountPercent) / 100) : 0;
+      const finalAmount = totalLicenses > 0 ? round2(licenseAmount - discountAmount) : 0;
 
       data.totalLicenses = totalLicenses;
       data.perLicenseCost = perLicenseCost;
@@ -197,7 +197,7 @@ export async function create(req, res, next) {
       data.usageLimit = 1;
       data.status = 'UNUSED';
 
-      const promoMonths = Math.max(0, parseInt(data.promoMonths) || 0);
+      const promoMonths = Math.max(0, parseInt(data.promoMonths, 10) || 0);
       data.promoMonths = promoMonths;
 
       const startDate = data.startDate ? new Date(data.startDate) : new Date();
@@ -363,24 +363,22 @@ export async function update(req, res, next) {
       delete data.totalLicenses;
     } else {
       // Recalculate company offer values if pricing/duration was touched
-      const totalLicenses = data.totalLicenses !== undefined ? Math.max(1, parseInt(data.totalLicenses) || 1) : before.totalLicenses;
+      const totalLicenses = data.totalLicenses !== undefined ? Math.max(0, parseInt(data.totalLicenses, 10) || 0) : Number(before.totalLicenses || 0);
       // Historical pricing snapshot preserved: unit price cannot be manually manipulated
-      const perLicenseCost = Number(before.perLicenseCost || (await getRegistrationConfig('LICENSE_UNIT_PRICE', 5000)));
+      const perLicenseCost = Number(before.perLicenseCost || (await getRegistrationConfig('LICENSE_UNIT_PRICE', 4999)));
       const discountPercent = data.discountPercent !== undefined ? Math.min(100, Math.max(0, parseFloat(data.discountPercent) || 0)) : Number(before.discountPercent || 0);
 
-      if (totalLicenses && perLicenseCost) {
-        const licenseAmount = round2(totalLicenses * perLicenseCost);
-        const discountAmount = round2((licenseAmount * discountPercent) / 100);
-        const finalAmount = round2(licenseAmount - discountAmount);
+      const licenseAmount = totalLicenses > 0 ? round2(totalLicenses * perLicenseCost) : 0;
+      const discountAmount = totalLicenses > 0 ? round2((licenseAmount * discountPercent) / 100) : 0;
+      const finalAmount = totalLicenses > 0 ? round2(licenseAmount - discountAmount) : 0;
 
-        data.totalLicenses = totalLicenses;
-        data.perLicenseCost = perLicenseCost;
-        data.licenseAmount = licenseAmount;
-        data.discountPercent = discountPercent;
-        data.discountValue = discountPercent;
-        data.discountType = 'PERCENT';
-        data.finalAmount = finalAmount;
-      }
+      data.totalLicenses = totalLicenses;
+      data.perLicenseCost = perLicenseCost;
+      data.licenseAmount = licenseAmount;
+      data.discountPercent = discountPercent;
+      data.discountValue = discountPercent;
+      data.discountType = 'PERCENT';
+      data.finalAmount = finalAmount;
     }
 
     if (data.startDate || data.promoMonths !== undefined) {

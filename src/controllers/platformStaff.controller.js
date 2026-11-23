@@ -557,7 +557,7 @@ export async function getMyPlatformPermissions(req, res, next) {
 const updateStaffSchema = z.object({
   name: z.string().trim().min(2, 'Name is required').max(120).optional(),
   email: z.string().trim().toLowerCase().email('A valid email address is required').optional(),
-  status: z.enum(['ACTIVE', 'INACTIVE', 'SUSPENDED']).optional(),
+  status: z.enum(['ACTIVE', 'INACTIVE', 'SUSPENDED', 'INVITED']).optional(),
   password: z.string().min(6, 'Password must be at least 6 characters').max(100).optional(),
   mustChangePassword: z.boolean().optional(),
 });
@@ -582,7 +582,10 @@ export async function updatePlatformStaff(req, res, next) {
     const updateData = {};
 
     if (name) updateData.name = name;
-    if (status) updateData.status = status;
+    if (status) {
+      // Map INACTIVE or SUSPENDED to valid Prisma enum 'SUSPENDED'
+      updateData.status = (status === 'INACTIVE' || status === 'SUSPENDED') ? 'SUSPENDED' : status;
+    }
     if (typeof mustChangePassword === 'boolean') updateData.mustChangePassword = mustChangePassword;
 
     if (email && email.toLowerCase() !== staff.email.toLowerCase()) {

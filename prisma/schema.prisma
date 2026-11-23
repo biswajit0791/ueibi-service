@@ -674,6 +674,7 @@ model CompanyRegistration {
   promotionName           String?
 
   status RegistrationStatus @default(PENDING_FINANCE_REVIEW)
+  paymentStatus String? @default("PENDING")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

@@ -27,6 +27,11 @@ import {
   listOnboarding,
   getOnboarding,
   resendOnboardingLink,
+  sendRegistrationRoleLink,
+  reSignupRegistration,
+  manualChequeVerify,
+  refundRegistration,
+  confirmPaymentRegistration,
   verifyRegistration,
   getRegistrationVerification,
 } from '../controllers/platform.controller.js';
@@ -108,6 +113,11 @@ router.post('/platform/users/:id/force-reset', requireAuth, requirePlatformOwner
 router.get('/platform/registrations', requireAuth, requirePlatformMenu('onboarding'), listOnboarding);
 router.get('/platform/registrations/:id', requireAuth, requirePlatformMenu('onboarding'), getOnboarding);
 router.post('/platform/registrations/:id/resend', requireAuth, requirePlatformOwner, resendOnboardingLink);
+router.post('/platform/registrations/:id/send-link', requireAuth, requirePlatformOwner, sendRegistrationRoleLink);
+router.delete('/platform/registrations/:id/re-signup', requireAuth, requirePlatformOwner, reSignupRegistration);
+router.post('/platform/registrations/:id/manual-cheque-verify', requireAuth, requirePlatformOwner, manualChequeVerify);
+router.post('/platform/registrations/:id/refund', requireAuth, requirePlatformOwner, refundRegistration);
+router.post('/platform/registrations/:id/confirm-payment', requireAuth, requirePlatformOwner, confirmPaymentRegistration);
 router.get('/platform/registrations/:id/verification', requireAuth, requirePlatformMenu('verification'), getRegistrationVerification);
 router.post('/platform/registrations/:id/verify', requireAuth, requirePlatformOwner, verifyRegistration);
 

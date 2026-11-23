@@ -39,6 +39,7 @@ import {
   PLATFORM_ACTIONS,
 } from '../services/platformAudit.service.js';
 import { getRegistrationConfig } from '../services/registrationConfig.service.js';
+import { activateTenantFromRegistration } from '../services/tenantActivation.service.js';
 
 /** Tenants that belong to customers — the internal platform tenant is not a company. */
 const CUSTOMER_TENANTS = { isPlatform: false };
@@ -1249,6 +1250,8 @@ export async function listOnboarding(req, res, next) {
           tenantCode: true, fullName: true, designation: true, email: true,
           financeEmail: true, hrEmail: true, gstin: true,
           licenseQuantity: true, totalAmount: true, paymentMethod: true,
+          paymentStatus: true, paymentReference: true, chequeNumber: true,
+          chequeDate: true, transactionId: true, paymentVerifiedAt: true,
           status: true, financeApprovedAt: true, activatedAt: true,
           createdAt: true, updatedAt: true,
           tenant: { select: { id: true, companyName: true, status: true } },
@@ -1290,9 +1293,22 @@ export async function listOnboarding(req, res, next) {
 
     const items = rows.map((r) => {
       const ageInStage = daysSince(r.updatedAt);
+      let paymentStatus = r.paymentStatus || 'PENDING';
+      if (paymentStatus === 'PENDING') {
+        if (r.status === 'ACTIVE' || r.paymentVerifiedAt != null || r.status === 'PENDING_HR_ACTIVATION') {
+          paymentStatus = 'COMPLETED';
+        } else if (r.paymentReference?.startsWith('REFUND') || r.transactionId?.startsWith('REFUND')) {
+          paymentStatus = 'REFUND';
+        } else if (r.paymentReference?.startsWith('REJECTED')) {
+          paymentStatus = 'REJECTED';
+        }
+      }
+
       return {
         ...r,
         totalAmount: r.totalAmount == null ? null : Number(r.totalAmount),
+        paymentMethod: r.paymentMethod || null,
+        paymentStatus,
         stageLabel: STAGE_ACTION[r.status]?.label || 'Live',
         waitingOn: STAGE_ACTION[r.status]?.role || null,
         ageInStage,
@@ -1530,6 +1546,317 @@ function renderResendEmail({ registration, stage, actionUrl }) {
       </p>
     `,
   });
+}
+
+/**
+ * POST /platform/registrations/:id/send-link
+ * Fixed button link sender: explicitly sends verification/action link to HR or Finance.
+ */
+export async function sendRegistrationRoleLink(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { target } = req.body || {}; // 'HR' or 'FINANCE'
+    const role = (target || '').toUpperCase() === 'HR' ? 'HR' : 'FINANCE';
+
+    const reg = await prisma.companyRegistration.findUnique({
+      where: { id },
+      select: {
+        id: true, companyName: true, status: true, email: true,
+        financeEmail: true, hrEmail: true, fullName: true,
+        licenseQuantity: true, totalAmount: true, paymentMethod: true,
+        domainName: true, tenantCode: true, companyType: true, gstin: true,
+      },
+    });
+    if (!reg) return res.status(404).json({ error: 'Registration not found' });
+
+    const recipient = role === 'HR' ? (reg.hrEmail || reg.email) : (reg.financeEmail || reg.email);
+    if (!recipient) {
+      return res.status(400).json({ error: `No ${role} email address found for this registration.` });
+    }
+
+    const path = role === 'HR' ? 'hr/registrations' : 'finance/registrations';
+    const label = role === 'HR' ? 'HR activation' : 'Finance review';
+    const event = role === 'HR' ? 'ONBOARDING_HR_LINK_RESENT' : 'ONBOARDING_FINANCE_LINK_RESENT';
+
+    const rawToken = generateRawToken();
+    const actionTokenTtlDays = await getRegistrationConfig('ACTION_TOKEN_TTL_DAYS', env.actionTokenTtlDays);
+    const expiresAt = new Date(Date.now() + actionTokenTtlDays * 24 * 60 * 60 * 1000);
+
+    await prisma.$transaction(async (tx) => {
+      await tx.registrationActionToken.create({
+        data: {
+          registrationId: reg.id,
+          role,
+          tokenHash: hashToken(rawToken),
+          expiresAt,
+        },
+      });
+      await recordPlatformAction({
+        tx,
+        req,
+        action: PLATFORM_ACTIONS.REGISTRATION_LINK_RESENT,
+        targetType: 'REGISTRATION',
+        targetId: reg.id,
+        tenantId: null,
+        afterValue: { role, recipient, expiresAt },
+      });
+    });
+
+    const actionUrl = `${env.frontendOrigin}/${path}/${rawToken}`;
+    const message = `A fresh ${label.toLowerCase()} link has been dispatched for ${reg.companyName}.`;
+
+    const mail = await sendMail({
+      to: recipient,
+      subject: `Action required: ${label} for ${reg.companyName}`,
+      text: `${message}\n\nAction link: ${actionUrl}`,
+      html: renderResendEmail({ registration: reg, stage: { label, role, path, event }, actionUrl }),
+      event,
+      registrationId: reg.id,
+    });
+
+    res.json({
+      success: true,
+      sent: mail.status !== 'FAILED',
+      recipient,
+      role,
+      actionUrl,
+      deliveryStatus: mail.status,
+      message: `Verification link successfully sent to ${role} (${recipient}).`,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * DELETE /platform/registrations/:id/re-signup
+ * Purges registration entry so company can start fresh re-signup.
+ */
+export async function reSignupRegistration(req, res, next) {
+  try {
+    const { id } = req.params;
+    const reg = await prisma.companyRegistration.findUnique({
+      where: { id },
+      include: { tenant: true },
+    });
+    if (!reg) return res.status(404).json({ error: 'Registration not found' });
+
+    await prisma.$transaction(async (tx) => {
+      // 1. Delete associated tokens
+      await tx.registrationActionToken.deleteMany({ where: { registrationId: id } });
+      // 2. Delete verifications
+      await tx.registrationVerification.deleteMany({ where: { registrationId: id } });
+      // 3. Delete notification logs
+      await tx.notificationLog.deleteMany({ where: { registrationId: id } });
+
+      // 4. If tenant was created for this registration, clean it up
+      if (reg.tenant) {
+        await tx.tenantUser.deleteMany({ where: { tenantId: reg.tenant.id } });
+        await tx.tenantSettings.deleteMany({ where: { tenantId: reg.tenant.id } });
+        await tx.tenant.delete({ where: { id: reg.tenant.id } });
+      }
+
+      // 5. Delete registration row itself
+      await tx.companyRegistration.delete({ where: { id } });
+
+      await recordPlatformAction({
+        tx,
+        req,
+        action: PLATFORM_ACTIONS.TENANT_DELETED || 'REGISTRATION_DELETED',
+        targetType: 'REGISTRATION',
+        targetId: id,
+        tenantId: null,
+        beforeValue: { companyName: reg.companyName, domainName: reg.domainName, email: reg.email },
+      });
+    });
+
+    res.json({
+      success: true,
+      message: `Registration entry for "${reg.companyName}" removed. Domain "${reg.domainName}" is now available for fresh signup.`,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /platform/registrations/:id/manual-cheque-verify
+ * Verifies cheque manually and advances status to ACTIVE (Complete).
+ */
+export async function manualChequeVerify(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { chequeNumber, chequeDate, transactionId } = req.body || {};
+
+    const reg = await prisma.companyRegistration.findUnique({ where: { id } });
+    if (!reg) return res.status(404).json({ error: 'Registration not found' });
+
+    const chqNum = chequeNumber || reg.chequeNumber || 'CHQ-MANUAL';
+    const chqDate = chequeDate ? new Date(chequeDate) : (reg.chequeDate || new Date());
+    const txnId = transactionId || reg.transactionId || `CHQ-VERIFIED-${Date.now()}`;
+
+    // 1. Activate tenant from registration
+    let activationResult = null;
+    try {
+      activationResult = await activateTenantFromRegistration({
+        registrationId: reg.id,
+        paymentMethod: 'CHEQUE',
+        paymentReference: txnId,
+        transactionId: txnId,
+        performedBy: 'PLATFORM_OWNER',
+      });
+    } catch (e) {
+      console.warn('[Manual Cheque Verify] activation notice:', e.message);
+    }
+
+    // 2. Update registration status to ACTIVE & COMPLETED
+    await prisma.companyRegistration.update({
+      where: { id },
+      data: {
+        paymentMethod: 'CHEQUE',
+        paymentStatus: 'COMPLETED',
+        chequeNumber: chqNum,
+        chequeDate: chqDate,
+        transactionId: txnId,
+        paymentVerifiedAt: new Date(),
+        financeApprovedAt: reg.financeApprovedAt || new Date(),
+        status: 'ACTIVE',
+      },
+    });
+
+    await recordPlatformAction({
+      req,
+      action: PLATFORM_ACTIONS.REGISTRATION_VERIFIED || 'CHEQUE_CONFIRMED',
+      targetType: 'REGISTRATION',
+      targetId: id,
+      tenantId: activationResult?.tenant?.id || null,
+      afterValue: { status: 'ACTIVE', paymentStatus: 'COMPLETED', chequeNumber: chqNum },
+    });
+
+    res.json({
+      success: true,
+      status: 'ACTIVE',
+      paymentStatus: 'COMPLETED',
+      tenantId: activationResult?.tenant?.id || null,
+      message: `Cheque verified manually. Status is now Complete (Active).`,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /platform/registrations/:id/refund
+ * Marks registration payment status as Refund.
+ */
+export async function refundRegistration(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { reason, reference } = req.body || {};
+
+    const reg = await prisma.companyRegistration.findUnique({
+      where: { id },
+      include: { tenant: true },
+    });
+    if (!reg) return res.status(404).json({ error: 'Registration not found' });
+
+    const refNote = reference || reason || 'Platform Owner manual refund';
+
+    await prisma.companyRegistration.update({
+      where: { id },
+      data: {
+        paymentStatus: 'REFUND',
+        paymentReference: `REFUND: ${refNote}`,
+      },
+    });
+
+    // If tenant is live, mark as SUSPENDED
+    if (reg.tenant && reg.tenant.status === 'ACTIVE') {
+      await prisma.tenant.update({
+        where: { id: reg.tenant.id },
+        data: { status: 'SUSPENDED' },
+      });
+    }
+
+    await recordPlatformAction({
+      req,
+      action: 'PAYMENT_REFUNDED',
+      targetType: 'REGISTRATION',
+      targetId: id,
+      tenantId: reg.tenant?.id || null,
+      afterValue: { paymentStatus: 'REFUND', refNote },
+    });
+
+    res.json({
+      success: true,
+      paymentStatus: 'REFUND',
+      message: `Payment status updated to Refund for "${reg.companyName}".`,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /platform/registrations/:id/confirm-payment
+ * Manually confirms payment receipt and updates status to COMPLETED.
+ */
+export async function confirmPaymentRegistration(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { paymentMethod = 'ONLINE', transactionReference, paymentDate } = req.body || {};
+
+    const reg = await prisma.companyRegistration.findUnique({ where: { id } });
+    if (!reg) return res.status(404).json({ error: 'Registration not found' });
+
+    const txnRef = transactionReference || reg.transactionId || `PAY-CONFIRMED-${Date.now()}`;
+
+    let activationResult = null;
+    // If registration is in finance or cheque review, complete tenant activation
+    if (reg.status !== 'ACTIVE') {
+      try {
+        activationResult = await activateTenantFromRegistration({
+          registrationId: reg.id,
+          paymentMethod: paymentMethod === 'CHEQUE' ? 'CHEQUE' : 'ONLINE',
+          paymentReference: txnRef,
+          transactionId: txnRef,
+          performedBy: 'PLATFORM_OWNER',
+        });
+      } catch (e) {
+        console.warn('[Confirm Payment] activation notice:', e.message);
+      }
+    }
+
+    await prisma.companyRegistration.update({
+      where: { id },
+      data: {
+        paymentMethod: paymentMethod === 'CHEQUE' ? 'CHEQUE' : 'ONLINE',
+        paymentStatus: 'COMPLETED',
+        paymentVerifiedAt: paymentDate ? new Date(paymentDate) : new Date(),
+        transactionId: txnRef,
+        financeApprovedAt: reg.financeApprovedAt || new Date(),
+        status: 'ACTIVE',
+      },
+    });
+
+    await recordPlatformAction({
+      req,
+      action: 'PAYMENT_CONFIRMED',
+      targetType: 'REGISTRATION',
+      targetId: id,
+      tenantId: activationResult?.tenant?.id || null,
+      afterValue: { paymentStatus: 'COMPLETED', status: 'ACTIVE', txnRef },
+    });
+
+    res.json({
+      success: true,
+      paymentStatus: 'COMPLETED',
+      status: 'ACTIVE',
+      message: `Payment confirmed successfully. Status is now Completed / Active.`,
+    });
+  } catch (err) {
+    next(err);
+  }
 }
 
 /**
