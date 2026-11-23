@@ -453,6 +453,7 @@ model TenantUser {
   userPermissions       UserPermission[]     @relation("UserPermissionsAssigned")
   grantedPermissions    UserPermission[]     @relation("AssignedByAdmin")
   dataScope             UserDataScope?
+  platformMenuPermissions PlatformMenuPermission[] @relation("PlatformUserMenuPermissions")
 
   remarks   String?
   docs      Json?
@@ -3756,4 +3757,20 @@ model UserDataScope {
   @@index([tenantId, userId])
   @@map("user_data_scopes")
 }
+
+model PlatformMenuPermission {
+  id        String     @id @default(cuid())
+  userId    String
+  user      TenantUser @relation("PlatformUserMenuPermissions", fields: [userId], references: [id], onDelete: Cascade)
+  menuKey   String
+  isEnabled Boolean    @default(true)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@unique([userId, menuKey])
+  @@index([userId])
+  @@index([menuKey])
+  @@map("platform_menu_permissions")
+}
+
 

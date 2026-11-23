@@ -1,6 +1,7 @@
 import { canViewDashboard } from '../lib/dashboardPermissions.js';
 import { hasCapability } from '../lib/capabilities.js';
 import { isPlatformOwner, isPlatformUser } from '../lib/roles.js';
+import { hasPlatformMenuPermission } from '../services/platformPermissions.service.js';
 
 /**
  * Platform-operator only. Deliberately NOT expressed as authorize('PLATFORM_OWNER',
@@ -15,6 +16,40 @@ export function requirePlatformOwner(req, res, next) {
     return res.status(403).json({ error: 'Access forbidden: platform owner authorization required' });
   }
   next();
+}
+
+/**
+ * Individual Platform Owner Menu Access Control.
+ * Root PLATFORM_OWNER always passes.
+ * PLATFORM_SALES (Internal Team) passes only if the specific menuKey is enabled in their permissions.
+ */
+export function requirePlatformMenu(menuKey) {
+  return async (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+    const role = String(req.user.role || '').toUpperCase();
+    if (role === 'PLATFORM_OWNER') {
+      return next();
+    }
+    if (!isPlatformUser(role)) {
+      return res.status(403).json({ error: 'Access forbidden: platform staff authorization required' });
+    }
+
+    try {
+      const allowed = await hasPlatformMenuPermission(req.user.id, role, menuKey);
+      if (!allowed) {
+        return res.status(403).json({
+          error: `Access forbidden: you do not have permission to access ${menuKey}`,
+          code: 'PLATFORM_PERMISSION_DENIED',
+          menuKey,
+        });
+      }
+      next();
+    } catch (err) {
+      next(err);
+    }
+  };
 }
 
 /**

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
-import { requirePlatformOwner } from '../middleware/rbac.js';
+import { requirePlatformOwner, requirePlatformMenu } from '../middleware/rbac.js';
 import {
   listDesignationsPublic,
   listDesignationsAdmin,
@@ -25,13 +25,13 @@ router.get('/registrations/designations', listDesignationsPublic);
 router.get(
   '/platform/designations',
   requireAuth,
-  requirePlatformOwner,
+  requirePlatformMenu('designations'),
   listDesignationsAdmin
 );
 router.get(
   '/platform/designations/:id',
   requireAuth,
-  requirePlatformOwner,
+  requirePlatformMenu('designations'),
   getDesignationAdmin
 );
 router.post(

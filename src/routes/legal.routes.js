@@ -14,7 +14,7 @@ import {
   listLegalAcceptances,
 } from '../controllers/legal.controller.js';
 import { requireAuth } from '../middleware/auth.js';
-import { requirePlatformOwner } from '../middleware/rbac.js';
+import { requirePlatformOwner, requirePlatformMenu } from '../middleware/rbac.js';
 
 const router = Router();
 
@@ -28,9 +28,9 @@ router.get('/legal/:slug', getPublicLegalDocument);
 // ── Platform owner ──────────────────────────────────────────────────────────
 // Authoring. A published version is immutable: amending terms creates a new
 // version, which is what preserves the record of what each customer agreed to.
-router.get('/platform/legal', requireAuth, requirePlatformOwner, listLegalDocuments);
+router.get('/platform/legal', requireAuth, requirePlatformMenu('legal'), listLegalDocuments);
 router.post('/platform/legal', requireAuth, requirePlatformOwner, createLegalDocument);
-router.get('/platform/legal/:slug', requireAuth, requirePlatformOwner, getLegalDocument);
+router.get('/platform/legal/:slug', requireAuth, requirePlatformMenu('legal'), getLegalDocument);
 router.patch('/platform/legal/:slug', requireAuth, requirePlatformOwner, updateLegalDocument);
 // Refused once any version has been accepted — that acceptance is the evidence
 // of what a company agreed to.

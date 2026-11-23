@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
-import { requirePlatformOwner } from '../middleware/rbac.js';
+import { requirePlatformOwner, requirePlatformMenu } from '../middleware/rbac.js';
 import {
   listOrganizationStructuresPublic,
   listOrganizationStructuresAdmin,
@@ -20,13 +20,13 @@ router.get('/public/organization-structures', listOrganizationStructuresPublic);
 router.get(
   '/platform-admin/organization-structures',
   requireAuth,
-  requirePlatformOwner,
+  requirePlatformMenu('organization_structures'),
   listOrganizationStructuresAdmin
 );
 router.get(
   '/platform-admin/organization-structures/:id',
   requireAuth,
-  requirePlatformOwner,
+  requirePlatformMenu('organization_structures'),
   getOrganizationStructureAdmin
 );
 router.post(
@@ -58,13 +58,13 @@ router.delete(
 router.get(
   '/platform/organization-structures',
   requireAuth,
-  requirePlatformOwner,
+  requirePlatformMenu('organization_structures'),
   listOrganizationStructuresAdmin
 );
 router.get(
   '/platform/organization-structures/:id',
   requireAuth,
-  requirePlatformOwner,
+  requirePlatformMenu('organization_structures'),
   getOrganizationStructureAdmin
 );
 router.post(

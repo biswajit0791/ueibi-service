@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
-import { requirePlatformOwner } from '../middleware/rbac.js';
+import { requirePlatformOwner, requirePlatformMenu } from '../middleware/rbac.js';
 import {
   listConfigurations,
   getConfigurationByKey,
@@ -16,13 +16,13 @@ const router = Router();
 router.get(
   '/platform-admin/registration-configurations',
   requireAuth,
-  requirePlatformOwner,
+  requirePlatformMenu('registration_settings'),
   listConfigurations,
 );
 router.get(
   '/platform-admin/registration-configurations/history',
   requireAuth,
-  requirePlatformOwner,
+  requirePlatformMenu('registration_settings'),
   getConfigurationHistory,
 );
 router.post(
@@ -40,7 +40,7 @@ router.put(
 router.get(
   '/platform-admin/registration-configurations/:key',
   requireAuth,
-  requirePlatformOwner,
+  requirePlatformMenu('registration_settings'),
   getConfigurationByKey,
 );
 router.put(

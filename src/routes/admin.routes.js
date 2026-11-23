@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { list, create, get, update, remove, removePermanently, markUsed, getPricingSettings } from '../controllers/coupon.controller.js';
 import { listRegistrations, getRegistration } from '../controllers/adminRegistrations.controller.js';
 import { requireAuth } from '../middleware/auth.js';
-import { requirePlatformOwner, requirePlatformStaff } from '../middleware/rbac.js';
+import { requirePlatformOwner, requirePlatformStaff, requirePlatformMenu } from '../middleware/rbac.js';
 
 /**
  * Platform-operator routes for company registrations and discount coupons.
@@ -19,17 +19,17 @@ import { requirePlatformOwner, requirePlatformStaff } from '../middleware/rbac.j
 const router = Router();
 
 // Company registrations — the onboarding queue.
-router.get('/admin/registrations', requireAuth, requirePlatformOwner, listRegistrations);
-router.get('/admin/registrations/:id', requireAuth, requirePlatformOwner, getRegistration);
+router.get('/admin/registrations', requireAuth, requirePlatformMenu('onboarding'), listRegistrations);
+router.get('/admin/registrations/:id', requireAuth, requirePlatformMenu('onboarding'), getRegistration);
 
 // Discount coupons & company offers. Every mutation writes a PlatformAuditLog row.
 // Sales/BD can view and create company-based offers; owner retains full management.
-router.get('/admin/coupons/pricing-settings', requireAuth, requirePlatformStaff, getPricingSettings);
-router.get('/admin/coupons', requireAuth, requirePlatformStaff, list);
-router.post('/admin/coupons', requireAuth, requirePlatformStaff, create);
-router.get('/admin/coupons/:id', requireAuth, requirePlatformStaff, get);
-router.patch('/admin/coupons/:id', requireAuth, requirePlatformStaff, update);
-router.post('/admin/coupons/:id/mark-used', requireAuth, requirePlatformStaff, markUsed);
+router.get('/admin/coupons/pricing-settings', requireAuth, requirePlatformMenu('bdm_coupons'), getPricingSettings);
+router.get('/admin/coupons', requireAuth, requirePlatformMenu('bdm_coupons'), list);
+router.post('/admin/coupons', requireAuth, requirePlatformMenu('bdm_coupons'), create);
+router.get('/admin/coupons/:id', requireAuth, requirePlatformMenu('bdm_coupons'), get);
+router.patch('/admin/coupons/:id', requireAuth, requirePlatformMenu('bdm_coupons'), update);
+router.post('/admin/coupons/:id/mark-used', requireAuth, requirePlatformMenu('bdm_coupons'), markUsed);
 // DELETE deactivates (the row must survive so past redemptions still resolve).
 // /permanent removes it outright, and refuses once a coupon has been used.
 router.delete('/admin/coupons/:id', requireAuth, requirePlatformOwner, remove);

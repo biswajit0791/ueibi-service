@@ -23,6 +23,8 @@ import {
   disable2FA,
 } from '../services/login2fa.service.js';
 import { getRegistrationConfig } from '../services/registrationConfig.service.js';
+import { getUserPlatformPermissions } from '../services/platformPermissions.service.js';
+import { isPlatformUser } from '../lib/roles.js';
 
 export async function login(req, res, next) {
   try {
@@ -122,6 +124,15 @@ export async function login(req, res, next) {
       // Fallback
     }
 
+    let platformPermissions = null;
+    if (isPlatformUser(user.role)) {
+      try {
+        platformPermissions = await getUserPlatformPermissions(user.id, user.role);
+      } catch (e) {
+        // Fallback
+      }
+    }
+
     const token = signToken({
       userId: user.id,
       email: user.email,
@@ -148,6 +159,7 @@ export async function login(req, res, next) {
         role: user.role,
         capabilities: userCapabilities,
         effectivePermissions: effectiveAccess?.effectivePermissions || null,
+        platformPermissions,
         dataScope: effectiveAccess?.dataScope || null,
         accessProfile: effectiveAccess?.user?.accessProfile || null,
         status: user.status,
@@ -232,6 +244,15 @@ export async function me(req, res, next) {
       // Fallback
     }
 
+    let platformPermissions = null;
+    if (isPlatformUser(user.role)) {
+      try {
+        platformPermissions = await getUserPlatformPermissions(user.id, user.role);
+      } catch (e) {
+        // Fallback
+      }
+    }
+
     res.json({
       user: {
         id: user.id,
@@ -240,6 +261,7 @@ export async function me(req, res, next) {
         role: user.role,
         capabilities: userCapabilities,
         effectivePermissions: effectiveAccess?.effectivePermissions || null,
+        platformPermissions,
         dataScope: effectiveAccess?.dataScope || null,
         accessProfile: effectiveAccess?.user?.accessProfile || null,
         status: user.status,
@@ -488,6 +510,12 @@ export async function verifyLoginOtp(req, res, next) {
       maxAge: 24 * 60 * 60 * 1000, // 24 hours
       path: '/',
     });
+
+    if (result.user && isPlatformUser(result.user.role)) {
+      try {
+        result.user.platformPermissions = await getUserPlatformPermissions(result.user.id, result.user.role);
+      } catch (e) {}
+    }
 
     return res.json({
       token: result.token,

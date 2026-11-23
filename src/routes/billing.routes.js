@@ -53,7 +53,7 @@ import {
   archivePromotion,
 } from '../controllers/promotion.controller.js';
 import { requireAuth } from '../middleware/auth.js';
-import { requirePlatformOwner, requirePlatformStaff } from '../middleware/rbac.js';
+import { requirePlatformOwner, requirePlatformStaff, requirePlatformMenu } from '../middleware/rbac.js';
 
 /**
  * Billing routes — packages, subscriptions, invoices, payments and refunds.
@@ -70,21 +70,19 @@ const router = Router();
 // ── Plans & Packages ────────────────────────────────────────────────────────
 // DELETE is permanent and refused once a package has been sold; a sold package
 // is deactivated via PATCH { active: false } instead.
-// Platform Sales/BD (requirePlatformStaff) may read packages, companies' terms and
-// invoices, start or renew a term with a coupon, and draft an invoice. Issuing,
-// voiding, sending, payments, refunds and all configuration stay owner-only.
-router.get('/platform/packages', requireAuth, requirePlatformStaff, listPackages);
+// Internal staff with packages permission may read packages.
+router.get('/platform/packages', requireAuth, requirePlatformMenu('packages'), listPackages);
 router.post('/platform/packages', requireAuth, requirePlatformOwner, createPackage);
-router.get('/platform/packages/:id', requireAuth, requirePlatformStaff, getPackage);
+router.get('/platform/packages/:id', requireAuth, requirePlatformMenu('packages'), getPackage);
 router.patch('/platform/packages/:id', requireAuth, requirePlatformOwner, updatePackage);
 router.delete('/platform/packages/:id', requireAuth, requirePlatformOwner, deletePackage);
 
 // ── Invoices, payments and refunds ──────────────────────────────────────────
 // The invoice number is allocated at ISSUE, not creation, so an abandoned draft
 // never leaves a gap in the GST series. A voided invoice keeps its number.
-router.get('/platform/invoices', requireAuth, requirePlatformStaff, listInvoices);
-router.post('/platform/invoices', requireAuth, requirePlatformStaff, createInvoice);
-router.get('/platform/invoices/:id', requireAuth, requirePlatformStaff, getInvoice);
+router.get('/platform/invoices', requireAuth, requirePlatformMenu('invoices'), listInvoices);
+router.post('/platform/invoices', requireAuth, requirePlatformMenu('invoices'), createInvoice);
+router.get('/platform/invoices/:id', requireAuth, requirePlatformMenu('invoices'), getInvoice);
 router.post('/platform/invoices/:id/issue', requireAuth, requirePlatformOwner, issueInvoice);
 router.post('/platform/invoices/:id/void', requireAuth, requirePlatformOwner, voidInvoice);
 router.post('/platform/invoices/:id/send', requireAuth, requirePlatformOwner, sendInvoice);
@@ -104,20 +102,20 @@ router.post('/platform/subscriptions/run-lifecycle-check', requireAuth, requireP
     res.json({ message: 'Subscription lifecycle check executed successfully', summary });
   } catch (err) { next(err); }
 });
-router.get('/platform/subscriptions/renewal-experience', requireAuth, requirePlatformStaff, getRenewalExperience);
-router.get('/platform/subscriptions', requireAuth, requirePlatformStaff, listSubscriptions);
-router.get('/platform/subscriptions/:id', requireAuth, requirePlatformStaff, getSubscription);
-router.post('/platform/tenants/:id/subscription', requireAuth, requirePlatformStaff, startSubscription);
-router.post('/platform/subscriptions/:id/calculate-renewal', requireAuth, requirePlatformStaff, calculateRenewal);
-router.post('/platform/subscriptions/:id/renew', requireAuth, requirePlatformStaff, renewSubscription);
+router.get('/platform/subscriptions/renewal-experience', requireAuth, requirePlatformMenu('renewal'), getRenewalExperience);
+router.get('/platform/subscriptions', requireAuth, requirePlatformMenu('renewal'), listSubscriptions);
+router.get('/platform/subscriptions/:id', requireAuth, requirePlatformMenu('renewal'), getSubscription);
+router.post('/platform/tenants/:id/subscription', requireAuth, requirePlatformMenu('renewal'), startSubscription);
+router.post('/platform/subscriptions/:id/calculate-renewal', requireAuth, requirePlatformMenu('renewal'), calculateRenewal);
+router.post('/platform/subscriptions/:id/renew', requireAuth, requirePlatformMenu('renewal'), renewSubscription);
 router.post('/platform/subscriptions/:id/cancel', requireAuth, requirePlatformOwner, cancelSubscription);
 
 // ── Revenue ─────────────────────────────────────────────────────────────────
 // Every figure comes from Invoice/Payment/Refund rows. No MRR: nothing recurs
 // by itself, so a monthly recurring figure would be invented.
-router.get('/platform/revenue', requireAuth, requirePlatformOwner, getRevenue);
-router.get('/platform/revenue/export', requireAuth, requirePlatformOwner, exportRevenueReport);
-router.get('/platform/coupons/performance', requireAuth, requirePlatformOwner, getCouponPerformance);
+router.get('/platform/revenue', requireAuth, requirePlatformMenu('revenue'), getRevenue);
+router.get('/platform/revenue/export', requireAuth, requirePlatformMenu('revenue'), exportRevenueReport);
+router.get('/platform/coupons/performance', requireAuth, requirePlatformMenu('revenue'), getCouponPerformance);
 
 // ── Invoice templates ───────────────────────────────────────────────────────
 // The printed invoice, authored rather than hardcoded. A published version is
@@ -128,9 +126,9 @@ router.get('/platform/coupons/performance', requireAuth, requirePlatformOwner, g
 // swallowed as a slug.
 router.get('/platform/invoice-templates/tokens', requireAuth, requirePlatformOwner, getTemplateTokens);
 router.post('/platform/invoice-templates/preview', requireAuth, requirePlatformOwner, previewTemplate);
-router.get('/platform/invoice-templates', requireAuth, requirePlatformOwner, listTemplates);
+router.get('/platform/invoice-templates', requireAuth, requirePlatformMenu('invoice_design'), listTemplates);
 router.post('/platform/invoice-templates', requireAuth, requirePlatformOwner, createTemplate);
-router.get('/platform/invoice-templates/:slug', requireAuth, requirePlatformOwner, getTemplate);
+router.get('/platform/invoice-templates/:slug', requireAuth, requirePlatformMenu('invoice_design'), getTemplate);
 router.patch('/platform/invoice-templates/:slug', requireAuth, requirePlatformOwner, updateTemplate);
 router.delete('/platform/invoice-templates/:slug', requireAuth, requirePlatformOwner, deleteTemplate);
 router.post('/platform/invoice-templates/:slug/versions', requireAuth, requirePlatformOwner, createTemplateVersion);
@@ -142,15 +140,15 @@ router.post('/platform/invoice-templates/:slug/versions/:versionId/publish', req
 // Numbering, currency, tax defaults and issuer identity. The response always
 // reports what the next invoice number will ACTUALLY be, computed the same way
 // allocation computes it, so the screen cannot disagree with reality.
-router.get('/platform/invoice-settings', requireAuth, requirePlatformOwner, getSettings);
+router.get('/platform/invoice-settings', requireAuth, requirePlatformMenu('invoice_settings'), getSettings);
 router.put('/platform/invoice-settings', requireAuth, requirePlatformOwner, updateSettings);
 
 // ── Promotional Extensions (Buy X Get Y Months Free) ───────────────────────
-router.get('/platform/promotions/analytics', requireAuth, requirePlatformStaff, getPromotionAnalytics);
-router.get('/platform/promotions/eligible-offers', requireAuth, requirePlatformStaff, getEligibleOffers);
-router.get('/platform/promotions/eligible', requireAuth, requirePlatformStaff, getEligiblePromotion);
-router.get('/platform/promotions', requireAuth, requirePlatformStaff, listPromotions);
-router.get('/platform/promotions/:id', requireAuth, requirePlatformStaff, getPromotion);
+router.get('/platform/promotions/analytics', requireAuth, requirePlatformMenu('bdm_coupons'), getPromotionAnalytics);
+router.get('/platform/promotions/eligible-offers', requireAuth, requirePlatformMenu('bdm_coupons'), getEligibleOffers);
+router.get('/platform/promotions/eligible', requireAuth, requirePlatformMenu('bdm_coupons'), getEligiblePromotion);
+router.get('/platform/promotions', requireAuth, requirePlatformMenu('bdm_coupons'), listPromotions);
+router.get('/platform/promotions/:id', requireAuth, requirePlatformMenu('bdm_coupons'), getPromotion);
 router.post('/platform/promotions', requireAuth, requirePlatformOwner, createPromotion);
 router.post('/platform/promotions/:id/duplicate', requireAuth, requirePlatformOwner, duplicatePromotion);
 router.patch('/platform/promotions/:id/archive', requireAuth, requirePlatformOwner, archivePromotion);

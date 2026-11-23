@@ -15,17 +15,33 @@ import { sendMail } from '../lib/mailer.js';
 import { renderInvitationEmail } from '../lib/emailTemplates.js';
 import { issuePasswordResetLink } from '../services/passwordReset.service.js';
 import { recordPlatformAction, PLATFORM_ACTIONS } from '../services/platformAudit.service.js';
+import {
+  PLATFORM_MENUS,
+  ALL_MENU_KEYS,
+  getUserPlatformPermissions,
+  updateUserPlatformPermissions,
+  initializeDefaultPlatformPermissions,
+} from '../services/platformPermissions.service.js';
 
 const INVITE_EXPIRES_HOURS = 72;
 
 const createStaffSchema = z.object({
   name: z.string().trim().min(2, 'Name is required').max(120),
-  email: z.string().trim().toLowerCase().email('A valid email address is required'),
+  email: z.string().trim().toLowerCase().email('A valid personal email address is required'),
+  designation: z.string().trim().max(120).optional(),
 });
 
 const STAFF_SELECT = {
-  id: true, name: true, email: true, role: true, designation: true, status: true,
-  isDeleted: true, lastLoginAt: true, createdAt: true,
+  id: true,
+  name: true,
+  email: true,
+  personalEmail: true,
+  role: true,
+  designation: true,
+  status: true,
+  isDeleted: true,
+  lastLoginAt: true,
+  createdAt: true,
 };
 
 /** Helper to query renewals and compute performance stats for an array of staff IDs */
@@ -181,7 +197,7 @@ async function getStaffRenewalStats(staffIds) {
   return statsMap;
 }
 
-/** GET /platform/staff — Sales/BD accounts enriched with renewal performance metrics. */
+/** GET /platform/staff — Internal Team accounts enriched with menu permissions and renewal metrics. */
 export async function listPlatformStaff(req, res, next) {
   try {
     const staffMembers = await prisma.tenantUser.findMany({
@@ -190,32 +206,49 @@ export async function listPlatformStaff(req, res, next) {
       select: STAFF_SELECT,
     });
 
+    const totalUsers = staffMembers.filter((s) => !s.isDeleted).length;
+    const activeUsers = staffMembers.filter((s) => s.status === 'ACTIVE' && !s.isDeleted).length;
+    const suspendedAccounts = staffMembers.filter((s) => (s.status === 'SUSPENDED' || s.status === 'INACTIVE') || s.isDeleted).length;
+
     const staffIds = staffMembers.map((s) => s.id);
     const statsMap = await getStaffRenewalStats(staffIds);
 
-    const items = staffMembers.map((s) => {
-      const perf = statsMap.get(s.id) || {
-        renewalsCount: 0,
-        renewedSeatsCount: 0,
-        renewedRevenue: 0,
-        totalCouponsAssigned: 0,
-        totalCouponUsage: 0,
-        totalDiscountsProvided: 0,
-        lastRenewalAt: null,
-      };
-      return {
-        ...s,
-        renewalsCount: perf.renewalsCount,
-        renewedSeatsCount: perf.renewedSeatsCount,
-        renewedRevenue: perf.renewedRevenue,
-        totalCouponsAssigned: perf.totalCouponsAssigned,
-        totalCouponUsage: perf.totalCouponUsage,
-        totalDiscountsProvided: perf.totalDiscountsProvided,
-        lastRenewalAt: perf.lastRenewalAt,
-      };
-    });
+    const items = await Promise.all(
+      staffMembers.map(async (s) => {
+        const perf = statsMap.get(s.id) || {
+          renewalsCount: 0,
+          renewedSeatsCount: 0,
+          renewedRevenue: 0,
+          totalCouponsAssigned: 0,
+          totalCouponUsage: 0,
+          totalDiscountsProvided: 0,
+          lastRenewalAt: null,
+        };
+        const permissions = await getUserPlatformPermissions(s.id, s.role);
+        return {
+          ...s,
+          personalEmail: s.personalEmail || s.email,
+          designation: s.designation || 'Internal Team Member',
+          permissions,
+          renewalsCount: perf.renewalsCount,
+          renewedSeatsCount: perf.renewedSeatsCount,
+          renewedRevenue: perf.renewedRevenue,
+          totalCouponsAssigned: perf.totalCouponsAssigned,
+          totalCouponUsage: perf.totalCouponUsage,
+          totalDiscountsProvided: perf.totalDiscountsProvided,
+          lastRenewalAt: perf.lastRenewalAt,
+        };
+      })
+    );
 
-    res.json({ items });
+    res.json({
+      items,
+      summary: {
+        totalUsers,
+        activeUsers,
+        suspendedAccounts,
+      },
+    });
   } catch (err) {
     next(err);
   }
@@ -344,14 +377,15 @@ export async function getStaffRenewalHistory(req, res, next) {
   }
 }
 
-/** POST /platform/staff — create a Sales/BD user and email them a set-password link. */
+/** POST /platform/staff — create an Internal Team user and email them a set-password link. */
 export async function createPlatformStaff(req, res, next) {
   try {
     const parsed = createStaffSchema.safeParse(req.body || {});
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
-    const { name, email } = parsed.data;
+    const { name, email, designation } = parsed.data;
+    const normalizedEmail = email.trim().toLowerCase();
 
     const platformTenant = await prisma.tenant.findFirst({ where: { isPlatform: true }, select: { id: true, companyName: true } });
     if (!platformTenant) {
@@ -359,7 +393,12 @@ export async function createPlatformStaff(req, res, next) {
     }
 
     const existing = await prisma.tenantUser.findFirst({
-      where: { email: { equals: email, mode: 'insensitive' } },
+      where: {
+        OR: [
+          { email: { equals: normalizedEmail, mode: 'insensitive' } },
+          { personalEmail: { equals: normalizedEmail, mode: 'insensitive' } },
+        ],
+      },
       select: { id: true },
     });
     if (existing) {
@@ -373,10 +412,12 @@ export async function createPlatformStaff(req, res, next) {
       const user = await tx.tenantUser.create({
         data: {
           tenantId: platformTenant.id,
-          name,
-          email,
+          name: name.trim(),
+          email: normalizedEmail,
+          personalEmail: normalizedEmail,
           passwordHash,
           role: 'PLATFORM_SALES',
+          designation: designation?.trim() || 'Internal Team Member',
           status: 'ACTIVE',
           mustChangePassword: false,
         },
@@ -385,25 +426,34 @@ export async function createPlatformStaff(req, res, next) {
       await recordPlatformAction({
         tx,
         req,
-        action: PLATFORM_ACTIONS.STAFF_CREATED,
+        action: PLATFORM_ACTIONS.STAFF_CREATED || 'STAFF_CREATED',
         targetType: 'USER',
         targetId: user.id,
-        afterValue: { email, role: 'PLATFORM_SALES' },
+        afterValue: { email: normalizedEmail, role: 'PLATFORM_SALES' },
       });
       return user;
     });
+
+    // Initialize default menu permissions for the new internal staff member
+    await initializeDefaultPlatformPermissions(staff.id);
 
     const { resetUrl } = await issuePasswordResetLink(staff.id, { expiresMinutes: INVITE_EXPIRES_HOURS * 60 });
     const { html, text } = renderInvitationEmail({
       setupUrl: resetUrl,
       expiresHours: INVITE_EXPIRES_HOURS,
       name,
-      companyName: `${platformTenant.companyName} (Sales)`,
-      email,
+      companyName: `${platformTenant.companyName} (Internal Team)`,
+      email: normalizedEmail,
     });
     let inviteSent = true;
     try {
-      await sendMail({ to: email, subject: 'You have been added as a UEIBI Sales user', html, text, event: 'PLATFORM_STAFF_INVITE' });
+      await sendMail({
+        to: normalizedEmail,
+        subject: 'You have been added to the Karyam Internal Team',
+        html,
+        text,
+        event: 'PLATFORM_STAFF_INVITE',
+      });
     } catch (mailErr) {
       inviteSent = false;
       console.error('[PLATFORM_STAFF] Invite email failed:', mailErr.message);
@@ -411,10 +461,92 @@ export async function createPlatformStaff(req, res, next) {
 
     res.status(201).json({
       message: inviteSent
-        ? `${name} has been added as a Sales user. A set-password link has been emailed to ${email}.`
-        : `${name} has been added, but the invite email could not be sent. Use "Force reset" to send a new link.`,
+        ? `${name} has been added to the Internal Team. A set-password link has been emailed to ${normalizedEmail}.`
+        : `${name} has been added to the Internal Team, but the invite email could not be sent. Use "Force reset" to send a new link.`,
       staff,
       inviteSent,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /platform/staff/:id/permissions — Fetch an internal staff member's menu permissions.
+ * Platform Owner only.
+ */
+export async function getStaffPermissions(req, res, next) {
+  try {
+    const { id } = req.params;
+    const staff = await prisma.tenantUser.findFirst({
+      where: { id, role: 'PLATFORM_SALES' },
+      select: { id: true, name: true, email: true, personalEmail: true, designation: true, role: true },
+    });
+
+    if (!staff) {
+      return res.status(404).json({ error: 'Internal team member not found' });
+    }
+
+    const permissions = await getUserPlatformPermissions(id, staff.role);
+
+    res.json({
+      user: {
+        ...staff,
+        personalEmail: staff.personalEmail || staff.email,
+        designation: staff.designation || 'Internal Team Member',
+      },
+      permissions,
+      menus: PLATFORM_MENUS,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * PUT /platform/staff/:id/permissions — Update an internal staff member's menu permissions.
+ * Platform Owner only.
+ */
+export async function updateStaffPermissions(req, res, next) {
+  try {
+    const { id } = req.params;
+    const permissions = req.body?.permissions;
+    if (!permissions || typeof permissions !== 'object') {
+      return res.status(400).json({ error: 'permissions object is required' });
+    }
+
+    const updatedPermissions = await updateUserPlatformPermissions(id, permissions);
+
+    await recordPlatformAction({
+      req,
+      action: 'PLATFORM_STAFF_PERMISSIONS_UPDATED',
+      targetType: 'USER',
+      targetId: id,
+      afterValue: { permissions: updatedPermissions },
+    });
+
+    res.json({
+      message: 'Individual menu permissions updated successfully.',
+      permissions: updatedPermissions,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /platform/my-permissions — Fetch current logged-in platform user's effective permissions.
+ */
+export async function getMyPlatformPermissions(req, res, next) {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+    const permissions = await getUserPlatformPermissions(req.user.id, req.user.role);
+    res.json({
+      isOwner: String(req.user.role || '').toUpperCase() === 'PLATFORM_OWNER',
+      permissions,
+      menus: PLATFORM_MENUS,
     });
   } catch (err) {
     next(err);
