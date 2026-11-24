@@ -1160,7 +1160,7 @@ export async function calculateRenewal(req, res, next) {
         couponError = 'Coupon is inactive';
       } else if (coupon.expiresAt && new Date(coupon.expiresAt).getTime() < Date.now()) {
         couponError = 'Coupon has expired';
-      } else if (coupon.usageLimit != null && coupon.timesUsed >= coupon.usageLimit) {
+      } else if (coupon.companyName && coupon.usageLimit != null && coupon.timesUsed >= coupon.usageLimit) {
         couponError = 'Coupon usage limit reached';
       }
     }

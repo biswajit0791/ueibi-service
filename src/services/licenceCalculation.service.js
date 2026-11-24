@@ -138,13 +138,18 @@ export async function computeRegistrationPricing(params = {}, options = {}) {
     gstRate: effectiveGstRate,
   });
 
+  const couponYears = Number(options.coupon?.subscriptionYears) > 0
+    ? Number(options.coupon.subscriptionYears)
+    : 1;
+  const basePaidMonths = options.termMonths || (couponYears * 12);
+
   // Resolve promotional extension benefits (Buy X Get Y Free)
   const startsAt = options.startsAt ? new Date(options.startsAt) : new Date();
   let promo = null;
   try {
     promo = await findEligiblePromotion({
       packageId: options.packageId || null,
-      termMonths: options.termMonths || 12,
+      termMonths: basePaidMonths,
       seatCount: totalLicenses,
       context: 'NEW_REGISTRATIONS',
       coupon: options.coupon || null,
@@ -160,17 +165,18 @@ export async function computeRegistrationPricing(params = {}, options = {}) {
     if (promo) {
       promo = {
         ...promo,
+        paidMonths: basePaidMonths,
         freeMonths: (promo.freeMonths || 0) + couponPromoMonths,
-        totalMonths: (promo.paidMonths || 12) + (promo.freeMonths || 0) + couponPromoMonths,
+        totalMonths: basePaidMonths + (promo.freeMonths || 0) + couponPromoMonths,
       };
     } else {
       promo = {
         id: options.coupon.id,
         name: `BDM Offer Promo (+${couponPromoMonths} Month${couponPromoMonths > 1 ? 's' : ''})`,
         code: options.coupon.code,
-        paidMonths: 12,
+        paidMonths: basePaidMonths,
         freeMonths: couponPromoMonths,
-        totalMonths: 12 + couponPromoMonths,
+        totalMonths: basePaidMonths + couponPromoMonths,
         badgeText: `+${couponPromoMonths} MONTHS PROMO FREE`,
       };
     }
@@ -178,7 +184,7 @@ export async function computeRegistrationPricing(params = {}, options = {}) {
 
   const ext = calculateSubscriptionExtension({
     startsAt,
-    termMonths: options.termMonths || 12,
+    termMonths: basePaidMonths,
     promotion: promo,
   });
 
@@ -207,3 +213,51 @@ export async function computeRegistrationPricing(params = {}, options = {}) {
     promoCode: ext.promotion?.code || null,
   };
 }
+
+/**
+ * Dynamically validates requested license quantity against authoritative Billing Settings.
+ * Single source of truth: MIN_LICENSE_QUANTITY and MAX_LICENSE_QUANTITY in registration configs.
+ *
+ * @param {number|string} quantity
+ * @returns {Promise<{valid: boolean, error?: string, code?: string, totalLicenses?: number, minQuantity: number, maxQuantity: number}>}
+ */
+export async function validateLicenseQuantity(quantity) {
+  const [minQtyConfig, maxQtyConfig] = await Promise.all([
+    getRegistrationConfig('MIN_LICENSE_QUANTITY', 1),
+    getRegistrationConfig('MAX_LICENSE_QUANTITY', 10000),
+  ]);
+  const minQuantity = Math.max(1, parseInt(minQtyConfig, 10) || 1);
+  const maxQuantity = Math.max(minQuantity, parseInt(maxQtyConfig, 10) || 10000);
+  const qty = parseInt(quantity, 10);
+
+  if (Number.isNaN(qty) || qty < minQuantity) {
+    const errorMsg = minQuantity === 1
+      ? 'Minimum 1 employee license is required.'
+      : `Minimum ${minQuantity} employee licenses are required.`;
+    return {
+      valid: false,
+      error: errorMsg,
+      code: 'MIN_LICENSE_QUANTITY_NOT_MET',
+      minQuantity,
+      maxQuantity,
+    };
+  }
+
+  if (qty > maxQuantity) {
+    return {
+      valid: false,
+      error: `Maximum ${maxQuantity} employee licenses are allowed.`,
+      code: 'MAX_LICENSE_QUANTITY_EXCEEDED',
+      minQuantity,
+      maxQuantity,
+    };
+  }
+
+  return {
+    valid: true,
+    totalLicenses: qty,
+    minQuantity,
+    maxQuantity,
+  };
+}
+

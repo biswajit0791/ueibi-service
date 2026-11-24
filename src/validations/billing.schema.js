@@ -64,8 +64,18 @@ export const invoiceQuerySchema = z.object({
   search: z.string().max(200).optional(),
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
+  fromDate: z.string().optional(),
+  toDate: z.string().optional(),
+  startDate: z.string().optional(),
+  endDate: z.string().optional(),
+  bdm: z.string().max(100).optional(),
+  city: z.string().max(100).optional(),
+  paymentMode: z.string().max(50).optional(),
+  mop: z.string().max(50).optional(),
+  sortBy: z.string().max(50).optional(),
+  sortOrder: z.enum(['asc', 'desc']).optional().default('desc'),
   page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(50),
+  limit: z.coerce.number().int().min(1).max(1000).default(50),
 });
 
 export const invoiceCreateSchema = z.object({

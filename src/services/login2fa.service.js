@@ -9,6 +9,7 @@ import { loadCapabilities } from '../lib/capabilities.js';
 import { signToken } from '../lib/jwt.js';
 import { ACCOUNT_EXITED } from '../lib/accountAccess.js';
 import { tenantAccessDenial } from '../lib/tenantAccess.js';
+import { recordLoginSession } from './sessionTracking.service.js';
 
 export function maskEmail(email) {
   if (!email || typeof email !== 'string') return '';
@@ -213,7 +214,7 @@ export async function initiateLoginChallenge({ user, req }) {
 /**
  * Verifies a login 2FA OTP and generates session tokens upon success.
  */
-export async function verifyLoginChallenge({ challengeId, otp }) {
+export async function verifyLoginChallenge({ challengeId, otp, req }) {
   if (!challengeId || typeof challengeId !== 'string') {
     throw new Error('Verification challenge ID is required.');
   }
@@ -320,6 +321,13 @@ export async function verifyLoginChallenge({ challengeId, otp }) {
     throw err;
   }
 
+  if (user.isBlocked) {
+    const err = new Error('Your account has been blocked by the platform administrator.');
+    err.status = 403;
+    err.code = 'USER_BLOCKED';
+    throw err;
+  }
+
   if (user.tenant) {
     const tenantDenial = tenantAccessDenial(user.tenant.status);
     if (tenantDenial) {
@@ -350,12 +358,21 @@ export async function verifyLoginChallenge({ challengeId, otp }) {
   }
 
   const userCapabilities = await loadCapabilities(user.id);
+
+  let sessionRecord = null;
+  try {
+    sessionRecord = await recordLoginSession({ user, req, loginType: 'EMAIL_OTP_2FA' });
+  } catch (sErr) {
+    console.warn('[AUTH/2FA] Session record warning:', sErr.message);
+  }
+
   const token = signToken({
     userId: user.id,
     email: user.email,
     role: user.role,
     name: user.name,
     tenantId: user.tenantId,
+    sessionId: sessionRecord?.session?.id || null,
   });
 
   return {

@@ -46,6 +46,7 @@ import companySettingsRoutes from './routes/companySettings.routes.js';
 import documentTemplateRoutes from './routes/documentTemplate.routes.js';
 import roleHierarchyRoutes from './routes/roleHierarchy.routes.js';
 import followerRoutes from './routes/follower.routes.js';
+import masterDataRoutes from './routes/masterData.routes.js';
 import { notFound } from './middleware/notFound.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
@@ -171,6 +172,8 @@ apiRouter.use(companySettingsRoutes);
 apiRouter.use(documentTemplateRoutes);
 apiRouter.use(roleHierarchyRoutes);
 apiRouter.use(followerRoutes);
+apiRouter.use('/platform/master-data', masterDataRoutes);
+apiRouter.use('/admin/master-data', masterDataRoutes);
 if (env.nodeEnv !== 'production') {
   apiRouter.use(devRoutes);
 }

@@ -60,6 +60,16 @@ import {
   updateCustomerReview,
   deleteCustomerReview
 } from '../controllers/customerReview.controller.js';
+import {
+  getLoginHistory,
+  getLoginHistoryCompanies,
+  getLoginHistoryUsers,
+  getUserSessionsDetail,
+  terminateUserSession,
+  blockPlatformUser,
+  unblockPlatformUser,
+  exportLoginHistoryCsv,
+} from '../controllers/loginHistory.controller.js';
 
 const router = Router();
 
@@ -108,6 +118,16 @@ router.get('/platform/users/:id', requireAuth, requirePlatformMenu('users'), get
 router.post('/platform/users/:id/deactivate', requireAuth, requirePlatformOwner, deactivatePlatformUser);
 router.post('/platform/users/:id/reactivate', requireAuth, requirePlatformOwner, reactivatePlatformUser);
 router.post('/platform/users/:id/force-reset', requireAuth, requirePlatformOwner, forceResetPlatformUser);
+
+// Login History & Usage Management
+router.get('/platform/login-history', requireAuth, requirePlatformMenu('login_history'), getLoginHistory);
+router.get('/platform/login-history/companies', requireAuth, requirePlatformMenu('login_history'), getLoginHistoryCompanies);
+router.get('/platform/login-history/users', requireAuth, requirePlatformMenu('login_history'), getLoginHistoryUsers);
+router.get('/platform/login-history/users/:userId', requireAuth, requirePlatformMenu('login_history'), getUserSessionsDetail);
+router.post('/platform/login-history/sessions/:sessionId/terminate', requireAuth, requirePlatformOwner, terminateUserSession);
+router.post('/platform/login-history/users/:userId/block', requireAuth, requirePlatformOwner, blockPlatformUser);
+router.post('/platform/login-history/users/:userId/unblock', requireAuth, requirePlatformOwner, unblockPlatformUser);
+router.get('/platform/login-history/export', requireAuth, requirePlatformMenu('login_history'), exportLoginHistoryCsv);
 
 // Onboarding queue and verification review
 router.get('/platform/registrations', requireAuth, requirePlatformMenu('onboarding'), listOnboarding);

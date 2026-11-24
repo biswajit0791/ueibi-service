@@ -18,23 +18,27 @@ import { renderHrActivatedEmail } from '../lib/emailTemplates.js';
  */
 async function commitCouponUsage(tx, coupon, registrationId = null, tenantId = null, invoiceId = null, discountAmount = 0) {
   if (!coupon) return;
+  const isCompanyOffer = Boolean(coupon.companyName);
   const where = {
     id: coupon.id,
     active: true,
   };
-  if (coupon.usageLimit != null) {
+  if (isCompanyOffer && coupon.usageLimit != null) {
     where.timesUsed = { lt: coupon.usageLimit };
+  }
+  const data = {
+    timesUsed: { increment: 1 },
+    usedAt: new Date(),
+    usedCompanyId: tenantId || registrationId || null,
+    paymentReference: invoiceId || null,
+    activationReference: registrationId || tenantId || null,
+  };
+  if (isCompanyOffer) {
+    data.status = 'USED';
   }
   const updated = await tx.coupon.updateMany({
     where,
-    data: {
-      timesUsed: { increment: 1 },
-      status: 'USED',
-      usedAt: new Date(),
-      usedCompanyId: tenantId || registrationId || null,
-      paymentReference: invoiceId || null,
-      activationReference: registrationId || tenantId || null,
-    },
+    data,
   });
 
   if (updated.count === 0) {

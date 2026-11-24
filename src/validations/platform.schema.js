@@ -19,8 +19,14 @@ export const suspendTenantSchema = z.object({
 export const platformAuditQuerySchema = z.object({
   action: z.string().max(60).optional(),
   tenantId: z.string().max(60).optional(),
+  menu: z.string().max(60).optional(),
+  search: z.string().max(200).optional(),
+  startDate: z.string().optional(),
+  endDate: z.string().optional(),
+  fromDate: z.string().optional(),
+  toDate: z.string().optional(),
   page: z.coerce.number().int().min(1).optional().default(1),
-  limit: z.coerce.number().int().min(1).max(100).optional().default(50),
+  limit: z.coerce.number().int().min(1).max(1000).optional().default(50),
 });
 
 export const tenantLifecycleSchema = z.object({

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { prisma } from '../../src/lib/prisma.js';
 import { normalizeCompanyName, couponValidationError, computePricing } from '../../src/lib/pricing.js';
 import { getRegistrationConfig, updateRegistrationConfig } from '../../src/services/registrationConfig.service.js';
-import { computeRegistrationPricing, calculateLicenceBreakdown } from '../../src/services/licenceCalculation.service.js';
+import { computeRegistrationPricing, calculateLicenceBreakdown, validateLicenseQuantity } from '../../src/services/licenceCalculation.service.js';
 
 test('Centralized Pricing & Company-Specific Coupon Validation Suite', async (t) => {
   let initialUnitPrice;
@@ -282,6 +282,72 @@ test('Centralized Pricing & Company-Specific Coupon Validation Suite', async (t)
     assert.equal(offerPricing.discountedSubtotal, 54000);
     assert.equal(offerPricing.gstAmount, 9720);
     assert.equal(offerPricing.total, 63720, 'Final payable reflects single authoritative discount applied once');
+  });
+
+  await t.test('6. Dynamic Minimum License Quantity Validation in BDM Coupons', async () => {
+    const originalMin = await getRegistrationConfig('MIN_LICENSE_QUANTITY', 1);
+
+    try {
+      // Set Minimum License Purchase Quantity = 6 (as configured in Billing Settings)
+      await updateRegistrationConfig({
+        key: 'MIN_LICENSE_QUANTITY',
+        value: '6',
+        actor: 'test.admin',
+        reason: 'Test minimum license quantity validation',
+      });
+
+      // 2 licenses -> Blocked
+      const val2 = await validateLicenseQuantity(2);
+      assert.equal(val2.valid, false);
+      assert.equal(val2.error, 'Minimum 6 employee licenses are required.');
+      assert.equal(val2.code, 'MIN_LICENSE_QUANTITY_NOT_MET');
+
+      // 5 licenses -> Blocked
+      const val5 = await validateLicenseQuantity(5);
+      assert.equal(val5.valid, false);
+      assert.equal(val5.error, 'Minimum 6 employee licenses are required.');
+
+      // 6 licenses -> Allowed
+      const val6 = await validateLicenseQuantity(6);
+      assert.equal(val6.valid, true);
+      assert.equal(val6.totalLicenses, 6);
+
+      // 10 licenses -> Allowed
+      const val10 = await validateLicenseQuantity(10);
+      assert.equal(val10.valid, true);
+      assert.equal(val10.totalLicenses, 10);
+
+      // Dynamic change: Platform Owner increases minimum quantity from 6 to 10
+      await updateRegistrationConfig({
+        key: 'MIN_LICENSE_QUANTITY',
+        value: '10',
+        actor: 'test.admin',
+        reason: 'Test dynamic minimum license quantity update to 10',
+      });
+
+      // 6 licenses -> Now Blocked!
+      const val6After = await validateLicenseQuantity(6);
+      assert.equal(val6After.valid, false);
+      assert.equal(val6After.error, 'Minimum 10 employee licenses are required.');
+
+      // 10 licenses -> Allowed
+      const val10After = await validateLicenseQuantity(10);
+      assert.equal(val10After.valid, true);
+      assert.equal(val10After.totalLicenses, 10);
+
+      // Exceeding maximum limit (10001) -> Blocked
+      const valMax = await validateLicenseQuantity(10001);
+      assert.equal(valMax.valid, false);
+      assert.equal(valMax.code, 'MAX_LICENSE_QUANTITY_EXCEEDED');
+    } finally {
+      // Restore original config
+      await updateRegistrationConfig({
+        key: 'MIN_LICENSE_QUANTITY',
+        value: String(originalMin || 6),
+        actor: 'test.cleanup',
+        reason: 'Restore original min license quantity after test',
+      });
+    }
   });
 
   // Restore initial price if needed

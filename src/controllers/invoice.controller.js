@@ -43,27 +43,56 @@ import { defaultTemplateVersion } from './invoiceTemplate.controller.js';
 import { sanitizeLegalHtml } from '../lib/sanitizeHtml.js';
 
 /** Decimal columns are Prisma Decimals; the API speaks plain numbers. */
-const money = (inv) => ({
-  ...inv,
-  unitPrice: num(inv.unitPrice),
-  subtotalAmount: num(inv.subtotalAmount),
-  discountAmount: num(inv.discountAmount),
-  gstRate: num(inv.gstRate),
-  gstAmount: num(inv.gstAmount),
-  totalAmount: num(inv.totalAmount),
-  amountPaid: num(inv.amountPaid),
-  amountRefunded: num(inv.amountRefunded),
-});
+const money = (inv) => {
+  const latestPayment = inv.payments?.[0];
+  let mop = '—';
+  if (inv.payments?.some((p) => p.method === 'CHEQUE') || inv.tenant?.registration?.paymentMethod === 'CHEQUE') {
+    mop = 'Cheque';
+  } else if (inv.payments?.length > 0 || inv.tenant?.registration?.paymentMethod) {
+    mop = 'Online';
+  }
+
+  const pDate = inv.paymentDate || latestPayment?.receivedAt || inv.tenant?.registration?.paymentVerifiedAt || null;
+
+  return {
+    ...inv,
+    unitPrice: num(inv.unitPrice),
+    subtotalAmount: num(inv.subtotalAmount),
+    discountAmount: num(inv.discountAmount),
+    gstRate: num(inv.gstRate),
+    gstAmount: num(inv.gstAmount),
+    totalAmount: num(inv.totalAmount),
+    amountPaid: num(inv.amountPaid),
+    amountRefunded: num(inv.amountRefunded),
+    city: inv.city || '—',
+    bdmName: inv.bdmName || '—',
+    mop,
+    paymentDate: pDate,
+    renewalMonths: inv.totalDurationMonths || inv.paidDurationMonths || 12,
+  };
+};
 
 const INVOICE_LIST_SELECT = {
   id: true, invoiceNumber: true, state: true,
-  billToName: true, issuedAt: true, dueAt: true, createdAt: true,
+  billToName: true, billToGstin: true, billToEmail: true,
+  issuedAt: true, dueAt: true, createdAt: true,
   currency: true, quantity: true, totalAmount: true,
   amountPaid: true, amountRefunded: true,
   unitPrice: true, subtotalAmount: true, discountAmount: true,
   gstRate: true, gstAmount: true, couponCode: true,
+  paidDurationMonths: true, freeDurationMonths: true, totalDurationMonths: true,
+  city: true, bdmName: true, paymentDate: true,
   tenantId: true,
-  tenant: { select: { id: true, companyName: true, tenantCode: true } },
+  tenant: {
+    select: {
+      id: true, companyName: true, tenantCode: true,
+      registration: { select: { paymentMethod: true, paymentVerifiedAt: true } },
+    },
+  },
+  payments: {
+    select: { id: true, amount: true, method: true, receivedAt: true, reference: true },
+    orderBy: { receivedAt: 'desc' },
+  },
   subscriptionId: true,
 };
 
@@ -74,43 +103,213 @@ export async function listInvoices(req, res, next) {
     if (!parsed.success) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
-    const { state, tenantId, search, from, to, page, limit } = parsed.data;
+    const {
+      state, tenantId, search, bdm, city, paymentMode, mop,
+      sortBy, sortOrder, page, limit,
+    } = parsed.data;
 
-    const where = {
-      ...(state ? { state } : {}),
-      ...(tenantId ? { tenantId } : {}),
-      ...(from || to
-        ? { createdAt: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } }
-        : {}),
-      ...(search
-        ? {
+    const whereConditions = [];
+
+    if (state) whereConditions.push({ state });
+    if (tenantId) whereConditions.push({ tenantId });
+
+    if (city && city.trim()) {
+      whereConditions.push({ city: { equals: city.trim(), mode: 'insensitive' } });
+    }
+
+    if (bdm && bdm.trim()) {
+      whereConditions.push({ bdmName: { equals: bdm.trim(), mode: 'insensitive' } });
+    }
+
+    const mode = (paymentMode || mop || '').toUpperCase();
+    if (mode === 'CHEQUE') {
+      whereConditions.push({
+        OR: [
+          { payments: { some: { method: 'CHEQUE' } } },
+          { tenant: { registration: { paymentMethod: 'CHEQUE' } } },
+        ],
+      });
+    } else if (mode === 'ONLINE') {
+      whereConditions.push({
+        AND: [
+          {
             OR: [
-              { invoiceNumber: { contains: search, mode: 'insensitive' } },
-              { billToName: { contains: search, mode: 'insensitive' } },
-              { tenant: { companyName: { contains: search, mode: 'insensitive' } } },
+              { payments: { some: { method: { in: ['ONLINE', 'UPI', 'BANK_TRANSFER', 'LEGACY', 'CASH', 'ADJUSTMENT'] } } } },
+              { tenant: { registration: { paymentMethod: 'ONLINE' } } },
             ],
-          }
-        : {}),
-    };
+          },
+          {
+            NOT: {
+              OR: [
+                { payments: { some: { method: 'CHEQUE' } } },
+                { tenant: { registration: { paymentMethod: 'CHEQUE' } } },
+              ],
+            },
+          },
+        ],
+      });
+    }
+
+    // Payment Date filtering (From Date - To Date)
+    const from = parsed.data.fromDate || parsed.data.from || parsed.data.startDate;
+    const to = parsed.data.toDate || parsed.data.to || parsed.data.endDate;
+    let fromTime = null;
+    let toTime = null;
+
+    if (from) {
+      const d = new Date(from);
+      if (!isNaN(d.getTime())) {
+        d.setHours(0, 0, 0, 0);
+        fromTime = d;
+      }
+    }
+    if (to) {
+      const d = new Date(to);
+      if (!isNaN(d.getTime())) {
+        d.setHours(23, 59, 59, 999);
+        toTime = d;
+      }
+    }
+
+    if (fromTime || toTime) {
+      whereConditions.push({
+        OR: [
+          {
+            paymentDate: {
+              ...(fromTime ? { gte: fromTime } : {}),
+              ...(toTime ? { lte: toTime } : {}),
+            },
+          },
+          {
+            payments: {
+              some: {
+                receivedAt: {
+                  ...(fromTime ? { gte: fromTime } : {}),
+                  ...(toTime ? { lte: toTime } : {}),
+                },
+              },
+            },
+          },
+        ],
+      });
+    }
+
+    if (search && search.trim()) {
+      const q = search.trim();
+      whereConditions.push({
+        OR: [
+          { invoiceNumber: { contains: q, mode: 'insensitive' } },
+          { billToName: { contains: q, mode: 'insensitive' } },
+          { billToGstin: { contains: q, mode: 'insensitive' } },
+          { tenant: { companyName: { contains: q, mode: 'insensitive' } } },
+          { city: { contains: q, mode: 'insensitive' } },
+          { bdmName: { contains: q, mode: 'insensitive' } },
+        ],
+      });
+    }
+
+    const where = whereConditions.length === 0
+      ? {}
+      : whereConditions.length === 1
+        ? whereConditions[0]
+        : { AND: whereConditions };
+
+    const orderDir = (sortOrder === 'asc' || sortOrder === 'desc') ? sortOrder : 'desc';
+    let orderBy = [{ issuedAt: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }];
+
+    if (sortBy) {
+      switch (sortBy) {
+        case 'companyName':
+        case 'billToName':
+          orderBy = [{ billToName: orderDir }];
+          break;
+        case 'city':
+          orderBy = [{ city: { sort: orderDir, nulls: 'last' } }, { billToName: 'asc' }];
+          break;
+        case 'bdmName':
+        case 'bdm':
+          orderBy = [{ bdmName: { sort: orderDir, nulls: 'last' } }, { billToName: 'asc' }];
+          break;
+        case 'license':
+        case 'quantity':
+          orderBy = [{ quantity: orderDir }];
+          break;
+        case 'discount':
+        case 'discountAmount':
+          orderBy = [{ discountAmount: orderDir }];
+          break;
+        case 'gst':
+        case 'gstAmount':
+          orderBy = [{ gstAmount: orderDir }];
+          break;
+        case 'amount':
+        case 'totalAmount':
+          orderBy = [{ totalAmount: orderDir }];
+          break;
+        case 'renewalMonths':
+        case 'totalDurationMonths':
+          orderBy = [{ totalDurationMonths: { sort: orderDir, nulls: 'last' } }];
+          break;
+        case 'status':
+        case 'state':
+          orderBy = [{ state: orderDir }];
+          break;
+        case 'paymentDate':
+        case 'date':
+          orderBy = [{ paymentDate: { sort: orderDir, nulls: 'last' } }, { issuedAt: { sort: orderDir, nulls: 'last' } }];
+          break;
+        default:
+          break;
+      }
+    }
 
     const skip = (page - 1) * limit;
-    const [total, rows, agg] = await Promise.all([
+    const [total, rows, agg, citiesFromMaster, bdmUsers, invoiceCities, invoiceBdms] = await Promise.all([
       prisma.invoice.count({ where }),
       prisma.invoice.findMany({
         where,
         select: INVOICE_LIST_SELECT,
-        // Newest first, but drafts have no issuedAt so createdAt is the tiebreak.
-        orderBy: [{ issuedAt: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
+        orderBy,
         skip,
         take: limit,
       }),
-      // Totals cover the whole filtered set, not just this page — a page total
-      // that disagrees with the filter is worse than no total.
+      // Totals cover the whole filtered set, not just this page
       prisma.invoice.aggregate({
         where: { ...where, state: { not: 'VOID' } },
         _sum: { totalAmount: true, amountPaid: true, amountRefunded: true },
       }),
+      prisma.cityMaster.findMany({
+        where: { isActive: true },
+        select: { name: true },
+        orderBy: { name: 'asc' },
+      }).catch(() => []),
+      prisma.tenantUser.findMany({
+        where: { role: 'PLATFORM_SALES' },
+        select: { name: true },
+        orderBy: { name: 'asc' },
+      }).catch(() => []),
+      prisma.invoice.findMany({
+        where: { NOT: { city: null } },
+        select: { city: true },
+        distinct: ['city'],
+      }).catch(() => []),
+      prisma.invoice.findMany({
+        where: { NOT: { bdmName: null } },
+        select: { bdmName: true },
+        distinct: ['bdmName'],
+      }).catch(() => []),
     ]);
+
+    const distinctCities = [...new Set([
+      ...citiesFromMaster.map((c) => c.name),
+      ...invoiceCities.map((i) => i.city),
+    ].filter(Boolean))].sort((a, b) => a.localeCompare(b));
+
+    const distinctBdms = [...new Set([
+      'Platform Owner',
+      ...bdmUsers.map((u) => u.name),
+      ...invoiceBdms.map((i) => i.bdmName),
+    ].filter(Boolean))].sort((a, b) => a.localeCompare(b));
 
     const invoiced = round2(num(agg._sum.totalAmount));
     const collected = round2(num(agg._sum.amountPaid));
@@ -125,6 +324,11 @@ export async function listInvoices(req, res, next) {
         outstanding: round2(Math.max(0, invoiced - collected)),
         net: round2(collected - refunded),
         currency: 'INR',
+      },
+      filterOptions: {
+        cities: distinctCities,
+        bdms: distinctBdms,
+        paymentModes: ['Online', 'Cheque'],
       },
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) || 1 },
     });

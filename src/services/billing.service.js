@@ -173,18 +173,24 @@ export function stateForPayment(invoice, paidAfter) {
  * two disagreeing.
  */
 export async function syncInvoiceTotals(tx, invoiceId) {
-  const [invoice, paidAgg, refundAgg] = await Promise.all([
+  const [invoice, paidAgg, refundAgg, latestPayment] = await Promise.all([
     tx.invoice.findUnique({
       where: { id: invoiceId },
       select: { id: true, state: true, totalAmount: true },
     }),
     tx.payment.aggregate({ where: { invoiceId }, _sum: { amount: true } }),
     tx.refund.aggregate({ where: { invoiceId, state: 'RECORDED' }, _sum: { amount: true } }),
+    tx.payment.findFirst({
+      where: { invoiceId },
+      orderBy: { receivedAt: 'desc' },
+      select: { receivedAt: true },
+    }),
   ]);
   if (!invoice) return null;
 
   const amountPaid = round2(num(paidAgg._sum.amount));
   const amountRefunded = round2(num(refundAgg._sum.amount));
+  const paymentDate = latestPayment?.receivedAt || null;
 
   return tx.invoice.update({
     where: { id: invoiceId },
@@ -192,10 +198,12 @@ export async function syncInvoiceTotals(tx, invoiceId) {
       amountPaid,
       amountRefunded,
       state: stateForPayment(invoice, amountPaid),
+      paymentDate,
     },
     select: {
       id: true, invoiceNumber: true, state: true,
       totalAmount: true, amountPaid: true, amountRefunded: true,
+      paymentDate: true,
     },
   });
 }

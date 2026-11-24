@@ -10,8 +10,11 @@ export function computeDiscount(subtotal, coupon) {
   return round2(Math.min(Number(coupon.discountValue), subtotal));
 }
 
-export function computePricing({ quantity, unitPrice, coupon, gstRate }) {
-  const subtotal = round2(quantity * unitPrice);
+export function computePricing({ quantity, unitPrice, coupon, gstRate, years = 1 }) {
+  const effectiveYears = (Number(coupon?.subscriptionYears) > 0)
+    ? Number(coupon.subscriptionYears)
+    : (Number(years) > 0 ? Number(years) : 1);
+  const subtotal = round2(quantity * unitPrice * effectiveYears);
   const discountAmount = computeDiscount(subtotal, coupon);
   const discountedSubtotal = round2(subtotal - discountAmount);
   const gstAmount = round2(discountedSubtotal * gstRate);
@@ -19,6 +22,7 @@ export function computePricing({ quantity, unitPrice, coupon, gstRate }) {
 
   return {
     unitPrice: round2(unitPrice),
+    years: effectiveYears,
     subtotal,
     discountAmount,
     discountedSubtotal,
@@ -38,11 +42,12 @@ export function normalizeCompanyName(name) {
 export function couponValidationError(coupon, context = {}) {
   if (!coupon) return 'Coupon not found';
   if (!coupon.active) return 'Coupon is inactive';
-  if (coupon.status === 'USED') return 'Coupon has already been used';
+  if (coupon.companyName && coupon.status === 'USED') return 'Coupon has already been used';
   if (coupon.expiresAt && new Date(coupon.expiresAt).getTime() < Date.now()) {
     return 'Coupon has expired';
   }
-  if (coupon.usageLimit != null && coupon.timesUsed >= coupon.usageLimit) {
+  // Generic coupons have unlimited redemptions. Usage limits apply only to Company Offers.
+  if (coupon.companyName && coupon.usageLimit != null && coupon.timesUsed >= coupon.usageLimit) {
     return 'Coupon usage limit reached';
   }
 
