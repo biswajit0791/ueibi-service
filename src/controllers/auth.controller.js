@@ -25,6 +25,9 @@ import {
 import { getRegistrationConfig } from '../services/registrationConfig.service.js';
 import { getUserPlatformPermissions } from '../services/platformPermissions.service.js';
 import { isPlatformUser } from '../lib/roles.js';
+import { recordLoginSession, recordUserLogout } from '../services/sessionTracking.service.js';
+import { parseCookies } from '../lib/cookies.js';
+import { verifyToken } from '../lib/jwt.js';
 
 export async function login(req, res, next) {
   try {
@@ -64,6 +67,16 @@ export async function login(req, res, next) {
     if (user.status === 'EXITED' || user.isDeleted) {
       console.warn(`[AUTH] 403: Attempted login by exited/inactive user "${cleanEmail}"`);
       return res.status(403).json({ error: ACCOUNT_EXITED.message, code: ACCOUNT_EXITED.code });
+    }
+
+    // ── Blocked by Platform Owner ─────────────────────────────────────────────
+    if (user.isBlocked) {
+      console.warn(`[AUTH] 403: Attempted login by blocked user "${cleanEmail}"`);
+      return res.status(403).json({
+        error: 'Your account has been blocked by the platform administrator.',
+        code: 'USER_BLOCKED',
+        reason: user.blockedReason || null,
+      });
     }
 
     // ── Suspended company ────────────────────────────────────────────────────
@@ -133,12 +146,20 @@ export async function login(req, res, next) {
       }
     }
 
+    let sessionRecord = null;
+    try {
+      sessionRecord = await recordLoginSession({ user, req, loginType: 'PASSWORD' });
+    } catch (sErr) {
+      console.warn('[AUTH] Session record warning:', sErr.message);
+    }
+
     const token = signToken({
       userId: user.id,
       email: user.email,
       role: user.role,
       name: user.name,
       tenantId: user.tenantId,
+      sessionId: sessionRecord?.session?.id || null,
     });
 
     // Set HTTP-only session cookie
@@ -316,7 +337,26 @@ export async function me(req, res, next) {
   }
 }
 
-export function logout(req, res) {
+export async function logout(req, res) {
+  try {
+    let token = null;
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.substring(7);
+    }
+    if (!token && req.headers.cookie) {
+      const cookies = parseCookies(req.headers.cookie);
+      token = cookies['ueibi_session'];
+    }
+    if (token) {
+      const decoded = verifyToken(token);
+      if (decoded) {
+        await recordUserLogout({ userId: decoded.userId, sessionId: decoded.sessionId });
+      }
+    }
+  } catch (err) {
+    console.warn('[AUTH] Error during logout session recording:', err.message);
+  }
   res.clearCookie('ueibi_session', { path: '/' });
   res.json({ ok: true });
 }
@@ -444,14 +484,25 @@ export async function resetPassword(req, res, next) {
       // Hash new password with existing bcrypt implementation (10 rounds)
       const newHash = await bcrypt.hash(newPassword, 10);
 
-      // Update user password and clear mustChangePassword
+      // Update user password, set passwordChangedAt, and clear mustChangePassword
       await tx.$executeRawUnsafe(
         `UPDATE "tenant_users"
-         SET "passwordHash" = $1, "mustChangePassword" = false, "updatedAt" = CURRENT_TIMESTAMP
+         SET "passwordHash" = $1, "mustChangePassword" = false, "passwordChangedAt" = CURRENT_TIMESTAMP, "updatedAt" = CURRENT_TIMESTAMP
          WHERE "id" = $2`,
         newHash,
         tokenRecord.userId
       );
+
+      // Terminate any active sessions for this user on password reset
+      await tx.userSession.updateMany({
+        where: { userId: tokenRecord.userId, status: 'ACTIVE' },
+        data: {
+          status: 'TERMINATED',
+          endedAt: new Date(),
+          logoutAt: new Date(),
+          endReason: 'PASSWORD_RESET',
+        },
+      });
 
       // Invalidate any other active reset tokens for this user
       await tx.$executeRawUnsafe(
@@ -500,7 +551,7 @@ export async function verifyLoginOtp(req, res, next) {
       return res.status(400).json({ error: 'OTP code is required' });
     }
 
-    const result = await verifyLoginChallenge({ challengeId, otp });
+    const result = await verifyLoginChallenge({ challengeId, otp, req });
 
     // Set HTTP-only session cookie
     res.cookie('ueibi_session', result.token, {

@@ -3,6 +3,7 @@ import { prisma } from '../lib/prisma.js';
 import { couponSchema, couponIdParamSchema, listCouponsQuerySchema } from '../validations/coupon.schema.js';
 import { recordPlatformAction, PLATFORM_ACTIONS } from '../services/platformAudit.service.js';
 import { getRegistrationConfig } from '../services/registrationConfig.service.js';
+import { validateLicenseQuantity } from '../services/licenceCalculation.service.js';
 
 function round2(n) {
   return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
@@ -19,6 +20,25 @@ function addCalendarMonths(date, months) {
     result.setDate(0);
   }
   return result;
+}
+
+/**
+ * Generates a collision-resistant unique coupon code server-side.
+ * Prefix: 'GEN' for generic platform coupons, 'OFFER' for company-specific offers.
+ */
+export async function generateUniqueCouponCode(prefix = 'GEN', maxAttempts = 10) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const randomHex = crypto.randomBytes(4).toString('hex').toUpperCase();
+    const candidate = `${prefix}-${randomHex}`;
+    const exists = await prisma.coupon.findUnique({
+      where: { code: candidate },
+      select: { id: true },
+    });
+    if (!exists) {
+      return candidate;
+    }
+  }
+  return `${prefix}-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
 }
 
 export async function getPricingSettings(req, res, next) {
@@ -124,14 +144,30 @@ export async function list(req, res, next) {
 
     // Derive live computed status for every item
     const enriched = items.map((c) => {
-      let computedStatus = 'UNUSED';
-      if (c.status === 'USED' || c.timesUsed > 0) {
-        computedStatus = 'USED';
-      } else if (c.expiresAt && new Date(c.expiresAt) < now) {
-        computedStatus = 'EXPIRED';
-      } else if (!c.active) {
-        computedStatus = 'INACTIVE';
+      let computedStatus = 'ACTIVE';
+      const isCompanyOffer = Boolean(c.companyName);
+
+      if (isCompanyOffer) {
+        if (c.status === 'USED' || c.timesUsed > 0) {
+          computedStatus = 'USED';
+        } else if (c.expiresAt && new Date(c.expiresAt) < now) {
+          computedStatus = 'EXPIRED';
+        } else if (!c.active) {
+          computedStatus = 'INACTIVE';
+        } else {
+          computedStatus = 'UNUSED';
+        }
+      } else {
+        // Generic platform coupon
+        if (!c.active) {
+          computedStatus = 'INACTIVE';
+        } else if (c.expiresAt && new Date(c.expiresAt) < now) {
+          computedStatus = 'EXPIRED';
+        } else {
+          computedStatus = 'ACTIVE';
+        }
       }
+
       return {
         ...c,
         computedStatus,
@@ -178,15 +214,54 @@ export async function create(req, res, next) {
 
     // 2. Company Offer Automatic Calculations:
     if (data.companyName) {
+      // Validate active master records if referenced
+      if (data.industryId) {
+        const ind = await prisma.industryMaster.findUnique({ where: { id: data.industryId } });
+        if (!ind || !ind.isActive) {
+          return res.status(400).json({ error: 'Selected industry is invalid or inactive', code: 'INVALID_INDUSTRY' });
+        }
+        data.industry = ind.name;
+      }
+
+      if (data.cityId) {
+        const c = await prisma.cityMaster.findUnique({ where: { id: data.cityId } });
+        if (!c || !c.isActive) {
+          return res.status(400).json({ error: 'Selected city is invalid or inactive', code: 'INVALID_CITY' });
+        }
+        data.city = c.name;
+      }
+
+      if (data.subscriptionDurationId) {
+        const dur = await prisma.subscriptionDurationMaster.findUnique({ where: { id: data.subscriptionDurationId } });
+        if (!dur || !dur.isActive) {
+          return res.status(400).json({ error: 'Selected subscription duration is invalid or inactive', code: 'INVALID_DURATION' });
+        }
+        data.subscriptionYears = dur.years;
+      }
+
+      // Validate employee license quantity dynamically against Billing Settings
+      const licenseValidation = await validateLicenseQuantity(data.totalLicenses);
+      if (!licenseValidation.valid) {
+        return res.status(400).json({
+          error: licenseValidation.error,
+          code: licenseValidation.code,
+          minQuantity: licenseValidation.minQuantity,
+          maxQuantity: licenseValidation.maxQuantity,
+        });
+      }
+
+      const totalLicenses = licenseValidation.totalLicenses;
+      const subscriptionYears = Math.max(1, parseInt(data.subscriptionYears, 10) || 1);
+
       // Platform Owner License & Pricing is the single authoritative source of truth for unit price:
       const authoritativeUnitPrice = Number(await getRegistrationConfig('LICENSE_UNIT_PRICE', 4999));
-      const totalLicenses = Math.max(0, parseInt(data.totalLicenses, 10) || 0);
       const perLicenseCost = round2(authoritativeUnitPrice);
-      const licenseAmount = totalLicenses > 0 ? round2(totalLicenses * perLicenseCost) : 0;
+      const licenseAmount = round2(totalLicenses * perLicenseCost * subscriptionYears);
       const discountPercent = Math.min(100, Math.max(0, parseFloat(data.discountPercent) || 0));
-      const discountAmount = totalLicenses > 0 ? round2((licenseAmount * discountPercent) / 100) : 0;
-      const finalAmount = totalLicenses > 0 ? round2(licenseAmount - discountAmount) : 0;
+      const discountAmount = round2((licenseAmount * discountPercent) / 100);
+      const finalAmount = round2(licenseAmount - discountAmount);
 
+      data.subscriptionYears = subscriptionYears;
       data.totalLicenses = totalLicenses;
       data.perLicenseCost = perLicenseCost;
       data.licenseAmount = licenseAmount;
@@ -202,25 +277,49 @@ export async function create(req, res, next) {
 
       const startDate = data.startDate ? new Date(data.startDate) : new Date();
       data.startDate = startDate;
-      // End Date = Start Date + 12 Months + Additional Promotional Months
-      const endDate = addCalendarMonths(startDate, 12 + promoMonths);
+      // End Date = Start Date + (Subscription Years × 12 Months) + Additional Promotional Months
+      const endDate = addCalendarMonths(startDate, (subscriptionYears * 12) + promoMonths);
       data.endDate = endDate;
       data.expiresAt = endDate;
 
-      if (!data.offerReference) {
-        data.offerReference = 'OFFER-' + crypto.randomBytes(4).toString('hex').toUpperCase();
-      }
-      if (!data.code) {
-        data.code = data.offerReference;
+      // Coupon Code handling for Company Offer:
+      if (data.code && String(data.code).trim()) {
+        const customCode = String(data.code).trim().toUpperCase();
+        const existing = await prisma.coupon.findUnique({
+          where: { code: customCode },
+          select: { id: true },
+        });
+        if (existing) {
+          return res.status(400).json({
+            error: `Coupon code "${customCode}" already exists. Please choose a different code.`,
+            code: 'DUPLICATE_CODE',
+          });
+        }
+        data.code = customCode;
+        data.offerReference = customCode;
+      } else {
+        data.code = await generateUniqueCouponCode('OFFER');
+        data.offerReference = data.code;
       }
     } else {
       // Standard generic platform coupon:
-      // Single Source of Truth: Discount percentage is removed from Generic Coupons.
-      // Generic coupons only manage code, usage limit, expiry date, status and assigned BDM.
-      if (!data.code) {
-        return res.status(400).json({ error: 'Coupon code is required' });
+      // Code is optional: if omitted, automatically generate a unique code server-side with collision handling
+      if (data.code && String(data.code).trim()) {
+        const customCode = String(data.code).trim().toUpperCase();
+        const existing = await prisma.coupon.findUnique({
+          where: { code: customCode },
+          select: { id: true },
+        });
+        if (existing) {
+          return res.status(400).json({
+            error: `Coupon code "${customCode}" already exists. Please choose a different code.`,
+            code: 'DUPLICATE_CODE',
+          });
+        }
+        data.code = customCode;
+      } else {
+        data.code = await generateUniqueCouponCode('GEN');
       }
-      data.code = data.code.toUpperCase();
       data.discountType = 'PERCENT';
       data.discountValue = 0;
       data.discountPercent = 0;
@@ -230,7 +329,14 @@ export async function create(req, res, next) {
       data.finalAmount = null;
       data.companyName = null;
       data.industry = null;
+      data.industryId = null;
       data.city = null;
+      data.cityId = null;
+      data.subscriptionYears = null;
+      data.subscriptionDurationId = null;
+      data.promoMonths = 0;
+      data.usageLimit = null; // Completely remove maximum usage limit restriction for generic coupons
+      data.status = 'ACTIVE';
     }
 
     const coupon = await prisma.coupon.create({
@@ -260,9 +366,15 @@ export async function create(req, res, next) {
 
     res.status(201).json({
       ...coupon,
-      computedStatus: 'UNUSED',
+      computedStatus: data.companyName ? 'UNUSED' : 'ACTIVE',
     });
   } catch (err) {
+    if (err?.code === 'P2002') {
+      return res.status(400).json({
+        error: 'Coupon code already exists. Please choose a unique code.',
+        code: 'DUPLICATE_CODE',
+      });
+    }
     if (err?.code === 'P2002') return res.status(409).json({ error: 'Coupon code or offer reference already exists' });
     next(err);
   }
@@ -326,9 +438,34 @@ export async function update(req, res, next) {
       return res.status(403).json({ error: 'Access forbidden: you can only edit your own offers' });
     }
 
-    // Prevent modifying already-used coupons
-    if (before.status === 'USED' || before.timesUsed > 0) {
+    // Prevent modifying already-used company offers
+    if (before.companyName && (before.status === 'USED' || before.timesUsed > 0)) {
       return res.status(400).json({ error: 'Cannot modify an offer that has already been used and activated.' });
+    }
+
+    // Code update uniqueness check
+    if (data.code !== undefined) {
+      if (data.code && String(data.code).trim()) {
+        const newCode = String(data.code).trim().toUpperCase();
+        if (newCode !== before.code) {
+          const duplicate = await prisma.coupon.findUnique({
+            where: { code: newCode },
+            select: { id: true },
+          });
+          if (duplicate) {
+            return res.status(400).json({
+              error: `Coupon code "${newCode}" already exists. Please choose a different code.`,
+              code: 'DUPLICATE_CODE',
+            });
+          }
+          data.code = newCode;
+          if (before.companyName) {
+            data.offerReference = newCode;
+          }
+        }
+      } else {
+        delete data.code;
+      }
     }
 
     if (isSales) {
@@ -354,21 +491,65 @@ export async function update(req, res, next) {
     }
 
     if (!before.companyName && !data.companyName) {
-      // Generic coupons do not carry independent discount percentages
+      // Generic coupons do not carry independent discount percentages or company details
       delete data.discountValue;
       delete data.discountPercent;
       delete data.perLicenseCost;
       delete data.licenseAmount;
       delete data.finalAmount;
       delete data.totalLicenses;
+      delete data.subscriptionYears;
+      delete data.subscriptionDurationId;
+      data.usageLimit = null; // Unlimited redemption
     } else {
+      if (data.industryId) {
+        const ind = await prisma.industryMaster.findUnique({ where: { id: data.industryId } });
+        if (!ind || !ind.isActive) {
+          return res.status(400).json({ error: 'Selected industry is invalid or inactive', code: 'INVALID_INDUSTRY' });
+        }
+        data.industry = ind.name;
+      }
+
+      if (data.cityId) {
+        const c = await prisma.cityMaster.findUnique({ where: { id: data.cityId } });
+        if (!c || !c.isActive) {
+          return res.status(400).json({ error: 'Selected city is invalid or inactive', code: 'INVALID_CITY' });
+        }
+        data.city = c.name;
+      }
+
+      if (data.subscriptionDurationId) {
+        const dur = await prisma.subscriptionDurationMaster.findUnique({ where: { id: data.subscriptionDurationId } });
+        if (!dur || !dur.isActive) {
+          return res.status(400).json({ error: 'Selected subscription duration is invalid or inactive', code: 'INVALID_DURATION' });
+        }
+        data.subscriptionYears = dur.years;
+      }
+
       // Recalculate company offer values if pricing/duration was touched
-      const totalLicenses = data.totalLicenses !== undefined ? Math.max(0, parseInt(data.totalLicenses, 10) || 0) : Number(before.totalLicenses || 0);
+      let totalLicenses = Number(before.totalLicenses || 0);
+      if (data.totalLicenses !== undefined) {
+        const licenseValidation = await validateLicenseQuantity(data.totalLicenses);
+        if (!licenseValidation.valid) {
+          return res.status(400).json({
+            error: licenseValidation.error,
+            code: licenseValidation.code,
+            minQuantity: licenseValidation.minQuantity,
+            maxQuantity: licenseValidation.maxQuantity,
+          });
+        }
+        totalLicenses = licenseValidation.totalLicenses;
+      }
+
+      const rawYears = data.subscriptionYears !== undefined ? data.subscriptionYears : before.subscriptionYears;
+      const subscriptionYears = Math.max(1, parseInt(rawYears, 10) || 1);
+      data.subscriptionYears = subscriptionYears;
+
       // Historical pricing snapshot preserved: unit price cannot be manually manipulated
       const perLicenseCost = Number(before.perLicenseCost || (await getRegistrationConfig('LICENSE_UNIT_PRICE', 4999)));
       const discountPercent = data.discountPercent !== undefined ? Math.min(100, Math.max(0, parseFloat(data.discountPercent) || 0)) : Number(before.discountPercent || 0);
 
-      const licenseAmount = totalLicenses > 0 ? round2(totalLicenses * perLicenseCost) : 0;
+      const licenseAmount = totalLicenses > 0 ? round2(totalLicenses * perLicenseCost * subscriptionYears) : 0;
       const discountAmount = totalLicenses > 0 ? round2((licenseAmount * discountPercent) / 100) : 0;
       const finalAmount = totalLicenses > 0 ? round2(licenseAmount - discountAmount) : 0;
 
@@ -381,10 +562,12 @@ export async function update(req, res, next) {
       data.finalAmount = finalAmount;
     }
 
-    if (data.startDate || data.promoMonths !== undefined) {
+    if (data.startDate || data.promoMonths !== undefined || data.subscriptionYears !== undefined) {
       const startDate = data.startDate ? new Date(data.startDate) : (before.startDate ? new Date(before.startDate) : new Date());
       const promoMonths = data.promoMonths !== undefined ? Math.max(0, parseInt(data.promoMonths) || 0) : (before.promoMonths || 0);
-      const endDate = addCalendarMonths(startDate, 12 + promoMonths);
+      const rawYears = data.subscriptionYears !== undefined ? data.subscriptionYears : before.subscriptionYears;
+      const subscriptionYears = Math.max(1, parseInt(rawYears, 10) || 1);
+      const endDate = addCalendarMonths(startDate, (subscriptionYears * 12) + promoMonths);
       data.startDate = startDate;
       data.promoMonths = promoMonths;
       data.endDate = endDate;
@@ -423,17 +606,33 @@ export async function update(req, res, next) {
     }).catch((err) => console.warn('[Coupon] audit write failed:', err.message));
 
     const now = new Date();
-    let computedStatus = coupon.status || 'UNUSED';
-    if (coupon.status === 'USED' || coupon.timesUsed > 0) {
-      computedStatus = 'USED';
-    } else if (coupon.expiresAt && new Date(coupon.expiresAt) < now) {
-      computedStatus = 'EXPIRED';
-    } else if (!coupon.active) {
-      computedStatus = 'INACTIVE';
+    let computedStatus = 'ACTIVE';
+    const isCompanyOffer = Boolean(coupon.companyName);
+    if (isCompanyOffer) {
+      if (coupon.status === 'USED' || coupon.timesUsed > 0) {
+        computedStatus = 'USED';
+      } else if (coupon.expiresAt && new Date(coupon.expiresAt) < now) {
+        computedStatus = 'EXPIRED';
+      } else if (!coupon.active) {
+        computedStatus = 'INACTIVE';
+      } else {
+        computedStatus = 'UNUSED';
+      }
+    } else {
+      if (!coupon.active) {
+        computedStatus = 'INACTIVE';
+      } else if (coupon.expiresAt && new Date(coupon.expiresAt) < now) {
+        computedStatus = 'EXPIRED';
+      } else {
+        computedStatus = 'ACTIVE';
+      }
     }
 
     res.json({ ...coupon, computedStatus });
   } catch (err) {
+    if (err?.code === 'P2002') {
+      return res.status(400).json({ error: 'Coupon code already exists. Please choose a unique code.', code: 'DUPLICATE_CODE' });
+    }
     if (err?.code === 'P2025') return res.status(404).json({ error: 'Coupon not found' });
     next(err);
   }
@@ -451,20 +650,25 @@ export async function markUsed(req, res, next) {
     const { paymentReference, companyId, activationReference } = req.body || {};
     const coupon = await prisma.coupon.findUnique({ where: { id: parsedParams.data.id } });
     if (!coupon) return res.status(404).json({ error: 'Coupon not found' });
-    if (coupon.status === 'USED' || coupon.timesUsed >= (coupon.usageLimit || 1)) {
+    const isCompanyOffer = Boolean(coupon.companyName);
+    if (isCompanyOffer && (coupon.status === 'USED' || (coupon.usageLimit != null && coupon.timesUsed >= coupon.usageLimit))) {
       return res.status(400).json({ error: 'Coupon has already been used and activated.' });
+    }
+
+    const updateData = {
+      timesUsed: { increment: 1 },
+      usedAt: new Date(),
+      usedCompanyId: companyId || coupon.usedCompanyId || null,
+      paymentReference: paymentReference || null,
+      activationReference: activationReference || null,
+    };
+    if (isCompanyOffer) {
+      updateData.status = 'USED';
     }
 
     const updated = await prisma.coupon.update({
       where: { id: coupon.id },
-      data: {
-        status: 'USED',
-        timesUsed: { increment: 1 },
-        usedAt: new Date(),
-        usedCompanyId: companyId || coupon.usedCompanyId || null,
-        paymentReference: paymentReference || null,
-        activationReference: activationReference || null,
-      },
+      data: updateData,
       include: {
         salesRep: {
           select: { id: true, name: true, email: true, designation: true },
@@ -472,7 +676,7 @@ export async function markUsed(req, res, next) {
       },
     });
 
-    res.json({ ...updated, computedStatus: 'USED' });
+    res.json({ ...updated, computedStatus: isCompanyOffer ? 'USED' : 'ACTIVE' });
   } catch (err) {
     next(err);
   }

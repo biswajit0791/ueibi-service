@@ -1,7 +1,10 @@
 import { z } from 'zod';
 
 export const couponSchema = z.object({
-  code: z.string().min(1).toUpperCase().optional(),
+  code: z.preprocess(
+    (val) => (typeof val === 'string' ? (val.trim() === '' ? undefined : val.trim().toUpperCase()) : val),
+    z.string().trim().toUpperCase().optional().nullable()
+  ),
   discountType: z.enum(['PERCENT', 'FLAT']).optional().default('PERCENT'),
   discountValue: z.coerce.number().min(0).optional(),
   // Nullable as well as optional: on an edit, omitting a field means "leave it
@@ -16,13 +19,17 @@ export const couponSchema = z.object({
   // Company-Based Manual Offer System fields
   companyName: z.string().max(255).nullish(),
   industry: z.string().max(100).nullish(),
+  industryId: z.string().nullish(),
   city: z.string().max(100).nullish(),
+  cityId: z.string().nullish(),
   totalLicenses: z.coerce.number().int().min(0).nullish(),
   perLicenseCost: z.coerce.number().min(0).nullish(),
   licenseAmount: z.coerce.number().min(0).nullish(),
   discountPercent: z.coerce.number().min(0).max(100).nullish(),
   finalAmount: z.coerce.number().min(0).nullish(),
   startDate: z.coerce.date().nullish(),
+  subscriptionYears: z.coerce.number().int().min(1).max(10).nullish().default(1),
+  subscriptionDurationId: z.string().nullish(),
   promoMonths: z.coerce.number().int().min(0).nullish().default(0),
   endDate: z.coerce.date().nullish(),
   offerReference: z.string().max(100).nullish(),

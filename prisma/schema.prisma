@@ -143,6 +143,8 @@ model Tenant {
   salesLeads           SalesLead[]
   exitDocDispatches    ExitDocumentDispatch[]
   promotionRedemptions PromotionRedemption[]
+  sessions             UserSession[]            @relation("TenantSessions")
+  loginHistories       LoginHistory[]           @relation("TenantLoginHistories")
 
   @@index([isPlatform])
   @@index([status])
@@ -210,6 +212,60 @@ model Designation {
   @@index([displayOrder])
   @@index([isDefault])
   @@map("designations")
+}
+
+model CityMaster {
+  id        String   @id @default(cuid())
+  name      String
+  state     String
+  country   String   @default("India")
+  isActive  Boolean  @default(true)
+  createdBy String?
+  updatedBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  coupons Coupon[]
+
+  @@unique([name, state, country])
+  @@index([isActive])
+  @@index([state])
+  @@map("city_masters")
+}
+
+model IndustryMaster {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?  @db.Text
+  isActive    Boolean  @default(true)
+  createdBy   String?
+  updatedBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  coupons Coupon[]
+
+  @@index([isActive])
+  @@map("industry_masters")
+}
+
+model SubscriptionDurationMaster {
+  id           String   @id @default(cuid())
+  name         String
+  years        Int      @unique
+  months       Int
+  displayOrder Int      @default(0)
+  isActive     Boolean  @default(true)
+  createdBy    String?
+  updatedBy    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  coupons Coupon[]
+
+  @@index([isActive])
+  @@index([displayOrder])
+  @@map("subscription_duration_masters")
 }
 
 model RegistrationConfiguration {
@@ -454,6 +510,13 @@ model TenantUser {
   grantedPermissions    UserPermission[]     @relation("AssignedByAdmin")
   dataScope             UserDataScope?
   platformMenuPermissions PlatformMenuPermission[] @relation("PlatformUserMenuPermissions")
+  isBlocked            Boolean                  @default(false)
+  blockedAt            DateTime?
+  blockedReason        String?
+  blockedBy            String?
+  passwordChangedAt    DateTime?
+  sessions             UserSession[]            @relation("UserSessions")
+  loginHistories       LoginHistory[]           @relation("UserLoginHistories")
 
   remarks   String?
   docs      Json?
@@ -759,7 +822,11 @@ model Coupon {
 
   companyName         String?
   industry            String?
+  industryId          String?
+  industryRef         IndustryMaster?             @relation(fields: [industryId], references: [id], onDelete: SetNull)
   city                String?
+  cityId              String?
+  cityRef             CityMaster?                 @relation(fields: [cityId], references: [id], onDelete: SetNull)
   totalLicenses       Int?
   perLicenseCost      Decimal?     @db.Decimal(10, 2)
   licenseAmount       Decimal?     @db.Decimal(10, 2)
@@ -767,6 +834,9 @@ model Coupon {
   finalAmount         Decimal?     @db.Decimal(10, 2)
   startDate           DateTime?
   endDate             DateTime?
+  subscriptionYears   Int?         @default(1)
+  subscriptionDurationId String?
+  subscriptionDurationRef SubscriptionDurationMaster? @relation(fields: [subscriptionDurationId], references: [id], onDelete: SetNull)
   promoMonths         Int?         @default(0)
   offerReference      String?
   status              String?      @default("UNUSED")
@@ -1029,6 +1099,9 @@ model Invoice {
   totalDurationMonths Int?      @default(12)
   periodStartsAt      DateTime?
   periodEndsAt        DateTime?
+  city                String?
+  bdmName             String?
+  paymentDate         DateTime?
 
   notes      String?   @db.Text
   voidedAt   DateTime?
@@ -3772,6 +3845,75 @@ model PlatformMenuPermission {
   @@index([userId])
   @@index([menuKey])
   @@map("platform_menu_permissions")
+}
+
+enum SessionStatus {
+  ACTIVE
+  EXPIRED
+  TERMINATED
+  LOGGED_OUT
+}
+
+model UserSession {
+  id              String        @id @default(cuid())
+  userId          String
+  user            TenantUser    @relation("UserSessions", fields: [userId], references: [id], onDelete: Cascade)
+  tenantId        String
+  tenant          Tenant        @relation("TenantSessions", fields: [tenantId], references: [id], onDelete: Cascade)
+  sessionToken    String?       @unique
+  ipAddress       String?
+  userAgent       String?
+  device          String?
+  browser         String?
+  os              String?
+  status          SessionStatus @default(ACTIVE)
+  loginAt         DateTime      @default(now())
+  lastActiveAt    DateTime      @default(now())
+  expiresAt       DateTime
+  logoutAt        DateTime?
+  endedAt         DateTime?
+  endReason       String?
+  endedBy         String?
+  durationSeconds Int           @default(0)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  loginHistories  LoginHistory[]
+
+  @@index([userId])
+  @@index([tenantId])
+  @@index([status])
+  @@index([loginAt])
+  @@index([sessionToken])
+  @@map("user_sessions")
+}
+
+model LoginHistory {
+  id              String       @id @default(cuid())
+  userId          String
+  user            TenantUser   @relation("UserLoginHistories", fields: [userId], references: [id], onDelete: Cascade)
+  tenantId        String
+  tenant          Tenant       @relation("TenantLoginHistories", fields: [tenantId], references: [id], onDelete: Cascade)
+  sessionId       String?
+  session         UserSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  ipAddress       String?
+  userAgent       String?
+  device          String?
+  browser         String?
+  os              String?
+  status          String       @default("SUCCESS") // SUCCESS, FAILED
+  loginType       String       @default("PASSWORD") // PASSWORD, EMAIL_OTP_2FA
+  loginAt         DateTime     @default(now())
+  logoutAt        DateTime?
+  durationSeconds Int          @default(0)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([userId])
+  @@index([tenantId])
+  @@index([loginAt])
+  @@index([sessionId])
+  @@map("login_histories")
 }
 
 

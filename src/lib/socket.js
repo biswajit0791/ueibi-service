@@ -44,8 +44,32 @@ export function initSocket(server) {
       return next(new Error('Authentication error: Invalid or expired token'));
     }
 
-    socket.user = decoded;
-    next();
+    // Check user block/inactive status and session status
+    prisma.tenantUser.findUnique({
+      where: { id: decoded.userId },
+      select: { isBlocked: true, isDeleted: true, status: true },
+    }).then((user) => {
+      if (!user || user.isBlocked || user.isDeleted || user.status === 'EXITED') {
+        return next(new Error('Authentication error: User account is blocked or inactive'));
+      }
+
+      if (decoded.sessionId) {
+        return prisma.userSession.findUnique({
+          where: { id: decoded.sessionId },
+          select: { status: true, expiresAt: true },
+        }).then((session) => {
+          if (!session || session.status === 'TERMINATED' || session.status === 'LOGGED_OUT' || new Date(session.expiresAt).getTime() < Date.now()) {
+            return next(new Error('Authentication error: Session terminated or expired'));
+          }
+          socket.user = decoded;
+          socket.sessionId = decoded.sessionId;
+          next();
+        });
+      }
+
+      socket.user = decoded;
+      next();
+    }).catch((err) => next(err));
   });
 
   io.on('connection', (socket) => {

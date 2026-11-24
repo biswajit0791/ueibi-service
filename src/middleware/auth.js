@@ -37,7 +37,7 @@ export async function requireAuth(req, res, next) {
       where: { id: decoded.userId },
       select: {
         id: true, email: true, role: true, name: true, tenantId: true,
-        status: true, isDeleted: true,
+        status: true, isDeleted: true, isBlocked: true,
         // Employment context — needed for department-scoped and cross-dept
         // authorization checks throughout task, goal and dependency controllers.
         department: true, managerId: true, officeLocation: true, designation: true,
@@ -51,12 +51,38 @@ export async function requireAuth(req, res, next) {
     if (!user || user.isDeleted) {
       return res.status(401).json({ error: 'Account is no longer active' });
     }
+    if (user.isBlocked) {
+      return res.status(403).json({
+        error: 'Your account has been blocked by the platform administrator.',
+        code: 'USER_BLOCKED',
+      });
+    }
     if (user.status === 'EXITED') {
       return res.status(403).json({ error: ACCOUNT_EXITED.message, code: ACCOUNT_EXITED.code });
     }
     const denial = tenantAccessDenial(user.tenant?.status);
     if (denial) {
       return res.status(403).json({ error: denial.message, code: denial.code });
+    }
+
+    // Verify session validity if sessionId is present in token payload
+    if (decoded.sessionId) {
+      const session = await prisma.userSession.findUnique({
+        where: { id: decoded.sessionId },
+        select: { status: true, expiresAt: true },
+      });
+      if (!session || session.status === 'TERMINATED' || session.status === 'LOGGED_OUT') {
+        return res.status(401).json({
+          error: 'Your session has been ended or terminated.',
+          code: 'SESSION_TERMINATED',
+        });
+      }
+      if (session.status === 'EXPIRED' || new Date(session.expiresAt).getTime() < Date.now()) {
+        return res.status(401).json({
+          error: 'Your session has expired. Please log in again.',
+          code: 'SESSION_EXPIRED',
+        });
+      }
     }
 
     // Capabilities are read fresh alongside the user (same rationale as
