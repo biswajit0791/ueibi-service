@@ -13,9 +13,8 @@ export const PLATFORM_MENUS = [
   { key: 'companies', label: 'Companies', path: '/admin/companies' },
   { key: 'users', label: 'Users', path: '/platform/users' },
   { key: 'internal_team', label: 'Internal Team', path: '/platform/staff' },
-  { key: 'organization_structures', label: 'Organization Structures', path: '/platform/organization-structures' },
-  { key: 'designations', label: 'Designations', path: '/platform/designations' },
-  { key: 'registration_settings', label: 'Registration & Billing Settings', path: '/platform/registration-settings' },
+  { key: 'signup_data', label: 'Sign-up Data', path: '/platform/signupdata' },
+  { key: 'registration_settings', label: 'Billing Settings', path: '/platform/registration-settings' },
   { key: 'onboarding', label: 'Onboarding', path: '/platform/onboarding' },
   { key: 'verification', label: 'Verification', path: '/platform/verification' },
   { key: 'audit_trail', label: 'Audit Trail', path: '/platform/audit' },
@@ -32,7 +31,12 @@ export const PLATFORM_MENUS = [
   { key: 'legal', label: 'Legal', path: '/platform/legal' },
 ];
 
-export const ALL_MENU_KEYS = PLATFORM_MENUS.map((m) => m.key);
+export const ALL_MENU_KEYS = Array.from(new Set([
+  ...PLATFORM_MENUS.map((m) => m.key),
+  'billing_settings',
+  'organization_structures',
+  'designations',
+]));
 
 export const DEFAULT_INTERNAL_STAFF_MENU_KEYS = [
   'companies',
@@ -82,6 +86,21 @@ export async function getUserPlatformPermissions(userId, role) {
     for (const key of ALL_MENU_KEYS) {
       permissionsMap[key] = recordMap.has(key) ? Boolean(recordMap.get(key)) : false;
     }
+    // Backward compatibility & sync for signup_data
+    if (!recordMap.has('signup_data')) {
+      permissionsMap.signup_data = Boolean(recordMap.get('organization_structures') || recordMap.get('designations'));
+    }
+    if (permissionsMap.signup_data) {
+      permissionsMap.organization_structures = true;
+      permissionsMap.designations = true;
+    }
+    // Backward compatibility for billing_settings and registration_settings
+    if (permissionsMap.registration_settings !== undefined) {
+      permissionsMap.billing_settings = permissionsMap.registration_settings;
+    }
+    if (permissionsMap.billing_settings !== undefined && permissionsMap.registration_settings === undefined) {
+      permissionsMap.registration_settings = permissionsMap.billing_settings;
+    }
   }
 
   return permissionsMap;
@@ -96,6 +115,15 @@ export async function hasPlatformMenuPermission(userId, role, menuKey) {
   if (normalizedRole !== 'PLATFORM_SALES') return false;
 
   const permissions = await getUserPlatformPermissions(userId, role);
+  if (menuKey === 'signup_data') {
+    return permissions.signup_data === true || permissions.organization_structures === true || permissions.designations === true;
+  }
+  if (menuKey === 'organization_structures' || menuKey === 'designations') {
+    return permissions[menuKey] === true || permissions.signup_data === true;
+  }
+  if (menuKey === 'billing_settings' || menuKey === 'registration_settings') {
+    return permissions.billing_settings === true || permissions.registration_settings === true;
+  }
   return permissions[menuKey] === true;
 }
 
@@ -118,9 +146,22 @@ export async function updateUserPlatformPermissions(userId, permissionsInput) {
   }
 
   const updates = [];
+  const normalizedInput = { ...permissionsInput };
+  // If signup_data is updated, synchronize legacy keys
+  if (normalizedInput.signup_data !== undefined) {
+    normalizedInput.organization_structures = normalizedInput.signup_data;
+    normalizedInput.designations = normalizedInput.signup_data;
+  }
+  // Sync billing_settings and registration_settings
+  if (normalizedInput.billing_settings !== undefined && normalizedInput.registration_settings === undefined) {
+    normalizedInput.registration_settings = normalizedInput.billing_settings;
+  } else if (normalizedInput.registration_settings !== undefined && normalizedInput.billing_settings === undefined) {
+    normalizedInput.billing_settings = normalizedInput.registration_settings;
+  }
+
   for (const key of ALL_MENU_KEYS) {
-    if (permissionsInput[key] !== undefined) {
-      const isEnabled = Boolean(permissionsInput[key]);
+    if (normalizedInput[key] !== undefined) {
+      const isEnabled = Boolean(normalizedInput[key]);
       updates.push(
         prisma.platformMenuPermission.upsert({
           where: {
