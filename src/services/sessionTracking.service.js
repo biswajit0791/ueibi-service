@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma.js';
 import { getIO } from '../lib/socket.js';
 import { recordPlatformAction, PLATFORM_ACTIONS } from './platformAudit.service.js';
+import { broadcastSessionEvent, reconcileExpiredSessions } from './serverMonitoring.service.js';
 
 /**
  * Parses user-agent header to extract device type, browser and OS.
@@ -138,6 +139,16 @@ export async function recordLoginSession({ user, req, loginType = 'PASSWORD' }) 
     },
   }).catch((err) => console.warn('[SESSION] Stamping TenantUser failed:', err.message));
 
+  // Broadcast real-time login event to platform monitoring
+  broadcastSessionEvent('LOGIN', {
+    userId: user.id,
+    userName: user.name,
+    userEmail: user.email,
+    tenantId: user.tenantId,
+    ipAddress,
+    sessionId: session.id,
+  }).catch(() => {});
+
   return { session, loginHistory };
 }
 
@@ -180,6 +191,13 @@ export async function recordUserLogout({ userId, sessionId }) {
       durationSeconds,
     },
   });
+
+  // Broadcast real-time logout event to platform monitoring
+  broadcastSessionEvent('LOGOUT', {
+    userId: targetSession.userId,
+    tenantId: targetSession.tenantId,
+    sessionId: targetSession.id,
+  }).catch(() => {});
 
   return updatedSession;
 }
@@ -252,6 +270,14 @@ export async function terminateSession({ sessionId, operator, req, reason = 'Ter
   } catch (err) {
     console.warn('[SESSION] Socket disconnect failed:', err.message);
   }
+
+  // Broadcast termination to platform monitoring
+  broadcastSessionEvent('TERMINATED', {
+    sessionId: session.id,
+    userId: session.userId,
+    tenantId: session.tenantId,
+    reason,
+  }).catch(() => {});
 
   return updated;
 }
@@ -336,6 +362,15 @@ export async function blockUser({ userId, operator, req, reason = 'Administrativ
     console.warn('[SESSION] Socket disconnect on block failed:', err.message);
   }
 
+  // Broadcast block event to platform monitoring
+  broadcastSessionEvent('BLOCKED', {
+    userId: user.id,
+    userName: user.name,
+    userEmail: user.email,
+    tenantId: user.tenantId,
+    reason,
+  }).catch(() => {});
+
   return updated;
 }
 
@@ -379,6 +414,14 @@ export async function unblockUser({ userId, operator, req, reason = 'Unblocked b
 
     return u;
   });
+
+  // Broadcast unblock event to platform monitoring
+  broadcastSessionEvent('UNBLOCKED', {
+    userId: user.id,
+    userName: user.name,
+    userEmail: user.email,
+    tenantId: user.tenantId,
+  }).catch(() => {});
 
   return updated;
 }
@@ -573,6 +616,38 @@ export async function getLoginHistoryListing({
     };
   });
 
+  // Calculate true global / filter-scoped summary KPIs across database:
+  await reconcileExpiredSessions();
+  const nowFilter = new Date();
+  const sessionWhere = {
+    status: 'ACTIVE',
+    expiresAt: { gt: nowFilter },
+  };
+  if (companyId) {
+    sessionWhere.tenantId = companyId;
+  }
+  if (userId) {
+    sessionWhere.userId = userId;
+  }
+
+  const [activeSessionsGlobal, blockedCountGlobal, sessionAggregate] = await Promise.all([
+    prisma.userSession.count({ where: sessionWhere }),
+    prisma.tenantUser.count({ where: { ...userWhere, isBlocked: true } }),
+    prisma.userSession.aggregate({
+      where: companyId ? { tenantId: companyId } : (userId ? { userId } : {}),
+      _sum: { durationSeconds: true },
+    }),
+  ]);
+
+  const totalCumulativeHours = ((sessionAggregate._sum.durationSeconds || 0) / 3600).toFixed(1);
+
+  const summaryKpis = {
+    totalUsers: totalCount,
+    activeSessions: activeSessionsGlobal,
+    blockedCount: blockedCountGlobal,
+    totalHours: totalCumulativeHours,
+  };
+
   return {
     rows,
     pagination: {
@@ -581,6 +656,7 @@ export async function getLoginHistoryListing({
       total: totalCount,
       totalPages: Math.ceil(totalCount / lim) || 1,
     },
+    summaryKpis,
   };
 }
 

@@ -4,6 +4,13 @@ import { verifyToken } from './jwt.js';
 import { parseCookies } from './cookies.js';
 import { prisma } from './prisma.js';
 import { registerChatHandlers, handleChatDisconnect } from '../services/chatSocket.service.js';
+import {
+  registerSocketConnection,
+  unregisterSocketConnection,
+  touchSocketHeartbeat,
+  startMonitoringBroadcaster,
+  getServerAndDbMetrics,
+} from '../services/serverMonitoring.service.js';
 
 let io;
 
@@ -75,10 +82,47 @@ export function initSocket(server) {
   io.on('connection', (socket) => {
     const authTenantId = socket.user.tenantId;
     const authUserId = socket.user.userId;
+    const authRole = socket.user.role;
+
+    // Register live socket connection in the server monitoring registry
+    registerSocketConnection(socket);
 
     // Automatically join the authenticated user's tenant & personal rooms
     socket.join(`tenant_${authTenantId}`);
     socket.join(`tenant:${authTenantId}:user:${authUserId}`);
+
+    // Platform Monitoring Room (restricted to Platform Owner / Platform Admin / authorized platform staff)
+    const isPlatformPrivileged =
+      authRole === 'PLATFORM_OWNER' ||
+      authRole === 'PLATFORM_ADMIN' ||
+      authRole === 'PLATFORM_SALES' ||
+      authRole === 'SUPER_ADMIN';
+
+    if (isPlatformPrivileged) {
+      socket.join('platform_monitoring');
+    }
+
+    socket.on('join_platform_monitoring', async () => {
+      if (isPlatformPrivileged) {
+        socket.join('platform_monitoring');
+        try {
+          const metrics = await getServerAndDbMetrics();
+          socket.emit('monitoring:metrics_update', metrics);
+        } catch (e) {
+          // ignore error
+        }
+      }
+    });
+
+    socket.on('leave_platform_monitoring', () => {
+      socket.leave('platform_monitoring');
+    });
+
+    // Real-time heartbeat / ping
+    socket.on('monitoring:ping', () => {
+      touchSocketHeartbeat(socket.id);
+      socket.emit('monitoring:pong', { timestamp: Date.now() });
+    });
 
     // Explicit room join handlers (strictly validating against authenticated identity)
     socket.on('join_tenant', (tenantId) => {
@@ -136,9 +180,13 @@ export function initSocket(server) {
     registerChatHandlers(socket, { tenantId: authTenantId, userId: authUserId });
 
     socket.on('disconnect', () => {
+      unregisterSocketConnection(socket.id);
       handleChatDisconnect({ tenantId: authTenantId, userId: authUserId });
     });
   });
+
+  // Start periodic server and session monitoring broadcaster
+  startMonitoringBroadcaster();
 
   return io;
 }
