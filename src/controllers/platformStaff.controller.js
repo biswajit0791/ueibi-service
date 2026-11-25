@@ -39,6 +39,7 @@ const STAFF_SELECT = {
   role: true,
   designation: true,
   status: true,
+  isBlocked: true,
   isDeleted: true,
   lastLoginAt: true,
   createdAt: true,
@@ -207,8 +208,8 @@ export async function listPlatformStaff(req, res, next) {
     });
 
     const totalUsers = staffMembers.filter((s) => !s.isDeleted).length;
-    const activeUsers = staffMembers.filter((s) => s.status === 'ACTIVE' && !s.isDeleted).length;
-    const suspendedAccounts = staffMembers.filter((s) => (s.status === 'SUSPENDED' || s.status === 'INACTIVE') || s.isDeleted).length;
+    const activeUsers = staffMembers.filter((s) => s.status === 'ACTIVE' && !s.isDeleted && !s.isBlocked).length;
+    const suspendedAccounts = staffMembers.filter((s) => (s.status === 'EXITED' || s.status === 'SUSPENDED' || s.status === 'INACTIVE' || s.isBlocked) || s.isDeleted).length;
 
     const staffIds = staffMembers.map((s) => s.id);
     const statsMap = await getStaffRenewalStats(staffIds);
@@ -225,11 +226,13 @@ export async function listPlatformStaff(req, res, next) {
           lastRenewalAt: null,
         };
         const permissions = await getUserPlatformPermissions(s.id, s.role);
+        const isSuspended = s.status === 'EXITED' || s.status === 'SUSPENDED' || s.status === 'INACTIVE' || s.isBlocked || s.isDeleted;
         return {
           ...s,
           personalEmail: s.personalEmail || s.email,
           designation: s.designation || 'Internal Team Member',
           permissions,
+          status: isSuspended ? 'SUSPENDED' : s.status,
           renewalsCount: perf.renewalsCount,
           renewedSeatsCount: perf.renewedSeatsCount,
           renewedRevenue: perf.renewedRevenue,
@@ -557,7 +560,8 @@ export async function getMyPlatformPermissions(req, res, next) {
 const updateStaffSchema = z.object({
   name: z.string().trim().min(2, 'Name is required').max(120).optional(),
   email: z.string().trim().toLowerCase().email('A valid email address is required').optional(),
-  status: z.enum(['ACTIVE', 'INACTIVE', 'SUSPENDED', 'INVITED']).optional(),
+  designation: z.string().trim().max(120).optional(),
+  status: z.enum(['ACTIVE', 'INACTIVE', 'SUSPENDED', 'INVITED', 'EXITED']).optional(),
   password: z.string().min(6, 'Password must be at least 6 characters').max(100).optional(),
   mustChangePassword: z.boolean().optional(),
 });
@@ -578,13 +582,29 @@ export async function updatePlatformStaff(req, res, next) {
       return res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     }
 
-    const { name, email, status, password, mustChangePassword } = parsed.data;
+    const { name, email, designation, status, password, mustChangePassword } = parsed.data;
     const updateData = {};
 
     if (name) updateData.name = name;
+    if (designation) updateData.designation = designation;
     if (status) {
-      // Map INACTIVE or SUSPENDED to valid Prisma enum 'SUSPENDED'
-      updateData.status = (status === 'INACTIVE' || status === 'SUSPENDED') ? 'SUSPENDED' : status;
+      // Map frontend status to valid Prisma UserStatus enum ('ACTIVE', 'INVITED', 'EXITED') and isBlocked flag
+      if (status === 'INACTIVE' || status === 'SUSPENDED' || status === 'EXITED') {
+        updateData.status = 'EXITED';
+        updateData.isBlocked = true;
+        updateData.blockedAt = new Date();
+        updateData.blockedReason = 'Suspended by platform administrator';
+      } else if (status === 'ACTIVE') {
+        updateData.status = 'ACTIVE';
+        updateData.isBlocked = false;
+        updateData.blockedAt = null;
+        updateData.blockedReason = null;
+      } else if (status === 'INVITED') {
+        updateData.status = 'INVITED';
+        updateData.isBlocked = false;
+        updateData.blockedAt = null;
+        updateData.blockedReason = null;
+      }
     }
     if (typeof mustChangePassword === 'boolean') updateData.mustChangePassword = mustChangePassword;
 
@@ -619,16 +639,20 @@ export async function updatePlatformStaff(req, res, next) {
         action: PLATFORM_ACTIONS.STAFF_UPDATED || 'STAFF_UPDATED',
         targetType: 'USER',
         targetId: user.id,
-        beforeValue: { name: staff.name, email: staff.email, status: staff.status },
-        afterValue: { name: user.name, email: user.email, status: user.status, passwordChanged: !!password },
+        beforeValue: { name: staff.name, email: staff.email, status: staff.status, isBlocked: staff.isBlocked },
+        afterValue: { name: user.name, email: user.email, status: user.status, isBlocked: user.isBlocked, passwordChanged: !!password },
       });
 
       return user;
     });
 
+    const isSuspended = updated.status === 'EXITED' || updated.isBlocked || updated.isDeleted;
     res.json({
       message: 'Sales team member credentials and profile updated successfully.',
-      staff: updated,
+      staff: {
+        ...updated,
+        status: isSuspended ? 'SUSPENDED' : updated.status,
+      },
     });
   } catch (err) {
     next(err);
@@ -657,6 +681,9 @@ export async function directResetStaffPassword(req, res, next) {
           passwordHash,
           mustChangePassword: true,
           status: 'ACTIVE',
+          isBlocked: false,
+          blockedAt: null,
+          blockedReason: null,
         },
       });
 

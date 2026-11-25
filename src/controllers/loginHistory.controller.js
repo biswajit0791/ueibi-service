@@ -6,6 +6,42 @@ import {
   blockUser,
   unblockUser,
 } from '../services/sessionTracking.service.js';
+import {
+  getServerAndDbMetrics,
+  getLoginAnalyticsMatrix,
+} from '../services/serverMonitoring.service.js';
+
+/**
+ * Returns real-time server load, memory, database and concurrent session metrics.
+ */
+export async function getLiveMonitoringMetrics(req, res, next) {
+  try {
+    const { companyId } = req.query;
+    const metrics = await getServerAndDbMetrics({ companyId });
+    res.json(metrics);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Returns peak usage matrix, hourly/daily activity, and trend analytics.
+ */
+export async function getLoginAnalytics(req, res, next) {
+  try {
+    const { range = '7d', fromDate, toDate, companyId, userId } = req.query;
+    const analytics = await getLoginAnalyticsMatrix({
+      range,
+      fromDate,
+      toDate,
+      companyId,
+      userId,
+    });
+    res.json(analytics);
+  } catch (err) {
+    next(err);
+  }
+}
 
 /**
  * Lists login history and usage summary for Platform Owner.

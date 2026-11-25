@@ -69,6 +69,8 @@ import {
   blockPlatformUser,
   unblockPlatformUser,
   exportLoginHistoryCsv,
+  getLiveMonitoringMetrics,
+  getLoginAnalytics,
 } from '../controllers/loginHistory.controller.js';
 
 const router = Router();
@@ -121,6 +123,8 @@ router.post('/platform/users/:id/force-reset', requireAuth, requirePlatformOwner
 
 // Login History & Usage Management
 router.get('/platform/login-history', requireAuth, requirePlatformMenu('login_history'), getLoginHistory);
+router.get('/platform/login-history/metrics', requireAuth, requirePlatformMenu('login_history'), getLiveMonitoringMetrics);
+router.get('/platform/login-history/analytics', requireAuth, requirePlatformMenu('login_history'), getLoginAnalytics);
 router.get('/platform/login-history/companies', requireAuth, requirePlatformMenu('login_history'), getLoginHistoryCompanies);
 router.get('/platform/login-history/users', requireAuth, requirePlatformMenu('login_history'), getLoginHistoryUsers);
 router.get('/platform/login-history/users/:userId', requireAuth, requirePlatformMenu('login_history'), getUserSessionsDetail);
