@@ -12,7 +12,10 @@ export const couponSchema = z.object({
   // but never unset — a coupon given a BDM or an expiry was stuck with it.
   bdmName: z.string().nullish(),
   salesRepId: z.string().nullish(),
-  expiresAt: z.coerce.date().nullish(),
+  expiresAt: z.preprocess(
+    (val) => (val === '' || val === null || val === undefined ? null : val),
+    z.coerce.date().nullable().optional()
+  ),
   usageLimit: z.coerce.number().int().positive().nullish(),
   active: z.boolean().optional(),
 
