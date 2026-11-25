@@ -280,7 +280,12 @@ export async function create(req, res, next) {
       // End Date = Start Date + (Subscription Years × 12 Months) + Additional Promotional Months
       const endDate = addCalendarMonths(startDate, (subscriptionYears * 12) + promoMonths);
       data.endDate = endDate;
-      data.expiresAt = endDate;
+      // Keep Subscription End Date and Coupon Expiry Date separate:
+      if (data.expiresAt) {
+        data.expiresAt = new Date(data.expiresAt);
+      } else {
+        data.expiresAt = null;
+      }
 
       // Coupon Code handling for Company Offer:
       if (data.code && String(data.code).trim()) {
@@ -571,7 +576,11 @@ export async function update(req, res, next) {
       data.startDate = startDate;
       data.promoMonths = promoMonths;
       data.endDate = endDate;
-      data.expiresAt = endDate;
+      // Do NOT overwrite expiresAt with endDate
+    }
+
+    if (data.expiresAt !== undefined) {
+      data.expiresAt = data.expiresAt ? new Date(data.expiresAt) : null;
     }
 
     const coupon = await prisma.coupon.update({

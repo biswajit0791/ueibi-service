@@ -67,15 +67,12 @@ import { requirePlatformOwner, requirePlatformStaff, requirePlatformMenu } from 
  */
 const router = Router();
 
-// ── Plans & Packages ────────────────────────────────────────────────────────
-// DELETE is permanent and refused once a package has been sold; a sold package
-// is deactivated via PATCH { active: false } instead.
-// Internal staff with packages permission may read packages.
-router.get('/platform/packages', requireAuth, requirePlatformMenu('packages'), listPackages);
-router.post('/platform/packages', requireAuth, requirePlatformOwner, createPackage);
-router.get('/platform/packages/:id', requireAuth, requirePlatformMenu('packages'), getPackage);
-router.patch('/platform/packages/:id', requireAuth, requirePlatformOwner, updatePackage);
-router.delete('/platform/packages/:id', requireAuth, requirePlatformOwner, deletePackage);
+// ── Plans & Packages (Retired Module - Read-only for legacy/renewal compatibility) ──
+router.get('/platform/packages', requireAuth, listPackages);
+router.get('/platform/packages/:id', requireAuth, getPackage);
+router.post('/platform/packages', requireAuth, (_req, res) => res.status(410).json({ error: 'Packages module has been retired' }));
+router.patch('/platform/packages/:id', requireAuth, (_req, res) => res.status(410).json({ error: 'Packages module has been retired' }));
+router.delete('/platform/packages/:id', requireAuth, (_req, res) => res.status(410).json({ error: 'Packages module has been retired' }));
 
 // ── Invoices, payments and refunds ──────────────────────────────────────────
 // The invoice number is allocated at ISSUE, not creation, so an abandoned draft
