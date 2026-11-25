@@ -241,8 +241,10 @@ export async function activateTenantFromRegistration({
           invoiceId: createdInvoice.id,
           tenantId: createdTenant.id,
           amount: registration.totalAmount || 0,
-          method: paymentMethod === 'CHEQUE' ? 'CHEQUE' : 'ONLINE',
-          reference: transactionId || paymentReference || 'ONLINE',
+          method: ['ONLINE', 'CHEQUE', 'BANK_TRANSFER', 'UPI', 'CASH', 'ADJUSTMENT', 'LEGACY'].includes(paymentMethod)
+            ? paymentMethod
+            : 'ONLINE',
+          reference: transactionId || paymentReference || (paymentMethod === 'CASH' ? null : 'ONLINE'),
           receivedAt: startsAt,
           recordedById: performedBy,
           notes: `Automatic payment recording upon ${paymentMethod} confirmation for registration ${registration.id}`,

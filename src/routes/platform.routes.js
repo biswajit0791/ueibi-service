@@ -28,6 +28,7 @@ import {
   getOnboarding,
   resendOnboardingLink,
   sendRegistrationRoleLink,
+  updateRegistrationRecipientEmail,
   reSignupRegistration,
   manualChequeVerify,
   refundRegistration,
@@ -138,6 +139,7 @@ router.get('/platform/registrations', requireAuth, requirePlatformMenu('onboardi
 router.get('/platform/registrations/:id', requireAuth, requirePlatformMenu('onboarding'), getOnboarding);
 router.post('/platform/registrations/:id/resend', requireAuth, requirePlatformOwner, resendOnboardingLink);
 router.post('/platform/registrations/:id/send-link', requireAuth, requirePlatformOwner, sendRegistrationRoleLink);
+router.patch('/platform/registrations/:id/recipient-email', requireAuth, requirePlatformOwner, updateRegistrationRecipientEmail);
 router.delete('/platform/registrations/:id/re-signup', requireAuth, requirePlatformOwner, reSignupRegistration);
 router.post('/platform/registrations/:id/manual-cheque-verify', requireAuth, requirePlatformOwner, manualChequeVerify);
 router.post('/platform/registrations/:id/refund', requireAuth, requirePlatformOwner, refundRegistration);

@@ -10,7 +10,7 @@ export const approveSchema = z.object({
   licenseQuantity: z.number().int().positive().optional(),
   gstin: z.string().optional().nullable(),
   couponCode: z.string().optional().nullable(),
-  paymentMethod: z.enum(['ONLINE', 'CHEQUE']),
+  paymentMethod: z.enum(['ONLINE', 'CHEQUE', 'BANK_TRANSFER', 'UPI', 'CASH', 'ADJUSTMENT']),
 });
 
 export const confirmChequeSchema = z.object({
