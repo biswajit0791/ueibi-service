@@ -86,3 +86,10 @@ export const registrationVerifySchema = z.object({
   // ignored, which is how 21 dead messages ended up elsewhere in this codebase.
   notes: z.string().max(2000).optional(),
 });
+
+export const updateRecipientEmailSchema = z.object({
+  role: z.enum(['HR', 'FINANCE']),
+  email: z.string().trim().email('Valid email address is required').max(255).toLowerCase(),
+  sendLinkImmediately: z.boolean().optional().default(false),
+  reason: z.string().max(500).optional(),
+});

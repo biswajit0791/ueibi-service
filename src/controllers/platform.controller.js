@@ -32,6 +32,7 @@ import {
   registrationIdParamSchema,
   onboardingQuerySchema,
   registrationVerifySchema,
+  updateRecipientEmailSchema,
 } from '../validations/platform.schema.js';
 import {
   recordPlatformAction,
@@ -1256,7 +1257,7 @@ export async function listOnboarding(req, res, next) {
           createdAt: true, updatedAt: true,
           tenant: { select: { id: true, companyName: true, status: true } },
         },
-        orderBy: { updatedAt: 'asc' },   // oldest-waiting first: this is a queue
+        orderBy: { createdAt: 'asc' },   // stable queue order: row positions remain stable upon updates
         skip,
         take: limit,
       }),
@@ -1293,9 +1294,9 @@ export async function listOnboarding(req, res, next) {
 
     const items = rows.map((r) => {
       const ageInStage = daysSince(r.updatedAt);
-      let paymentStatus = r.paymentStatus || 'PENDING';
+      let paymentStatus = (r.paymentStatus || 'PENDING').toUpperCase();
       if (paymentStatus === 'PENDING') {
-        if (r.status === 'ACTIVE' || r.paymentVerifiedAt != null || r.status === 'PENDING_HR_ACTIVATION') {
+        if (r.paymentVerifiedAt != null) {
           paymentStatus = 'COMPLETED';
         } else if (r.paymentReference?.startsWith('REFUND') || r.transactionId?.startsWith('REFUND')) {
           paymentStatus = 'REFUND';
@@ -1359,7 +1360,8 @@ export async function getOnboarding(req, res, next) {
         financeEmail: true, hrEmail: true, acceptedTermsAt: true, gstin: true,
         licenseQuantity: true, unitPrice: true, subtotalAmount: true,
         discountAmount: true, gstRate: true, gstAmount: true, totalAmount: true,
-        paymentMethod: true, paymentReference: true, chequeNumber: true,
+        paymentMethod: true, paymentStatus: true, paymentVerifiedAt: true,
+        paymentReference: true, chequeNumber: true,
         chequeDate: true, transactionId: true,
         financeApprovedAt: true, activatedAt: true, status: true,
         createdAt: true, updatedAt: true,
@@ -1565,6 +1567,7 @@ export async function sendRegistrationRoleLink(req, res, next) {
         financeEmail: true, hrEmail: true, fullName: true,
         licenseQuantity: true, totalAmount: true, paymentMethod: true,
         domainName: true, tenantCode: true, companyType: true, gstin: true,
+        tenant: { select: { id: true } },
       },
     });
     if (!reg) return res.status(404).json({ error: 'Registration not found' });
@@ -1583,6 +1586,19 @@ export async function sendRegistrationRoleLink(req, res, next) {
     const expiresAt = new Date(Date.now() + actionTokenTtlDays * 24 * 60 * 60 * 1000);
 
     await prisma.$transaction(async (tx) => {
+      // Invalidate existing pending tokens for this role so stale links don't remain valid
+      await tx.registrationActionToken.updateMany({
+        where: {
+          registrationId: reg.id,
+          role,
+          expiresAt: { gt: new Date() },
+          lastUsedAt: null,
+        },
+        data: {
+          expiresAt: new Date(),
+        },
+      });
+
       await tx.registrationActionToken.create({
         data: {
           registrationId: reg.id,
@@ -1597,7 +1613,7 @@ export async function sendRegistrationRoleLink(req, res, next) {
         action: PLATFORM_ACTIONS.REGISTRATION_LINK_RESENT,
         targetType: 'REGISTRATION',
         targetId: reg.id,
-        tenantId: null,
+        tenantId: reg.tenant?.id || null,
         afterValue: { role, recipient, expiresAt },
       });
     });
@@ -1622,6 +1638,177 @@ export async function sendRegistrationRoleLink(req, res, next) {
       actionUrl,
       deliveryStatus: mail.status,
       message: `Verification link successfully sent to ${role} (${recipient}).`,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * PATCH /platform/registrations/:id/recipient-email
+ * Updates recipient email for HR or Finance on a company registration,
+ * invalidates previous pending action tokens for that role,
+ * records the change in PlatformAuditLog,
+ * and optionally dispatches the fresh action link to the new email address.
+ */
+export async function updateRegistrationRecipientEmail(req, res, next) {
+  try {
+    const parsedParams = registrationIdParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      return res.status(400).json({ error: 'Invalid registration ID', details: parsedParams.error.issues });
+    }
+    const parsedBody = updateRecipientEmailSchema.safeParse(req.body || {});
+    if (!parsedBody.success) {
+      return res.status(400).json({ error: 'Invalid input data', details: parsedBody.error.issues });
+    }
+
+    const { id } = parsedParams.data;
+    const { role, email: newEmail, sendLinkImmediately, reason } = parsedBody.data;
+
+    const reg = await prisma.companyRegistration.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        companyName: true,
+        status: true,
+        email: true,
+        financeEmail: true,
+        hrEmail: true,
+        fullName: true,
+        licenseQuantity: true,
+        totalAmount: true,
+        paymentMethod: true,
+        domainName: true,
+        tenantCode: true,
+        companyType: true,
+        gstin: true,
+        tenant: { select: { id: true } },
+      },
+    });
+    if (!reg) return res.status(404).json({ error: 'Registration not found' });
+
+    const prevEmail = role === 'HR' ? (reg.hrEmail || reg.email) : (reg.financeEmail || reg.email);
+    const updateData = role === 'HR' ? { hrEmail: newEmail } : { financeEmail: newEmail };
+
+    const path = role === 'HR' ? 'hr/registrations' : 'finance/registrations';
+    const label = role === 'HR' ? 'HR activation' : 'Finance review';
+    const event = role === 'HR' ? 'ONBOARDING_HR_LINK_RESENT' : 'ONBOARDING_FINANCE_LINK_RESENT';
+
+    let rawToken = null;
+    let expiresAt = null;
+
+    if (sendLinkImmediately) {
+      rawToken = generateRawToken();
+      const actionTokenTtlDays = await getRegistrationConfig('ACTION_TOKEN_TTL_DAYS', env.actionTokenTtlDays);
+      expiresAt = new Date(Date.now() + actionTokenTtlDays * 24 * 60 * 60 * 1000);
+    }
+
+    await prisma.$transaction(async (tx) => {
+      // 1. Update CompanyRegistration with the new role email (never touching primary reg.email)
+      await tx.companyRegistration.update({
+        where: { id: reg.id },
+        data: updateData,
+      });
+
+      // 2. If tenant already exists, also update corresponding TenantUser if present
+      if (reg.tenant?.id) {
+        const tenantUser = await tx.tenantUser.findFirst({
+          where: {
+            tenantId: reg.tenant.id,
+            role,
+            isDeleted: false,
+          },
+        });
+        if (tenantUser) {
+          await tx.tenantUser.update({
+            where: { id: tenantUser.id },
+            data: { email: newEmail, personalEmail: newEmail },
+          });
+        }
+      }
+
+      // 3. Invalidate previous pending tokens for this role so they cannot be redeemed
+      await tx.registrationActionToken.updateMany({
+        where: {
+          registrationId: reg.id,
+          role,
+          expiresAt: { gt: new Date() },
+          lastUsedAt: null,
+        },
+        data: {
+          expiresAt: new Date(),
+        },
+      });
+
+      // 4. Record email update in Audit Trail
+      await recordPlatformAction({
+        tx,
+        req,
+        action: PLATFORM_ACTIONS.REGISTRATION_RECIPIENT_EMAIL_UPDATED,
+        targetType: 'REGISTRATION',
+        targetId: reg.id,
+        tenantId: reg.tenant?.id || null,
+        beforeValue: { role, email: prevEmail, companyName: reg.companyName },
+        afterValue: { role, email: newEmail, companyName: reg.companyName },
+        reason: reason || `Updated ${role} recipient email from ${prevEmail} to ${newEmail}`,
+      });
+
+      // 5. If sendLinkImmediately, create fresh token and record link resent audit log
+      if (sendLinkImmediately && rawToken) {
+        await tx.registrationActionToken.create({
+          data: {
+            registrationId: reg.id,
+            role,
+            tokenHash: hashToken(rawToken),
+            expiresAt,
+          },
+        });
+        await recordPlatformAction({
+          tx,
+          req,
+          action: PLATFORM_ACTIONS.REGISTRATION_LINK_RESENT,
+          targetType: 'REGISTRATION',
+          targetId: reg.id,
+          tenantId: reg.tenant?.id || null,
+          afterValue: { role, recipient: newEmail, expiresAt },
+          reason: `Link automatically dispatched after ${role} email update to ${newEmail}`,
+        });
+      }
+    });
+
+    let mail = null;
+    let actionUrl = null;
+    if (sendLinkImmediately && rawToken) {
+      actionUrl = `${env.frontendOrigin}/${path}/${rawToken}`;
+      const message = `A fresh ${label.toLowerCase()} link has been dispatched to your updated address for ${reg.companyName}.`;
+
+      mail = await sendMail({
+        to: newEmail,
+        subject: `Action required: ${label} for ${reg.companyName}`,
+        text: `${message}\n\nAction link: ${actionUrl}`,
+        html: renderResendEmail({
+          registration: { ...reg, ...updateData },
+          stage: { label, role, path, event },
+          actionUrl,
+        }),
+        event,
+        registrationId: reg.id,
+      });
+    }
+
+    res.json({
+      success: true,
+      message: sendLinkImmediately
+        ? `${role} recipient email updated to ${newEmail} and action link sent.`
+        : `${role} recipient email updated to ${newEmail} successfully.`,
+      role,
+      email: newEmail,
+      previousEmail: prevEmail,
+      linkSent: Boolean(sendLinkImmediately && mail?.status !== 'FAILED'),
+      deliveryStatus: sendLinkImmediately ? mail?.status : null,
+      deliveryError: sendLinkImmediately ? mail?.error || null : null,
+      expiresAt,
+      actionUrl,
     });
   } catch (err) {
     next(err);
@@ -1804,55 +1991,166 @@ export async function refundRegistration(req, res, next) {
 export async function confirmPaymentRegistration(req, res, next) {
   try {
     const { id } = req.params;
-    const { paymentMethod = 'ONLINE', transactionReference, paymentDate } = req.body || {};
+    const {
+      paymentMethod,
+      transactionReference,
+      paymentDate,
+      amount,
+      remarks,
+    } = req.body || {};
 
-    const reg = await prisma.companyRegistration.findUnique({ where: { id } });
+    const reg = await prisma.companyRegistration.findUnique({
+      where: { id },
+      include: { tenant: { select: { id: true, companyName: true, status: true } } },
+    });
     if (!reg) return res.status(404).json({ error: 'Registration not found' });
 
-    const txnRef = transactionReference || reg.transactionId || `PAY-CONFIRMED-${Date.now()}`;
-
-    let activationResult = null;
-    // If registration is in finance or cheque review, complete tenant activation
-    if (reg.status !== 'ACTIVE') {
-      try {
-        activationResult = await activateTenantFromRegistration({
-          registrationId: reg.id,
-          paymentMethod: paymentMethod === 'CHEQUE' ? 'CHEQUE' : 'ONLINE',
-          paymentReference: txnRef,
-          transactionId: txnRef,
-          performedBy: 'PLATFORM_OWNER',
-        });
-      } catch (e) {
-        console.warn('[Confirm Payment] activation notice:', e.message);
-      }
+    // Validate payment mode against Prisma PaymentMethod enum
+    const ALLOWED_PAYMENT_METHODS = ['ONLINE', 'CHEQUE', 'BANK_TRANSFER', 'UPI', 'CASH', 'ADJUSTMENT', 'LEGACY'];
+    const validMethod = String(paymentMethod || '').trim().toUpperCase();
+    if (!ALLOWED_PAYMENT_METHODS.includes(validMethod)) {
+      return res.status(400).json({
+        error: `Invalid payment mode "${paymentMethod}". Allowed modes: ${ALLOWED_PAYMENT_METHODS.join(', ')}`,
+      });
     }
 
-    await prisma.companyRegistration.update({
-      where: { id },
-      data: {
-        paymentMethod: paymentMethod === 'CHEQUE' ? 'CHEQUE' : 'ONLINE',
-        paymentStatus: 'COMPLETED',
-        paymentVerifiedAt: paymentDate ? new Date(paymentDate) : new Date(),
-        transactionId: txnRef,
-        financeApprovedAt: reg.financeApprovedAt || new Date(),
-        status: 'ACTIVE',
-      },
-    });
+    const cleanTxnRef = transactionReference ? String(transactionReference).trim() : null;
+    const cleanRemarks = remarks ? String(remarks).trim() : null;
 
-    await recordPlatformAction({
-      req,
-      action: 'PAYMENT_CONFIRMED',
-      targetType: 'REGISTRATION',
-      targetId: id,
-      tenantId: activationResult?.tenant?.id || null,
-      afterValue: { paymentStatus: 'COMPLETED', status: 'ACTIVE', txnRef },
+    // Validate required fields by payment mode
+    if (['BANK_TRANSFER', 'UPI'].includes(validMethod) && !cleanTxnRef) {
+      return res.status(400).json({
+        error: `${validMethod === 'UPI' ? 'UPI' : 'Bank Transfer'} requires a valid transaction reference / UTR number.`,
+      });
+    }
+    if (validMethod === 'CHEQUE' && !cleanTxnRef && !reg.chequeNumber) {
+      return res.status(400).json({
+        error: 'Cheque payment requires a cheque number or bank reference.',
+      });
+    }
+
+    const payDate = paymentDate ? new Date(paymentDate) : new Date();
+    if (isNaN(payDate.getTime())) {
+      return res.status(400).json({ error: 'Invalid payment date format.' });
+    }
+
+    let confirmedAmount = null;
+    if (amount !== undefined && amount !== null && amount !== '') {
+      const parsedAmt = Number(amount);
+      if (isNaN(parsedAmt) || parsedAmt < 0) {
+        return res.status(400).json({ error: 'Payment amount must be a valid positive number.' });
+      }
+      confirmedAmount = parsedAmt;
+    } else if (reg.totalAmount != null) {
+      confirmedAmount = Number(reg.totalAmount);
+    }
+
+    const cleanPaymentRef = cleanRemarks
+      ? (cleanTxnRef ? `${cleanRemarks} (Ref: ${cleanTxnRef})` : cleanRemarks)
+      : cleanTxnRef;
+
+    let tenantId = reg.tenant?.id || null;
+
+    // Execute atomic transaction for payment confirmation, invoice reconciliation, and state persistence
+    await prisma.$transaction(async (tx) => {
+      // 1. If registration is not yet active and no tenant exists, activate tenant
+      if (reg.status !== 'ACTIVE' && !tenantId) {
+        try {
+          const activationResult = await activateTenantFromRegistration({
+            registrationId: reg.id,
+            paymentMethod: validMethod,
+            paymentReference: cleanPaymentRef,
+            transactionId: cleanTxnRef,
+            performedBy: req.user?.id || 'PLATFORM_OWNER',
+          });
+          tenantId = activationResult?.tenant?.id || null;
+        } catch (e) {
+          console.warn('[Confirm Payment] activation notice:', e.message);
+        }
+      }
+
+      // 2. If tenant exists, update or record payment on tenant's latest invoice
+      if (tenantId) {
+        const inv = await tx.invoice.findFirst({
+          where: {
+            OR: [
+              { registrationId: reg.id },
+              { tenantId: tenantId },
+            ],
+          },
+          orderBy: { issuedAt: 'desc' },
+        });
+
+        if (inv) {
+          const finalPayAmount = confirmedAmount != null && confirmedAmount > 0 ? confirmedAmount : Number(inv.totalAmount || 0);
+          await tx.invoice.update({
+            where: { id: inv.id },
+            data: {
+              state: 'PAID',
+              amountPaid: finalPayAmount,
+              paymentDate: payDate,
+            },
+          });
+
+          await tx.payment.create({
+            data: {
+              invoiceId: inv.id,
+              tenantId: tenantId,
+              amount: finalPayAmount,
+              method: validMethod,
+              reference: cleanTxnRef,
+              receivedAt: payDate,
+              recordedById: req.user?.id || 'PLATFORM_OWNER',
+              notes: cleanRemarks || `Manual payment confirmation (${validMethod}) by Platform Owner`,
+            },
+          });
+        }
+      }
+
+      // 3. Update CompanyRegistration with authoritative payment mode, status, and metadata
+      await tx.companyRegistration.update({
+        where: { id },
+        data: {
+          paymentMethod: validMethod,
+          paymentStatus: 'COMPLETED',
+          paymentVerifiedAt: payDate,
+          transactionId: cleanTxnRef,
+          paymentReference: cleanPaymentRef,
+          chequeNumber: validMethod === 'CHEQUE' ? (cleanTxnRef || reg.chequeNumber) : reg.chequeNumber,
+          chequeDate: validMethod === 'CHEQUE' ? payDate : reg.chequeDate,
+          ...(confirmedAmount != null && confirmedAmount > 0 ? { totalAmount: confirmedAmount } : {}),
+          financeApprovedAt: reg.financeApprovedAt || new Date(),
+          status: 'ACTIVE',
+        },
+      });
+
+      // 4. Audit ledger entry
+      await recordPlatformAction({
+        tx,
+        req,
+        action: 'PAYMENT_CONFIRMED',
+        targetType: 'REGISTRATION',
+        targetId: id,
+        tenantId: tenantId,
+        afterValue: {
+          paymentStatus: 'COMPLETED',
+          paymentMethod: validMethod,
+          status: 'ACTIVE',
+          transactionReference: cleanTxnRef,
+          amount: confirmedAmount,
+          remarks: cleanRemarks,
+        },
+      });
     });
 
     res.json({
       success: true,
       paymentStatus: 'COMPLETED',
+      paymentMethod: validMethod,
       status: 'ACTIVE',
-      message: `Payment confirmed successfully. Status is now Completed / Active.`,
+      transactionReference: cleanTxnRef,
+      amount: confirmedAmount,
+      message: `Payment confirmed successfully via ${validMethod}. Status is now Completed / Active.`,
     });
   } catch (err) {
     next(err);
