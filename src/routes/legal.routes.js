@@ -35,7 +35,7 @@ router.patch('/platform/legal/:slug', requireAuth, requirePlatformOwner, updateL
 // Refused once any version has been accepted — that acceptance is the evidence
 // of what a company agreed to.
 router.delete('/platform/legal/:slug', requireAuth, requirePlatformOwner, deleteLegalDocument);
-router.get('/platform/legal/:slug/acceptances', requireAuth, requirePlatformOwner, listLegalAcceptances);
+router.get('/platform/legal/:slug/acceptances', requireAuth, requirePlatformMenu('legal'), listLegalAcceptances);
 router.post('/platform/legal/:slug/versions', requireAuth, requirePlatformOwner, createLegalVersion);
 router.patch('/platform/legal/:slug/versions/:versionId', requireAuth, requirePlatformOwner, updateLegalVersion);
 router.delete('/platform/legal/:slug/versions/:versionId', requireAuth, requirePlatformOwner, deleteLegalVersion);

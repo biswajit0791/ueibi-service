@@ -21,7 +21,6 @@ export const PLATFORM_MENUS = [
   { key: 'audit_trail', label: 'Audit Trail', path: '/platform/audit' },
   { key: 'renewal', label: 'Renewal', path: '/platform/subscriptions' },
   { key: 'invoices', label: 'Invoices', path: '/platform/invoices' },
-  { key: 'revenue', label: 'Revenue', path: '/platform/revenue' },
   { key: 'bdm_coupons', label: 'BDM Coupons', path: '/admin/coupons' },
   { key: 'customer_reviews', label: 'Customer Reviews', path: '/platform/reviews' },
   { key: 'invoice_design', label: 'Invoice Design', path: '/platform/invoice-templates' },

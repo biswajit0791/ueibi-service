@@ -567,31 +567,62 @@ export async function listLegalAcceptances(req, res, next) {
         orderBy: { acceptedAt: 'desc' },
         skip: (page - 1) * limit,
         take: limit,
-        include: { version: { select: { version: true, title: true } } },
+        include: { version: { select: { version: true, title: true, publishedAt: true } } },
       }),
     ]);
 
-    // The company that accepted, resolved by id so the row survives the
-    // registration being removed.
+    // Resolve companies by registrationId and tenantId
     const regIds = [...new Set(rows.map((r) => r.registrationId).filter(Boolean))];
-    const regs = regIds.length
-      ? await prisma.companyRegistration.findMany({
-          where: { id: { in: regIds } },
-          select: { id: true, companyName: true, email: true },
-        })
-      : [];
+    const tenantIds = [...new Set(rows.map((r) => r.tenantId).filter(Boolean))];
+
+    const [regs, tenants] = await Promise.all([
+      regIds.length
+        ? prisma.companyRegistration.findMany({
+            where: { id: { in: regIds } },
+            select: {
+              id: true,
+              companyName: true,
+              email: true,
+              tenantCode: true,
+              fullName: true,
+              designation: true,
+              status: true,
+              createdAt: true,
+            },
+          })
+        : [],
+      tenantIds.length
+        ? prisma.tenant.findMany({
+            where: { id: { in: tenantIds } },
+            select: { id: true, companyName: true, tenantCode: true },
+          })
+        : [],
+    ]);
+
     const regBy = Object.fromEntries(regs.map((r) => [r.id, r]));
+    const tenantBy = Object.fromEntries(tenants.map((t) => [t.id, t]));
 
     res.json({
-      items: rows.map((r) => ({
-        id: r.id,
-        version: r.version.version,
-        acceptedAt: r.acceptedAt,
-        ipAddress: r.ipAddress,
-        company: regBy[r.registrationId]?.companyName || null,
-        email: regBy[r.registrationId]?.email || null,
-        registrationId: r.registrationId,
-      })),
+      items: rows.map((r) => {
+        const reg = regBy[r.registrationId];
+        const tenant = tenantBy[r.tenantId];
+        return {
+          id: r.id,
+          version: r.version.version,
+          versionTitle: r.version.title,
+          versionPublishedAt: r.version.publishedAt,
+          acceptedAt: r.acceptedAt,
+          ipAddress: r.ipAddress || '—',
+          userAgent: r.userAgent || null,
+          company: reg?.companyName || tenant?.companyName || 'Registered Enterprise',
+          tenantCode: reg?.tenantCode || tenant?.tenantCode || null,
+          signatory: reg?.fullName || null,
+          designation: reg?.designation || null,
+          email: reg?.email || null,
+          registrationId: r.registrationId,
+          tenantId: r.tenantId,
+        };
+      }),
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) || 1 },
     });
   } catch (err) {
